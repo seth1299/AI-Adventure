@@ -5,8 +5,9 @@ import os
 import customtkinter as ctk
 import random
 import re
+import ctypes
 
-# pyinstaller --noconsole --onefile main.py --name "Text Adventure"
+# pyinstaller --noconsole --onefile --icon=game_icon.ico --add-data "game_icon.ico;." --name "Text Adventure" main.py
 
 # --- Configuration ---
 MODEL_NAME = "mistral"  # Ensure you have this model pulled in Ollama
@@ -35,6 +36,12 @@ class GameApp(ctk.CTk):
         # Window Setup
         self.title("AI RPG Adventure")
         self.geometry("900x600")
+        
+        try:
+            self.iconbitmap("game_icon.ico")
+        except Exception:
+            pass
+        
         ctk.set_appearance_mode("Dark")
 
         # Layout
