@@ -117,6 +117,8 @@ class GameApp(ctk.CTk):
         self.after(0, lambda: self.input_entry.configure(state=state))
         self.after(0, lambda: self.send_btn.configure(state=state))
         
+        self.after(0, lambda: self.status_label.configure(text=status_text))
+        
         # Optional: Change cursor to watch/arrow
         if not enable:
             self.after(0, lambda: self.input_entry.configure(placeholder_text="GM is thinking..."))
@@ -128,40 +130,35 @@ class GameApp(ctk.CTk):
         if not user_text.strip():
             return
         
-        self.toggle_controls(enable=False)
+        # 1. Lock UI and set Status Message
+        self.toggle_controls(enable=False, status_text="GM is thinking...") 
 
-        self.print_to_story(user_text, sender="Player")
-        self.input_entry.delete(0, "end")
-        
-        # 2. Show the Status Message
-        self.print_to_story("[GM is thinking...]", sender="System")
-
+        # 2. Print User text ONLY once
         self.print_to_story(user_text, sender="Player")
         self.input_entry.delete(0, "end")
 
-        # --- NEW CODE STARTS HERE ---
-        # 1. Grab text from Inventory and Quests
+        # 3. Build Context (Inventory/Quests)
         inventory_text = self.notebook_widgets["Inventory"].get("0.0", "end").strip()
         quest_text = self.notebook_widgets["Quests"].get("0.0", "end").strip()
+        player_text = self.notebook_widgets["Player"].get("0.0", "end").strip()
+        skills_text = self.notebook_widgets["Skills"].get("0.0", "end").strip()
 
-        # 2. Build a "Context Block" to show the AI the current state
-        # We tell the AI: "Here is what the player currently has."
         context_block = (
             f"\n[CURRENT INVENTORY]:\n{inventory_text}\n"
             f"\n[ACTIVE QUESTS]:\n{quest_text}\n"
+            f"\n[PLAYER]:\n{player_text}\n"
+            f"\n[SKILLS]:\n{skills_text}\n"
         )
 
-        # 3. Add this context to the prompt
         full_prompt = (
             f"{SYSTEM_PROMPT}\n"
-            f"{context_block}\n"  # <--- The AI now sees your tabs!
+            f"{context_block}\n"
             f"History:\n{self.conversation_history}\n"
             f"Player: {user_text}\n"
             f"GM:"
         )
-        # --- NEW CODE ENDS HERE ---
 
-        # Run AI in a separate thread
+        # 4. Run AI
         threading.Thread(target=self.query_ollama, args=(full_prompt, user_text)).start()
 
     def perform_skill_check(self, skill_name):
@@ -248,7 +245,7 @@ class GameApp(ctk.CTk):
         finally:
             # CRITICAL: This runs no matter what, re-enabling your game
             if not is_follow_up: # Only unlock if we are fully done (not in the middle of a roll)
-                self.toggle_controls(enable=True)
+                self.toggle_controls(enable=True, status_text="")
 
     def save_game(self):
         data = {
@@ -285,8 +282,7 @@ class GameApp(ctk.CTk):
             self.print_to_story("Welcome, adventurer. What is your name?", sender="GM")
 
     def generate_recap(self):
-        self.toggle_controls(enable=False)
-        self.print_to_story("[GM is reading your journal...]", sender="System")
+        self.toggle_controls(enable=False, status_text="Reading Journal...")
         """Asks Ollama to summarize the game state based on the Journal."""
         journal_text = self.notebook_widgets["Journal"].get("0.0", "end").strip()
         
@@ -318,7 +314,7 @@ class GameApp(ctk.CTk):
             print(f"Recap failed: {e}")
         finally:
             # Unlock when done
-            self.toggle_controls(enable=True)
+            self.toggle_controls(enable=True, status_text="")
 
     def on_close(self):
         self.save_game()
