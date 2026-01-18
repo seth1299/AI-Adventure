@@ -7,7 +7,7 @@ import random
 import re
 import ctypes
 
-# pyinstaller --noconsole --onefile --icon=game_icon.ico --add-data "game_icon.ico;." --name "Text Adventure" main.py
+# pyinstaller --noconsole --onefile --add-data "game_icon.ico;." --icon=game_icon.ico --name "Text Adventure" main.py
 
 # --- Configuration ---
 MODEL_NAME = "mistral"  # Ensure you have this model pulled in Ollama
@@ -19,7 +19,7 @@ SAVE_FILE = "savegame.json"
 SYSTEM_PROMPT = (
     "You are a Dungeon Master for a text-based RPG. "
     "Describe the environment vividly. React to the player's actions realistically. "
-    "Keep responses concise (under 3-4 sentences) unless describing a major event. "
+    "Keep responses concise (under 2-3 sentences) unless describing a major event. "
     "Do not break character."
     "IMPORTANT - SKILL CHECKS: "
     "If the player attempts a difficult action (fighting, climbing, lying, etc), "
@@ -27,6 +27,7 @@ SYSTEM_PROMPT = (
     "[[ROLL: SkillName]] "
     "(Example: [[ROLL: Strength]] or [[ROLL: Deception]]). "
     "Wait for the system to provide the dice result before you continue the story."
+    "Do not display to the Player the numerical result of the dice roll, or if it succeeded/failed. Simply narrate the result of the player's action."
 )
 
 class GameApp(ctk.CTk):
@@ -104,7 +105,7 @@ class GameApp(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.conversation_history = "" # To keep context for the AI
         self.load_game()
-        self.load_world_file()
+        #self.load_world_file()
 
     def print_to_story(self, text, sender="System"):
         self.chat_display.configure(state="normal")
@@ -116,23 +117,25 @@ class GameApp(ctk.CTk):
             self.chat_display.insert("end", f"\n[{text}]\n")
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
-        
+    
+    '''
     def load_world_file(self):
         if "World" not in self.notebook_widgets:
             return
-        """Reads world.txt and populates the World tab."""
-        if os.path.exists("world.txt"):
+        """Reads world.md and populates the World tab."""
+        if os.path.exists("world.md"):
             try:
-                with open("world.txt", "r", encoding="utf-8") as f:
+                with open("world.md", "r", encoding="utf-8") as f:
                     world_content = f.read()
                 
                 # Delete existing content (from save) and insert file content
                 self.notebook_widgets["World"].delete("0.0", "end")
                 self.notebook_widgets["World"].insert("0.0", world_content)
                 self.notebook_widgets["World"].configure(state="disabled")
-                print("World data loaded from world.txt")
+                print("World data loaded from world.md")
             except Exception as e:
-                print(f"Error loading world.txt: {e}")
+                print(f"Error loading world.md: {e}")
+    '''
         
     def toggle_controls(self, enable, status_text=""):
         state = "normal" if enable else "disabled"
@@ -226,7 +229,7 @@ class GameApp(ctk.CTk):
                     "prompt": prompt, 
                     "stream": False,
                     "options": {
-                        "num_ctx": 8192  # <--- Forces 8k context window
+                        "num_ctx": 16384 
                     }
                 },
                 timeout=120
@@ -282,38 +285,93 @@ class GameApp(ctk.CTk):
                 self.toggle_controls(enable=True, status_text="")
 
     def save_game(self):
+        def save_game(self):
+        # --- PART 1: Save Tabs to individual .md files ---
+        # We loop through every tab (Inventory, Quests, Journal, etc.)
+            for tab_name, widget in self.notebook_widgets.items():
+                # Get the text
+                content = widget.get("0.0", "end").strip()
+                
+                # Create a filename like "Inventory.md" or "Journal.md"
+                filename = f"{tab_name}.md"
+                
+                try:
+                    with open(filename, "w", encoding="utf-8") as f:
+                        f.write(content)
+                except Exception as e:
+                    print(f"Error saving {filename}: {e}")
+
+        # --- PART 2: Save History to JSON (As a List) ---
+        # 1. Split the massive string into a list of lines
+        # This makes the JSON format it nicely with one line per string
+        history_as_list = self.conversation_history.strip().split("\n")
+        
+        # Filter out empty strings to keep it clean
+        history_as_list = [line for line in history_as_list if line.strip()]
+
         data = {
-            "history": self.conversation_history,
-            "tabs": {name: widget.get("0.0", "end") for name, widget in self.notebook_widgets.items()}
+            "Chat History": history_as_list
         }
-        with open(SAVE_FILE, "w") as f:
-            json.dump(data, f)
-        print("Game Saved.")
+
+        with open(SAVE_FILE, "w", encoding="utf-8") as f:
+            # indent=4 makes it pretty
+            json.dump(data, f, indent=4, ensure_ascii=False)
+            
+        print("Game Saved (Tabs to .md files, History to json).")
 
     def load_game(self):
-        if os.path.exists(SAVE_FILE):
-            try:
-                with open(SAVE_FILE, "r") as f:
-                    data = json.load(f)
-                    self.conversation_history = data.get("history", "")
-                    
-                    # Restore tab content
-                    saved_tabs = data.get("tabs", {})
-                    for name, content in saved_tabs.items():
-                        if name in self.notebook_widgets:
-                            self.notebook_widgets[name].delete("0.0", "end")
-                            self.notebook_widgets[name].insert("0.0", content)
-                            
-                self.print_to_story("System: Game Loaded.", sender="System")
+            # --- PART 1: Load Tabs from .md files ---
+            for tab_name, widget in self.notebook_widgets.items():
+                filename = f"{tab_name}.md"
                 
-                # --- NEW: Trigger the Recap ---
-                # We do this in a thread so the GUI doesn't freeze while Ollama thinks
-                threading.Thread(target=self.generate_recap).start()
+                if os.path.exists(filename):
+                    try:
+                        with open(filename, "r", encoding="utf-8") as f:
+                            content = f.read()
+                        
+                        # Temporarily unlock widget to write to it (in case it's World tab)
+                        prev_state = widget.cget("state")
+                        widget.configure(state="normal")
+                        
+                        widget.delete("0.0", "end")
+                        widget.insert("0.0", content)
+                        
+                        # Restore previous state (keeps World locked, others unlocked)
+                        widget.configure(state=prev_state)
+                        
+                        # SPECIAL CASE: If it's the World tab, ensure it stays locked 
+                        # (Logic from previous steps is preserved here)
+                        if tab_name == "World":
+                            widget.configure(state="disabled")
 
-            except Exception as e:
-                self.print_to_story(f"Save file corrupted: {e}", sender="System")
-        else:
-            self.print_to_story("Welcome, adventurer. What is your name?", sender="GM")
+                    except Exception as e:
+                        self.print_to_story(f"Error loading {filename}: {e}", sender="System")
+
+            # --- PART 2: Load History from JSON ---
+            if os.path.exists(SAVE_FILE):
+                try:
+                    with open(SAVE_FILE, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        
+                        # Check if it's the new List format or the old String format
+                        history_data = data.get("Chat History", [])
+                        
+                        if isinstance(history_data, list):
+                            # Join the list back into a single string with newlines
+                            self.conversation_history = "\n".join(history_data)
+                        else:
+                            # Fallback for old save files (Strings)
+                            self.conversation_history = history_data
+
+                    self.print_to_story("System: Game Loaded.", sender="System")
+                    
+                    # Trigger Recap
+                    threading.Thread(target=self.generate_recap).start()
+
+                except Exception as e:
+                    self.print_to_story(f"Save file corrupted: {e}", sender="System")
+            else:
+                self.print_to_story("Welcome, adventurer. What is your name?", sender="GM")
 
     def generate_recap(self):
         self.toggle_controls(enable=False, status_text="Reading Journal...")
@@ -323,6 +381,7 @@ class GameApp(ctk.CTk):
         # If the journal is empty, we skip this to avoid confusion
         if len(journal_text) < 20: 
             self.print_to_story("Write in your Journal to get a recap next time you load!", sender="System")
+            self.toggle_controls(enable=True, status_text="")
             return
 
         recap_prompt = (
@@ -336,14 +395,14 @@ class GameApp(ctk.CTk):
         )
 
         try:
-            response = response = requests.post(
+            response = requests.post(
                 OLLAMA_API_URL, 
                 json={
                     "model": MODEL_NAME, 
                     "prompt": recap_prompt, 
                     "stream": False,
                     "options": {
-                        "num_ctx": 8192  # <--- Forces 8k context window
+                        "num_ctx": 16384 
                     }
                 },
                 timeout=120
