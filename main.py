@@ -214,6 +214,10 @@ class GameApp(ctk.CTk):
         character_text = self.notebook_widgets["Character"].get("0.0", "end").strip()
         skills_text = self.notebook_widgets["Skills"].get("0.0", "end").strip()
         world_text = self.notebook_widgets["World"].get("0.0", "end").strip()
+        
+        recent_history = self.conversation_history
+        if len(recent_history) > 3000:
+            recent_history = "..." + recent_history[-3000:]
 
         context_block = (
             f"\n[WORLD SETTING & LORE]:\n{world_text}\n"
@@ -226,7 +230,7 @@ class GameApp(ctk.CTk):
         full_prompt = (
             f"{SYSTEM_PROMPT}\n"
             f"{context_block}\n"
-            f"History:\n{self.conversation_history}\n"
+            f"History:\n{recent_history}\n"
             f"Player: {user_text}\n"
             f"GM:"
         )
@@ -244,11 +248,15 @@ class GameApp(ctk.CTk):
         # 2. Find bonus in Skills tab
         bonus = 0
         skills_text = self.notebook_widgets["Skills"].get("0.0", "end")
+        safe_skill = re.escape(skill_name)
         
-        # Regex to find "Skill: +X"
-        match = re.search(f"{skill_name}.*?([+-]\\d+)", skills_text, re.IGNORECASE)
-        if match:
-            bonus = int(match.group(1))
+        table_match = re.search(rf"\|\s*{safe_skill}\s*\|[^|]*\|\s*(\d+)\s*\|", skills_text, re.IGNORECASE)
+        simple_match = re.search(rf"{safe_skill}.*?([+-]\d+)", skills_text, re.IGNORECASE)
+        
+        if table_match:
+            bonus = int(table_match.group(1))
+        elif simple_match:
+            bonus = int(simple_match.group(1))
             
         total = die_roll + bonus
         
@@ -275,7 +283,7 @@ class GameApp(ctk.CTk):
                         "num_ctx": 8192
                     }
                 },
-                timeout=120
+                timeout=180
             )
             
             if response.status_code == 200:
@@ -441,7 +449,7 @@ class GameApp(ctk.CTk):
                         "num_ctx": 8192
                     }
                 },
-                timeout=120
+                timeout=180
             )
             if response.status_code == 200:
                 recap_text = response.json()['response']
