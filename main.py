@@ -52,7 +52,7 @@ class GameApp(ctk.CTk):
         self.tab_view = ctk.CTkTabview(self)
         self.tab_view.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
         
-        self.tabs = ["Story", "Inventory", "Quests", "Journal", "Skills", "Character"]
+        self.tabs = ["Story", "Inventory", "Quests", "Journal", "Skills", "Character", "World"]
         for tab in self.tabs:
             self.tab_view.add(tab)
 
@@ -104,6 +104,7 @@ class GameApp(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.conversation_history = "" # To keep context for the AI
         self.load_game()
+        self.load_world_file()
 
     def print_to_story(self, text, sender="System"):
         self.chat_display.configure(state="normal")
@@ -115,6 +116,23 @@ class GameApp(ctk.CTk):
             self.chat_display.insert("end", f"\n[{text}]\n")
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
+        
+    def load_world_file(self):
+        if "World" not in self.notebook_widgets:
+            return
+        """Reads world.txt and populates the World tab."""
+        if os.path.exists("world.txt"):
+            try:
+                with open("world.txt", "r", encoding="utf-8") as f:
+                    world_content = f.read()
+                
+                # Delete existing content (from save) and insert file content
+                self.notebook_widgets["World"].delete("0.0", "end")
+                self.notebook_widgets["World"].insert("0.0", world_content)
+                self.notebook_widgets["World"].configure(state="disabled")
+                print("World data loaded from world.txt")
+            except Exception as e:
+                print(f"Error loading world.txt: {e}")
         
     def toggle_controls(self, enable, status_text=""):
         state = "normal" if enable else "disabled"
@@ -149,8 +167,10 @@ class GameApp(ctk.CTk):
         quest_text = self.notebook_widgets["Quests"].get("0.0", "end").strip()
         character_text = self.notebook_widgets["Character"].get("0.0", "end").strip()
         skills_text = self.notebook_widgets["Skills"].get("0.0", "end").strip()
+        world_text = self.notebook_widgets["World"].get("0.0", "end").strip()
 
         context_block = (
+            f"\n[WORLD SETTING & LORE]:\n{world_text}\n"
             f"\n[CURRENT INVENTORY]:\n{inventory_text}\n"
             f"\n[ACTIVE QUESTS]:\n{quest_text}\n"
             f"\n[CHARACTER]:\n{character_text}\n"
@@ -201,7 +221,14 @@ class GameApp(ctk.CTk):
             
             response = requests.post(
                 OLLAMA_API_URL, 
-                json={"model": MODEL_NAME, "prompt": prompt, "stream": False},
+                json={
+                    "model": MODEL_NAME, 
+                    "prompt": prompt, 
+                    "stream": False,
+                    "options": {
+                        "num_ctx": 8192  # <--- Forces 8k context window
+                    }
+                },
                 timeout=120
             )
             
@@ -309,10 +336,17 @@ class GameApp(ctk.CTk):
         )
 
         try:
-            response = requests.post(
+            response = response = requests.post(
                 OLLAMA_API_URL, 
-                json={"model": MODEL_NAME, "prompt": recap_prompt, "stream": False},
-                timeout=30
+                json={
+                    "model": MODEL_NAME, 
+                    "prompt": recap_prompt, 
+                    "stream": False,
+                    "options": {
+                        "num_ctx": 8192  # <--- Forces 8k context window
+                    }
+                },
+                timeout=120
             )
             if response.status_code == 200:
                 recap_text = response.json()['response']
