@@ -2,6 +2,7 @@ import requests
 import threading
 import json
 import os
+import tkinter as tk
 import customtkinter as ctk
 import random
 import re
@@ -117,25 +118,62 @@ class GameApp(ctk.CTk):
             self.chat_display.insert("end", f"\n[{text}]\n")
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
-    
-    '''
-    def load_world_file(self):
-        if "World" not in self.notebook_widgets:
-            return
-        """Reads world.md and populates the World tab."""
-        if os.path.exists("world.md"):
-            try:
-                with open("world.md", "r", encoding="utf-8") as f:
-                    world_content = f.read()
+        
+    def apply_markdown_style(self, widget):
+        """
+        Scans the text widget and applies formatting tags (Bold, Headers, etc.)
+        without deleting the symbols (preserving file integrity).
+        """
+        # Access the underlying Tkinter widget to use advanced tagging
+        tk_text = widget._textbox
+        
+        # 1. Define Fonts (You can tweak sizes here)
+        # We use the widget's current font family as a base
+        base_font = ctk.CTkFont(family="Consolas", size=12)
+        h1_font = ctk.CTkFont(family="Consolas", size=20, weight="bold")
+        h2_font = ctk.CTkFont(family="Consolas", size=16, weight="bold")
+        bold_font = ctk.CTkFont(family="Consolas", size=12, weight="bold")
+        
+        # 2. Configure Tags
+        # foreground="..." sets the color. Let's use Gold for headers!
+        tk_text.tag_config("h1", font=h1_font, foreground="#FFD700") 
+        tk_text.tag_config("h2", font=h2_font, foreground="#FFD700")
+        tk_text.tag_config("bold", font=bold_font, foreground="#FFFFFF")
+        
+        # 3. Clear old tags (Reset formatting)
+        tk_text.tag_remove("h1", "1.0", "end")
+        tk_text.tag_remove("h2", "1.0", "end")
+        tk_text.tag_remove("bold", "1.0", "end")
+        
+        # 4. Apply Tags via Regex Pattern Matching
+        # Header 1 (^# Text)
+        self.highlight_pattern(tk_text, r"^# .*", "h1")
+        # Header 2 (^## Text)
+        self.highlight_pattern(tk_text, r"^## .*", "h2")
+        # Bold (**Text**)
+        self.highlight_pattern(tk_text, r"\*\*.*?\*\*", "bold")
+        # Bullets (- Item or * Item) - Optional: Color them slightly
+        # self.highlight_pattern(tk_text, r"^[-*] .*", "bold")
+
+    def highlight_pattern(self, tk_text, pattern, tag):
+        """Helper to find and tag all occurrences of a regex pattern."""
+        start = "1.0"
+        count_var = tk.IntVar()
+        
+        while True:
+            # Search for the pattern
+            pos = tk_text.search(pattern, start, stop="end", count=count_var, regexp=True)
+            if not pos:
+                break
                 
-                # Delete existing content (from save) and insert file content
-                self.notebook_widgets["World"].delete("0.0", "end")
-                self.notebook_widgets["World"].insert("0.0", world_content)
-                self.notebook_widgets["World"].configure(state="disabled")
-                print("World data loaded from world.md")
-            except Exception as e:
-                print(f"Error loading world.md: {e}")
-    '''
+            # Calculate end position based on match length
+            end = f"{pos}+{count_var.get()}c"
+            
+            # Apply tag
+            tk_text.tag_add(tag, pos, end)
+            
+            # Move to next
+            start = end
         
     def toggle_controls(self, enable, status_text=""):
         state = "normal" if enable else "disabled"
@@ -319,60 +357,57 @@ class GameApp(ctk.CTk):
         print("Game Saved.")
 
     def load_game(self):
-            # --- PART 1: Load Tabs from .md files ---
-            for tab_name, widget in self.notebook_widgets.items():
-                filename = f"{tab_name}.md"
-                
-                if os.path.exists(filename):
-                    try:
-                        with open(filename, "r", encoding="utf-8") as f:
-                            content = f.read()
-                        
-                        # Temporarily unlock widget to write to it (in case it's World tab)
-                        prev_state = widget.cget("state")
-                        widget.configure(state="normal")
-                        
-                        widget.delete("0.0", "end")
-                        widget.insert("0.0", content)
-                        
-                        # Restore previous state (keeps World locked, others unlocked)
-                        widget.configure(state=prev_state)
-                        
-                        # SPECIAL CASE: If it's the World tab, ensure it stays locked 
-                        # (Logic from previous steps is preserved here)
-                        if tab_name == "World":
-                            widget.configure(state="disabled")
-
-                    except Exception as e:
-                        self.print_to_story(f"Error loading {filename}: {e}", sender="System")
-
-            # --- PART 2: Load History from JSON ---
-            if os.path.exists(SAVE_FILE):
+        # --- PART 1: Load Tabs from .md files ---
+        for tab_name, widget in self.notebook_widgets.items():
+            filename = f"{tab_name}.md"
+            
+            if os.path.exists(filename):
                 try:
-                    with open(SAVE_FILE, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        
-                        # Check if it's the new List format or the old String format
-                        history_data = data.get("Chat History", [])
-                        
-                        if isinstance(history_data, list):
-                            # Join the list back into a single string with newlines
-                            self.conversation_history = "\n".join(history_data)
-                        else:
-                            # Fallback for old save files (Strings)
-                            self.conversation_history = history_data
-
-                    self.print_to_story("System: Game Loaded.", sender="System")
+                    with open(filename, "r", encoding="utf-8") as f:
+                        content = f.read()
                     
-                    # Trigger Recap
-                    recent_history = self.conversation_history[-5000:]
-                
-                    threading.Thread(target=self.generate_recap, args=(recent_history,)).start()
+                    # 1. Force Unlock (We know "World" might be locked, others are normal)
+                    widget.configure(state="normal")
+                    
+                    # 2. Update Content
+                    widget.delete("0.0", "end")
+                    widget.insert("0.0", content)
+                    
+                    self.apply_markdown_style(widget)
+                    
+                    # 3. Relock ONLY if it is the World tab
+                    if tab_name == "World":
+                        widget.configure(state="disabled")
+                    # (We leave everything else "normal" so you can edit it)
 
                 except Exception as e:
-                    self.print_to_story(f"Save file corrupted: {e}", sender="System")
-            else:
-                self.print_to_story("Welcome, adventurer. What is your name?", sender="GM")
+                    self.print_to_story(f"Error loading {filename}: {e}", sender="System")
+
+        # --- PART 2: Load History from JSON & Trigger Recap ---
+        if os.path.exists(SAVE_FILE):
+            try:
+                with open(SAVE_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    
+                    # Handle both List format (New) and String format (Old)
+                    history_data = data.get("Chat History", [])
+                    if isinstance(history_data, list):
+                        self.conversation_history = "\n".join(history_data)
+                    else:
+                        self.conversation_history = history_data
+
+                self.print_to_story("System: Game Loaded.", sender="System")
+                
+                # --- NEW: Send recent history to the Recap generator ---
+                # We grab the last 5000 characters so the AI summarizes "What just happened"
+                recent_history = self.conversation_history[-5000:]
+                
+                threading.Thread(target=self.generate_recap, args=(recent_history,)).start()
+
+            except Exception as e:
+                self.print_to_story(f"Save file corrupted: {e}", sender="System")
+        else:
+            self.print_to_story("Welcome, adventurer. What is your name?", sender="GM")
 
     def generate_recap(self, history_text):
         self.toggle_controls(enable=False, status_text="Picking up where we left off...")

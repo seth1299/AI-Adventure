@@ -1,1 +1,0 @@
-I am currently in the Red Dragon Inn, a dark and untrustworthy watering hole for criminals and scum.
