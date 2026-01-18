@@ -285,21 +285,20 @@ class GameApp(ctk.CTk):
                 self.toggle_controls(enable=True, status_text="")
 
     def save_game(self):
-        def save_game(self):
         # --- PART 1: Save Tabs to individual .md files ---
         # We loop through every tab (Inventory, Quests, Journal, etc.)
-            for tab_name, widget in self.notebook_widgets.items():
-                # Get the text
-                content = widget.get("0.0", "end").strip()
+        for tab_name, widget in self.notebook_widgets.items():
+            # Get the text
+            content = widget.get("0.0", "end").strip()
                 
-                # Create a filename like "Inventory.md" or "Journal.md"
-                filename = f"{tab_name}.md"
+            # Create a filename like "Inventory.md" or "Journal.md"
+            filename = f"{tab_name}.md"
                 
-                try:
-                    with open(filename, "w", encoding="utf-8") as f:
-                        f.write(content)
-                except Exception as e:
-                    print(f"Error saving {filename}: {e}")
+            try:
+                with open(filename, "w", encoding="utf-8") as f:
+                    f.write(content)
+            except Exception as e:
+                print(f"Error saving {filename}: {e}")
 
         # --- PART 2: Save History to JSON (As a List) ---
         # 1. Split the massive string into a list of lines
@@ -317,7 +316,7 @@ class GameApp(ctk.CTk):
             # indent=4 makes it pretty
             json.dump(data, f, indent=4, ensure_ascii=False)
             
-        print("Game Saved (Tabs to .md files, History to json).")
+        print("Game Saved.")
 
     def load_game(self):
             # --- PART 1: Load Tabs from .md files ---
@@ -366,32 +365,29 @@ class GameApp(ctk.CTk):
                     self.print_to_story("System: Game Loaded.", sender="System")
                     
                     # Trigger Recap
-                    threading.Thread(target=self.generate_recap).start()
+                    recent_history = self.conversation_history[-5000:]
+                
+                    threading.Thread(target=self.generate_recap, args=(recent_history,)).start()
 
                 except Exception as e:
                     self.print_to_story(f"Save file corrupted: {e}", sender="System")
             else:
                 self.print_to_story("Welcome, adventurer. What is your name?", sender="GM")
 
-    def generate_recap(self):
-        self.toggle_controls(enable=False, status_text="Reading Journal...")
-        """Asks Ollama to summarize the game state based on the Journal."""
-        journal_text = self.notebook_widgets["Journal"].get("0.0", "end").strip()
+    def generate_recap(self, history_text):
+        self.toggle_controls(enable=False, status_text="Picking up where we left off...")
         
-        # If the journal is empty, we skip this to avoid confusion
-        if len(journal_text) < 20: 
-            self.print_to_story("Write in your Journal to get a recap next time you load!", sender="System")
+        # If history is too short, no need for a recap
+        if len(history_text) < 100: 
             self.toggle_controls(enable=True, status_text="")
             return
 
         recap_prompt = (
             f"{SYSTEM_PROMPT}\n"
-            f"The player has just loaded the game after a break. "
-            f"Here are the player's personal notes from their Journal:\n"
-            f"--- JOURNAL START ---\n{journal_text}\n--- JOURNAL END ---\n"
-            f"Based ONLY on these notes, write a 2-sentence dramatic summary "
-            f"reminding the player where they are and what they were doing. "
-            f"End by asking 'What do you do next?'"
+            f"The player has just loaded the game. Below is the recent conversation history.\n"
+            f"--- HISTORY START ---\n{history_text}\n--- HISTORY END ---\n"
+            f"Write a brief, dramatic 2-sentence summary of the current situation to remind the player "
+            f"what is happening. End by asking 'What do you do next?'"
         )
 
         try:
