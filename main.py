@@ -29,6 +29,9 @@ SYSTEM_PROMPT = (
     "(Example: [[ROLL: Strength]] or [[ROLL: Deception]]). "
     "Wait for the system to provide the dice result before you continue the story."
     "Do not display to the Player the numerical result of the dice roll, or if it succeeded/failed. Simply narrate the result of the player's action."
+    "If a player succeeds in a Skill Check, award them 1 XP towards that Skill and let the Player know in the chat so that they may update their sheet."
+    "If the player has done something enough times to warrant learning a new Skill, let the Player know."
+    "Remember that the player only has access to items that are in their 'Inventory' or that are located somewhere in the current scene (that the player is also aware of and can access)."
 )
 
 class GameApp(ctk.CTk):
@@ -97,10 +100,12 @@ class GameApp(ctk.CTk):
             tb.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
             
             # Add a default header
-            tb.insert("0.0", f"--- {tab_name} ---\n")
+            tb.insert("0.0", f"# {tab_name} \n")
             
             # Store it so we can read/save it later
             self.notebook_widgets[tab_name] = tb
+            
+            tb.bind("<KeyRelease>", lambda event, w=tb: self.apply_markdown_style(w))
 
         # --- Save/Load System ---
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -162,7 +167,7 @@ class GameApp(ctk.CTk):
         
         while True:
             # Search for the pattern
-            pos = tk_text.search(pattern, start, stop="end", count=count_var, regexp=True)
+            pos = tk_text.search(pattern, start, stopindex="end", count=count_var, regexp=True)
             if not pos:
                 break
                 
@@ -227,7 +232,7 @@ class GameApp(ctk.CTk):
         )
 
         # 4. Run AI
-        threading.Thread(target=self.query_ollama, args=(full_prompt, user_text)).start()
+        threading.Thread(target=self.query_ollama, args=(full_prompt, user_text), daemon=True).start()
 
     def perform_skill_check(self, skill_name):
         """
@@ -267,7 +272,7 @@ class GameApp(ctk.CTk):
                     "prompt": prompt, 
                     "stream": False,
                     "options": {
-                        "num_ctx": 16384 
+                        "num_ctx": 8192
                     }
                 },
                 timeout=120
@@ -292,7 +297,7 @@ class GameApp(ctk.CTk):
                     follow_up_prompt = (
                         f"{prompt}\n"
                         f"GM: {ai_text}\n" # Include the AI's request for the roll in history
-                        f"[System: Player rolled {roll_result} for {skill_needed}. Describe the outcome.]"
+                        f"[System: Player rolled {roll_result} for {skill_needed}. Describe the outcome, determining a fair Difficulty Rating that the Player needs to have met or exceeded.]"
                     )
                     
                     # Call this function again with the new info
@@ -402,7 +407,7 @@ class GameApp(ctk.CTk):
                 # We grab the last 5000 characters so the AI summarizes "What just happened"
                 recent_history = self.conversation_history[-5000:]
                 
-                threading.Thread(target=self.generate_recap, args=(recent_history,)).start()
+                threading.Thread(target=self.generate_recap, args=(recent_history,), daemon=True).start()
 
             except Exception as e:
                 self.print_to_story(f"Save file corrupted: {e}", sender="System")
@@ -433,7 +438,7 @@ class GameApp(ctk.CTk):
                     "prompt": recap_prompt, 
                     "stream": False,
                     "options": {
-                        "num_ctx": 16384 
+                        "num_ctx": 8192
                     }
                 },
                 timeout=120

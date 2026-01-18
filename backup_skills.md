@@ -1,0 +1,12 @@
+| Skill Name                | Skill Description                                                                                                 | Skill Level | Current XP / XP Required to next level |
+|:--------------------------|:------------------------------------------------------------------------------------------------------------------|:------------|:---------------------------------------|
+| Arcana                    | Knowledge of magic and mystical things, or very strange things that wouldn't quite fall under "History".          | 1           | 0/5                                    |
+| Archery                   | Usage of bows. Used in Ranged attack calculations for to-hit bonus and damage with bows.                          | 2           | 0/7                                    |
+| Cooking/Food Preservation | The ability to take raw ingredients and either preserve them for later or cook them into something edible.        | 2           | 0/7                                    |
+| Dagger                    | Usage of daggers. Used in Melee attack calculations for to-hit bonus and damage with daggers.                     | 2           | 0/7                                    |
+| Foraging                  | Looking for useful plants while avoiding dangerous plants in the wild.                                            | 2           | 0/7                                    |
+| Navigation                | The ability to move around and/or get from one place to the other without getting lost.                           | 3           | 0/9                                    |
+| Perception                | The art of perceiving things; generally, how well you can hear or see.                                            | 3           | 0/9                                    |
+| Stealth                   | Moving unseen and unheard.                                                                                        | 2           | 0/7                                    |
+| Survival/Nature           | Knowledge of plants/animals as a whole, and the ability to use the materials/ingredients in the world around you. | 3           | 0/9                                    |
+| Trap-Making               | Setting traps for creatures, like simple rope traps that suspend an animal until you can kill it.                 | 2           | 0/7                                    |
