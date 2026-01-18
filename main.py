@@ -147,13 +147,13 @@ class GameApp(ctk.CTk):
         # 3. Build Context (Inventory/Quests)
         inventory_text = self.notebook_widgets["Inventory"].get("0.0", "end").strip()
         quest_text = self.notebook_widgets["Quests"].get("0.0", "end").strip()
-        player_text = self.notebook_widgets["Player"].get("0.0", "end").strip()
+        character_text = self.notebook_widgets["Character"].get("0.0", "end").strip()
         skills_text = self.notebook_widgets["Skills"].get("0.0", "end").strip()
 
         context_block = (
             f"\n[CURRENT INVENTORY]:\n{inventory_text}\n"
             f"\n[ACTIVE QUESTS]:\n{quest_text}\n"
-            f"\n[PLAYER]:\n{player_text}\n"
+            f"\n[CHARACTER]:\n{character_text}\n"
             f"\n[SKILLS]:\n{skills_text}\n"
         )
 
