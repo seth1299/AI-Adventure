@@ -242,13 +242,14 @@ class GameApp(ctk.CTk):
         """
         Calculates the roll based on the Skills tab and returns a text result.
         """
+        clean_name = skill_name.split('(')[0].strip()
         # 1. Roll the die
         die_roll = random.randint(1, 20)
         
         # 2. Find bonus in Skills tab
         bonus = 0
         skills_text = self.notebook_widgets["Skills"].get("0.0", "end")
-        safe_skill = re.escape(skill_name)
+        safe_skill = re.escape(clean_name)
         
         table_match = re.search(rf"\|\s*{safe_skill}\s*\|[^|]*\|\s*(\d+)\s*\|", skills_text, re.IGNORECASE)
         simple_match = re.search(rf"{safe_skill}.*?([+-]\d+)", skills_text, re.IGNORECASE)
@@ -261,16 +262,20 @@ class GameApp(ctk.CTk):
         total = die_roll + bonus
         
         # Log it to the chat so the player sees the math
-        self.print_to_story(f"🎲 Rolling {skill_name}: {die_roll} + ({bonus}) = {total}", sender="System")
+        self.print_to_story(f"🎲 Rolling {clean_name}: {die_roll} + ({bonus}) = {total}", sender="System")
         
         return total
 
-    def query_ollama(self, prompt, user_text, is_follow_up=False):
+    def query_ollama(self, prompt, user_text, recursion_depth=0):
         """
-        is_follow_up: True if this is the second step of a dice roll (sending the result back).
+        recursion_depth: Counts how many times we've ping-ponged with the AI for this single turn.
+        If depth > 0, we are already resolving a skill check.
         """
         try:
-            if not is_follow_up:
+            # 1. VISUAL FEEDBACK
+            # Only show "..." if this is the FIRST request.
+            # If we are in a recursion loop (depth > 0), the user knows we are rolling.
+            if recursion_depth == 0:
                 self.print_to_story("...", sender="System")
             
             response = requests.post(
@@ -305,24 +310,30 @@ class GameApp(ctk.CTk):
                     follow_up_prompt = (
                         f"{prompt}\n"
                         f"GM: {ai_text}\n" # Include the AI's request for the roll in history
-                        f"[System: Player rolled {roll_result} for {skill_needed}. Describe the outcome, determining a fair Difficulty Rating that the Player needs to have met or exceeded.]"
+                        f"[System: Player rolled {roll_result} for {skill_needed}. Describe the outcome, determining a fair Difficulty Rating that the Player needs to have met or exceeded. IMPORTANT: The roll is complete. DO NOT output [[ROLL]] again. Additionally, do not display the DC for the roll.]"
                     )
                     
                     # Call this function again with the new info
-                    self.query_ollama(follow_up_prompt, user_text, is_follow_up=True)
+                    self.query_ollama(follow_up_prompt, user_text, recursion_depth=recursion_depth + 1)
                     
                 else:
-                    # No roll needed, just normal story
-                    # (Optional: Process other tags like ADD_ITEM here if you kept that code)
+                    # --- NO ROLL or MAX DEPTH REACHED ---
+                    
+                    # If we are deep in recursion (depth > 0) and it STILL asks for a roll,
+                    # it is hallucinating. We strip the tag so it doesn't look ugly.
+                    if recursion_depth > 0 and roll_match:
+                         ai_text = re.sub(r"\[\[ROLL:.*?\]\]", "", ai_text).strip()
+                         # If stripping leaves it empty, provide a fallback
+                         if not ai_text:
+                             ai_text = "The action is resolved."
+
+                    # Standard output
                     self.print_to_story(ai_text, sender="GM")
                     
-                    # Only update history if it's a "Done" response
-                    if not is_follow_up:
-                        self.conversation_history += f"Player: {user_text}\nGM: {ai_text}\n"
-                    else:
-                        # If this was a follow-up, we append the whole sequence
-                        # Note: Simplifying history management for this example
-                        self.conversation_history += f"Player: {user_text}\nGM: {ai_text}\n"
+                    # Update History
+                    # We append the user text and the FINAL AI response.
+                    # Note: We skip logging the intermediate "GM: [[ROLL...]]" steps to keep history clean.
+                    self.conversation_history += f"Player: {user_text}\nGM: {ai_text}\n"
 
             else:
                 self.print_to_story(f"Error: {response.status_code}", sender="System")
@@ -331,8 +342,36 @@ class GameApp(ctk.CTk):
             self.print_to_story(f"Connection Error: {e}", sender="System")
             
         finally:
-            # CRITICAL: This runs no matter what, re-enabling your game
-            if not is_follow_up: # Only unlock if we are fully done (not in the middle of a roll)
+            # CRITICAL: Only unlock controls if this is the FINAL step of the chain.
+            # If we are about to recurse (depth 0 -> 1), do NOT unlock yet.
+            # We know we are done if:
+            # A) We didn't find a roll match
+            # B) We found a match but hit the recursion limit
+            
+            # Simple check: If we are NOT calling query_ollama again inside this function, we unlock.
+            # But since that logic is nested, we can just check if we are 'done' logic-wise.
+            
+            # Actually, the safest way is: Logic above handles the recursion.
+            # If we reached this finally block, this specific function call is ending.
+            # If we recursively called query_ollama, that Child call will eventually unlock.
+            # Wait! If Parent calls Child, Parent finishes 'try' block while Child is running? 
+            # No, requests is synchronous, but threading? 
+            # Ah, you are using threading for the FIRST call.
+            # Recursive calls are synchronous inside that thread. 
+            # So the thread stays alive until the deepest recursion returns.
+            
+            # So yes, we can simply unlock here, BUT...
+            # If we recursively called self.query_ollama, we don't want to unlock yet.
+            # The recursive call is just a function call inside this thread.
+            # So we only unlock if we did NOT recurse.
+            
+            should_unlock = True
+            if response.status_code == 200:
+                ai_text = response.json()['response']
+                if re.search(r"\[\[ROLL:\s*(.*?)\]\]", ai_text) and recursion_depth < 1:
+                    should_unlock = False
+            
+            if should_unlock:
                 self.toggle_controls(enable=True, status_text="")
 
     def save_game(self):
