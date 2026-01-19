@@ -28,8 +28,8 @@ SYSTEM_PROMPT = (
     "[[ROLL: SkillName]] "
     "(Example: [[ROLL: Strength]] or [[ROLL: Deception]]). "
     "Wait for the system to provide the dice result before you continue the story."
+    "Never make more than 2 dice rolls per user prompt."
     "Do not display to the Player the numerical result of the dice roll, or if it succeeded/failed. Simply narrate the result of the player's action."
-    "If a player succeeds in a Skill Check, award them 1 XP towards that Skill and let the Player know in the chat so that they may update their sheet."
     "If the player has done something enough times to warrant learning a new Skill, let the Player know."
     "Remember that the player only has access to items that are in their 'Inventory' or that are located somewhere in the current scene (that the player is also aware of and can access)."
 )
@@ -271,6 +271,9 @@ class GameApp(ctk.CTk):
         recursion_depth: Counts how many times we've ping-ponged with the AI for this single turn.
         If depth > 0, we are already resolving a skill check.
         """
+        
+        response = None
+        
         try:
             # 1. VISUAL FEEDBACK
             # Only show "..." if this is the FIRST request.
@@ -310,7 +313,7 @@ class GameApp(ctk.CTk):
                     follow_up_prompt = (
                         f"{prompt}\n"
                         f"GM: {ai_text}\n" # Include the AI's request for the roll in history
-                        f"[System: Player rolled {roll_result} for {skill_needed}. Describe the outcome, determining a fair Difficulty Rating that the Player needs to have met or exceeded. IMPORTANT: The roll is complete. DO NOT output [[ROLL]] again. Additionally, do not display the DC for the roll.]"
+                        f"[System: Player rolled {roll_result} for {skill_needed}. Describe the outcome, determining a fair Difficulty Rating that the Player needs to have met or exceeded. IMPORTANT: The roll is complete. DO NOT output [[ROLL]] again. Additionally, do not display the DC for the roll. Typically, there should only be 1-2 Skill Checks per Query, so please don't make more than 2 Skill Checks for a single User Query.]"
                     )
                     
                     # Call this function again with the new info
@@ -366,7 +369,7 @@ class GameApp(ctk.CTk):
             # So we only unlock if we did NOT recurse.
             
             should_unlock = True
-            if response.status_code == 200:
+            if response is not None and response.status_code == 200:
                 ai_text = response.json()['response']
                 if re.search(r"\[\[ROLL:\s*(.*?)\]\]", ai_text) and recursion_depth < 1:
                     should_unlock = False
@@ -463,6 +466,8 @@ class GameApp(ctk.CTk):
 
     def generate_recap(self, history_text):
         self.toggle_controls(enable=False, status_text="Picking up where we left off...")
+        recap_prompt = None
+        response = None
         
         # If history is too short, no need for a recap
         if len(history_text) < 100: 
@@ -490,7 +495,7 @@ class GameApp(ctk.CTk):
                 },
                 timeout=180
             )
-            if response.status_code == 200:
+            if response is not None and response.status_code == 200:
                 recap_text = response.json()['response']
                 self.print_to_story(f"📝 RECAP: {recap_text}", sender="GM")
         except Exception as e:
