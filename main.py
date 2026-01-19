@@ -7,12 +7,15 @@ import tkinter as tk
 import customtkinter as ctk
 import random
 import re
+from dotenv import load_dotenv
 
 # Build the project
 # pyinstaller --noconsole --onefile --add-data "game_icon.ico;." --icon=game_icon.ico --name "Text Adventure" main.py
 
+load_dotenv()
+
 # --- Configuration ---
-GEMINI_API_KEY = "AIzaSyB3ENIVsunarxjD4F8HXAA7Bs9p9GmtbrM" 
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MODEL = "gemini-2.0-flash" 
 
 # Initialize the Client
