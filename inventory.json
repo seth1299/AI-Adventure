@@ -1,0 +1,13 @@
+{
+    "Backpack": [
+        ["Arrow", "A basic arrow.", "20"],
+        ["Torch", "Standard torch.", "10"]
+    ],
+    "Weapons": [
+        ["Bow", "120 ft", "+2", "1d6", "Arrow"],
+        ["Dagger", "5 ft", "+2", "1d4", "None"]
+    ],
+    "Currency": [
+        ["Gold", "Large coin.", "1"]
+    ]
+}
