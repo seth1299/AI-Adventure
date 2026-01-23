@@ -39,6 +39,14 @@ INVENTORY_SCHEMA = {
     "Clothes":  ["Body Part", "Equipment Name"]
 }
 
+AMMO_TYPES = ["None", "Arrow", "Bolt", "Dart", "Stone"]
+
+COIN_DESCRIPTIONS = {
+    "Gold": "The largest denomination of coin. Used for large purchases.",
+    "Silver": "The second-largest denomination. 10 Silver equals 1 Gold.",
+    "Copper": "The lowest denomination. Used for common goods. 10 Copper equals 1 Silver."
+}
+
 class MarkdownEditorTab(ctk.CTkFrame):
     """A Frame that holds both a raw Textbox and an HTML Preview."""
     def __init__(self, parent, default_text="# New Tab\n"):
@@ -121,10 +129,10 @@ class InventoryTab(ctk.CTkFrame):
         super().__init__(parent)
         
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(0, weight=1) # Text area
-        self.grid_rowconfigure(1, weight=0) # Button area
+        self.grid_rowconfigure(0, weight=1) 
+        self.grid_rowconfigure(1, weight=0)
         
-        # 1. Read-Only Display (The Table)
+        # 1. Read-Only Display
         self.display = ctk.CTkTextbox(self, font=("Consolas", 14), wrap="none", state="disabled")
         self.display.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         
@@ -140,6 +148,9 @@ class InventoryTab(ctk.CTkFrame):
 
         self.filename = "inventory.json"
         self.refresh_display()
+
+    def get_text(self):
+        return self.display.get("0.0", "end")
 
     def load_data(self):
         if not os.path.exists(self.filename):
@@ -162,8 +173,8 @@ class InventoryTab(ctk.CTkFrame):
         for category, items in data.items():
             if items:
                 headers = INVENTORY_SCHEMA.get(category, [])
-                full_text += f"\n## {category}\n"
-                full_text += tabulate(items, headers, tablefmt="grid")
+                full_text += f"\n{category}\n"
+                full_text += tabulate(items, headers, tablefmt="rounded_grid")
                 full_text += "\n"
         
         self.display.configure(state="normal")
@@ -174,10 +185,10 @@ class InventoryTab(ctk.CTkFrame):
     def open_add_dialog(self):
         dialog = ctk.CTkToplevel(self)
         dialog.title("Add Item")
-        dialog.geometry("400x500")
+        dialog.geometry("450x600")
         dialog.attributes("-topmost", True)
         
-        # Category Selector
+        # --- Category Selector ---
         ctk.CTkLabel(dialog, text="Category:").pack(pady=5)
         cat_var = ctk.StringVar(value="Backpack")
         cat_dropdown = ctk.CTkOptionMenu(dialog, variable=cat_var, values=list(INVENTORY_SCHEMA.keys()))
@@ -187,48 +198,173 @@ class InventoryTab(ctk.CTkFrame):
         fields_frame = ctk.CTkFrame(dialog)
         fields_frame.pack(fill="both", expand=True, padx=10, pady=10)
         
-        self.entries = [] # Store entry widgets to retrieve data later
+        # Error Label
+        error_label = ctk.CTkLabel(dialog, text="", text_color="red")
+        error_label.pack(pady=5)
+
+        # Dictionary to store functions that retrieve values from the generated widgets
+        # Format: { "HeaderName": lambda: widget.get() }
+        self.value_getters = {} 
 
         def update_fields(choice):
-            # Clear old fields
+            # 1. Clear old fields
             for widget in fields_frame.winfo_children():
                 widget.destroy()
-            self.entries.clear()
+            self.value_getters.clear()
+            error_label.configure(text="")
             
-            # Create new fields based on Schema
             headers = INVENTORY_SCHEMA.get(choice, [])
+            
             for h in headers:
+                # --- Skip "Description" for Currency (Auto-filled) ---
+                if choice == "Currency" and h == "Description":
+                    continue
+
                 ctk.CTkLabel(fields_frame, text=h).pack(anchor="w")
-                entry = ctk.CTkEntry(fields_frame)
-                entry.pack(fill="x", pady=(0, 10))
-                self.entries.append(entry)
+
+                # --- SPECIAL WIDGET: CURRENCY TYPE ---
+                if choice == "Currency" and h == "Coin Type":
+                    coin_var = ctk.StringVar(value="Gold")
+                    cmb = ctk.CTkOptionMenu(fields_frame, variable=coin_var, values=["Gold", "Silver", "Copper"])
+                    cmb.pack(fill="x", pady=(0, 10))
+                    self.value_getters[h] = lambda v=coin_var: v.get()
+
+                # --- SPECIAL WIDGET: DAMAGE (Composite) ---
+                elif choice == "Weapons" and h == "Damage":
+                    dmg_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
+                    dmg_frame.pack(fill="x", pady=(0, 10))
+                    
+                    # Number of dice
+                    num_entry = ctk.CTkEntry(dmg_frame, width=50, placeholder_text="1")
+                    num_entry.pack(side="left", padx=(0, 5))
+                    
+                    lbl_d = ctk.CTkLabel(dmg_frame, text="d")
+                    lbl_d.pack(side="left")
+                    
+                    # Die Type
+                    die_var = ctk.StringVar(value="6")
+                    die_menu = ctk.CTkOptionMenu(dmg_frame, variable=die_var, values=["4", "6", "8", "10", "12"], width=70)
+                    die_menu.pack(side="left", padx=(5, 0))
+                    
+                    # Getter combines them: "2" + "d" + "6" -> "2d6"
+                    def get_damage_str(e=num_entry, d=die_var):
+                        val = e.get().strip()
+                        if not val: return "" # validation will catch empty
+                        return f"{val}d{d.get()}"
+                        
+                    self.value_getters[h] = get_damage_str
+
+                # --- SPECIAL WIDGET: AMMO ---
+                elif choice == "Weapons" and h == "Ammo":
+                    ammo_var = ctk.StringVar(value="None")
+                    ammo_menu = ctk.CTkOptionMenu(fields_frame, variable=ammo_var, values=AMMO_TYPES)
+                    ammo_menu.pack(fill="x", pady=(0, 10))
+                    self.value_getters[h] = lambda v=ammo_var: v.get()
+
+                # --- STANDARD ENTRY (With Validation Hooks) ---
+                else:
+                    entry = ctk.CTkEntry(fields_frame)
+                    entry.pack(fill="x", pady=(0, 10))
+                    self.value_getters[h] = lambda e=entry: e.get()
 
         cat_dropdown.configure(command=update_fields)
-        update_fields("Backpack") # Initial load
+        update_fields("Backpack") 
 
-        def submit():
+        def validate_and_submit():
             category = cat_var.get()
-            new_row = [e.get() for e in self.entries]
+            headers = INVENTORY_SCHEMA.get(category, [])
+            row_data = []
             
-            data = self.load_data()
-            if category not in data: data[category] = []
-            
-            data[category].append(new_row)
-            self.save_data(data)
-            dialog.destroy()
+            error_msg = None
 
-        ctk.CTkButton(dialog, text="Save", command=submit).pack(pady=10)
+            try:
+                for h in headers:
+                    # 1. Handle Auto-Generated Description for Currency
+                    if category == "Currency" and h == "Description":
+                        coin_type = self.value_getters["Coin Type"]()
+                        row_data.append(COIN_DESCRIPTIONS.get(coin_type, "Unknown Coin"))
+                        continue
+
+                    # 2. Get Raw Value
+                    raw_val = self.value_getters[h]()
+                    
+                    # 3. Check Not Empty
+                    if not raw_val or raw_val.strip() == "":
+                        raise ValueError(f"'{h}' cannot be empty.")
+
+                    # 4. Specific Validations
+                    if h == "Amount":
+                        if not raw_val.isdigit() or int(raw_val) <= 0:
+                            raise ValueError(f"Amount must be a positive integer (got '{raw_val}').")
+                    
+                    if category == "Weapons":
+                        if h == "Range":
+                            if not raw_val.isdigit() or int(raw_val) < 5:
+                                raise ValueError("Range must be an integer >= 5.")
+                        
+                        if h == "To-Hit":
+                            # Allow negative numbers (e.g. -1)
+                            # isdigit() fails on negative, so we try int() casting
+                            try:
+                                int(raw_val)
+                            except:
+                                raise ValueError("To-Hit must be an integer.")
+
+                        if h == "Damage":
+                            # raw_val comes in as "XdY" e.g. "2d6"
+                            parts = raw_val.split('d')
+                            if len(parts) != 2: raise ValueError("Invalid damage format.")
+                            dice_count = parts[0]
+                            if not dice_count.isdigit() or int(dice_count) <= 0:
+                                raise ValueError("Damage dice count must be > 0.")
+
+                    row_data.append(raw_val)
+
+                # If we get here, all validations passed
+                data = self.load_data()
+                if category not in data: data[category] = []
+                data[category].append(row_data)
+                
+                self.save_data(data)
+                dialog.destroy()
+
+            except ValueError as ve:
+                error_label.configure(text=str(ve))
+            except Exception as e:
+                error_label.configure(text=f"Error: {str(e)}")
+
+        ctk.CTkButton(dialog, text="Save", command=validate_and_submit).pack(pady=10)
 
     def open_remove_dialog(self):
-        # A simpler dialog: Ask for Name and Amount
         dialog = ctk.CTkToplevel(self)
         dialog.title("Remove Item")
-        dialog.geometry("300x250")
+        dialog.geometry("350x250")
         dialog.attributes("-topmost", True)
 
-        ctk.CTkLabel(dialog, text="Item Name to Remove:").pack(pady=5)
-        name_entry = ctk.CTkEntry(dialog)
-        name_entry.pack(pady=5)
+        # 1. Flatten inventory into a list of strings for the dropdown
+        # Format: "Item Name (Category)"
+        data = self.load_data()
+        item_list = []
+        # Mapping to help us find the item later: "ItemName (Category)" -> (Category, Index, ActualName)
+        item_map = {} 
+
+        for cat, rows in data.items():
+            for idx, row in enumerate(rows):
+                name = row[0] # Name is always index 0
+                display_str = f"{name} ({cat})"
+                item_list.append(display_str)
+                item_map[display_str] = (cat, idx, name)
+
+        if not item_list:
+            ctk.CTkLabel(dialog, text="Inventory is empty.").pack(pady=20)
+            return
+
+        ctk.CTkLabel(dialog, text="Select Item:").pack(pady=5)
+        
+        # Dropdown
+        selected_item_var = ctk.StringVar(value=item_list[0])
+        dropdown = ctk.CTkOptionMenu(dialog, variable=selected_item_var, values=item_list)
+        dropdown.pack(pady=5)
 
         ctk.CTkLabel(dialog, text="Amount to remove (0 = All):").pack(pady=5)
         amount_entry = ctk.CTkEntry(dialog)
@@ -236,53 +372,59 @@ class InventoryTab(ctk.CTkFrame):
         amount_entry.pack(pady=5)
 
         def submit_remove():
-            target_name = name_entry.get().lower()
+            selection = selected_item_var.get()
+            if selection not in item_map: return
+
+            cat, idx, name = item_map[selection]
+            
             try:
                 amount_to_remove = int(amount_entry.get())
             except:
                 amount_to_remove = 1
 
-            data = self.load_data()
-            found = False
+            # Reload data fresh in case it changed
+            curr_data = self.load_data()
+            items = curr_data.get(cat, [])
             
-            for category, items in data.items():
-                # We iterate backwards so we can safely delete from the list
-                for i in range(len(items) - 1, -1, -1):
-                    item_row = items[i]
-                    # Assuming Index 0 is always "Name"
-                    if target_name in item_row[0].lower():
-                        found = True
-                        
-                        # Check if this item HAS an amount column? 
-                        # We look at schema. If 'Amount' is in headers.
-                        headers = INVENTORY_SCHEMA.get(category, [])
-                        if "Amount" in headers:
-                            amt_idx = headers.index("Amount")
-                            try:
-                                current_amt = int(item_row[amt_idx])
-                                new_amt = current_amt - amount_to_remove
-                                
-                                if new_amt <= 0:
-                                    items.pop(i) # Remove completely
-                                else:
-                                    item_row[amt_idx] = str(new_amt) # Update count
-                            except:
-                                # If amount isn't a number, just delete it
-                                items.pop(i)
+            # Find the item again by index (safest) or name
+            # Since lists shift when you delete, we need to be careful.
+            # However, since this dialog blocks interaction, index *should* be safe 
+            # UNLESS you open two remove dialogs at once. 
+            # Safer to search by name again to be robust.
+            
+            target_idx = -1
+            for i, row in enumerate(items):
+                if row[0] == name:
+                    target_idx = i
+                    break
+            
+            if target_idx != -1:
+                item_row = items[target_idx]
+                headers = INVENTORY_SCHEMA.get(cat, [])
+                
+                if "Amount" in headers:
+                    amt_idx = headers.index("Amount")
+                    try:
+                        current_amt = int(item_row[amt_idx])
+                        if amount_to_remove == 0:
+                            new_amt = 0 # Trigger full delete
                         else:
-                            # If item has no amount logic (like clothes), just delete
-                            items.pop(i)
-                        break # Stop searching this category if found
-                if found: break
-            
-            self.save_data(data)
-            dialog.destroy()
+                            new_amt = current_amt - amount_to_remove
+                        
+                        if new_amt <= 0:
+                            items.pop(target_idx)
+                        else:
+                            item_row[amt_idx] = str(new_amt)
+                    except:
+                        items.pop(target_idx) # If amount is corrupt, just delete
+                else:
+                    # No amount column (e.g. Clothes), just delete
+                    items.pop(target_idx)
+
+                self.save_data(curr_data)
+                dialog.destroy()
 
         ctk.CTkButton(dialog, text="Remove", fg_color="red", command=submit_remove).pack(pady=10)
-        
-    def get_text(self):
-        """Returns the text currently displayed in the textbox for the AI to read."""
-        return self.display.get("0.0", "end")
 
 class GameApp(ctk.CTk):
     def __init__(self):
