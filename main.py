@@ -30,6 +30,12 @@ DEFAULT_RULES = (
     "You are a Dungeon Master for a text-based RPG.\n"
     "1. Describe the environment vividly but concisely.\n"
     "2. Output [[ROLL: SkillName]] for checks.\n"
+    "3. Manage Inventory using tags (Pipe | separated):\n"
+    "   - [[ADD: Backpack | Item Name | Description | Amount]]\n"
+    "   - [[ADD: Currency | Gold/Silver/Copper | Description | Amount]]\n"
+    "   - [[ADD: Weapon | Range of Weapon (in feet) | To-Hit bonus for weapon | Damage for weapon | Ammunition type (or 'None')\n"
+    "   - [[REMOVE: Item Name | Amount]]\n"
+    "4. Do not output the inventory state manually, just use the tags."
 )
 
 INVENTORY_SCHEMA = {
@@ -130,24 +136,147 @@ class InventoryTab(ctk.CTkFrame):
         
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1) 
-        self.grid_rowconfigure(1, weight=0)
         
         # 1. Read-Only Display
         self.display = ctk.CTkTextbox(self, font=("Consolas", 14), wrap="none", state="disabled")
         self.display.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         
         # 2. Control Panel
-        self.controls = ctk.CTkFrame(self)
-        self.controls.grid(row=1, column=0, sticky="ew", padx=5, pady=5)
-        
-        self.btn_add = ctk.CTkButton(self.controls, text="➕ Add Item", fg_color="green", command=self.open_add_dialog)
-        self.btn_add.pack(side="left", padx=5, pady=5)
-        
-        self.btn_remove = ctk.CTkButton(self.controls, text="➖ Remove Item", fg_color="red", command=self.open_remove_dialog)
-        self.btn_remove.pack(side="left", padx=5, pady=5)
-
         self.filename = "inventory.json"
         self.refresh_display()
+
+    def autonomous_add(self, raw_args):
+        """
+        Parses a string like "Backpack | Potion | Heals 5HP | 1"
+        and adds it to the JSON safely.
+        """
+        try:
+            # 1. Parse Args (Allowing for pipe | or comma , separation)
+            if "|" in raw_args:
+                parts = [p.strip() for p in raw_args.split("|")]
+            else:
+                parts = [p.strip() for p in raw_args.split(",")]
+
+            if len(parts) < 3:
+                return f"Error: AI tried to add item with insufficient data: {parts}"
+
+            category = parts[0].strip() # e.g. "Backpack"
+            
+            # Normalize Category Name (Handle "backpack" vs "Backpack")
+            valid_cats = {k.lower(): k for k in INVENTORY_SCHEMA.keys()}
+            if category.lower() in valid_cats:
+                real_cat = valid_cats[category.lower()]
+            else:
+                # Default to Backpack if AI invents a category
+                real_cat = "Backpack"
+
+            # 2. Prepare Data Row based on Schema
+            # We must match the length of the list expected by INVENTORY_SCHEMA
+            # Backpack: [Name, Desc, Amount]
+            # Weapons:  [Name, Range, To-Hit, Damage, Ammo]
+            
+            row_data = []
+            
+            # Standard mappings
+            name = parts[1]
+            desc = parts[2]
+            amount = parts[3] if len(parts) > 3 else "1"
+
+            if real_cat == "Backpack":
+                row_data = [name, desc, amount]
+                
+            elif real_cat == "Currency":
+                # Schema: [Coin Type, Description, Amount]
+                # AI might send: "Currency | Gold | A gold coin | 10"
+                # OR just:       "Currency | Gold | 10" (If it forgets description)
+                
+                coin_type = name.capitalize()
+                if coin_type not in ["Gold", "Silver", "Copper"]:
+                    coin_type = "Gold"
+                
+                # Auto-fill description from your constant
+                auto_desc = COIN_DESCRIPTIONS.get(coin_type, "Coin")
+                
+                # If the AI sent 3 args (Cat, Type, Amount), handle that
+                if len(parts) == 3:
+                    final_amt = parts[2]
+                else:
+                    final_amt = amount
+                    
+                row_data = [coin_type, auto_desc, final_amt]
+
+            elif real_cat == "Weapons":
+                # This is tricky. AI likely won't give range/damage stats in the tag.
+                # We will set defaults for safety.
+                # Schema: [Name, Range, To-Hit, Damage, Ammo]
+                row_data = [name, "5 ft", "+0", "1d4", "None"] 
+
+            # 3. Save
+            data = self.load_data()
+            if real_cat not in data: data[real_cat] = []
+            data[real_cat].append(row_data)
+            self.save_data(data)
+            
+            return f"System: Added {amount}x {name} to {real_cat}."
+
+        except Exception as e:
+            print(f"Auto-Add Failed: {e}")
+            return "System: Failed to add item."
+
+    def autonomous_remove(self, raw_args):
+        """
+        Parses string like "Arrow | 1" or just "Arrow"
+        """
+        try:
+            if "|" in raw_args:
+                parts = [p.strip() for p in raw_args.split("|")]
+                target_name = parts[0]
+                amount = int(parts[1]) if len(parts) > 1 else 1
+            else:
+                # Assuming just name "Arrow"
+                target_name = raw_args.strip()
+                amount = 1
+
+            data = self.load_data()
+            removed = False
+            
+            # Search all categories
+            for cat, items in data.items():
+                for i in range(len(items) - 1, -1, -1):
+                    # Index 0 is always Name in your schema
+                    if target_name.lower() in items[i][0].lower():
+                        
+                        # Logic to decrement Amount column if it exists
+                        headers = INVENTORY_SCHEMA.get(cat, [])
+                        if "Amount" in headers:
+                            amt_idx = headers.index("Amount")
+                            try:
+                                curr = int(items[i][amt_idx])
+                                new_val = curr - amount
+                                if new_val <= 0:
+                                    items.pop(i)
+                                else:
+                                    items[i][amt_idx] = str(new_val)
+                                removed = True
+                            except:
+                                items.pop(i)
+                                removed = True
+                        else:
+                            # No amount column (Clothes), just delete
+                            items.pop(i)
+                            removed = True
+                        
+                        if removed: break
+                if removed: break
+            
+            if removed:
+                self.save_data(data)
+                return f"System: Removed {amount}x {target_name}."
+            else:
+                return f"System: Could not find {target_name} to remove."
+
+        except Exception as e:
+            return f"System Error: {e}"
 
     def get_text(self):
         return self.display.get("0.0", "end")
@@ -426,6 +555,66 @@ class InventoryTab(ctk.CTkFrame):
 
         ctk.CTkButton(dialog, text="Remove", fg_color="red", command=submit_remove).pack(pady=10)
 
+class SkillsTab(ctk.CTkFrame):
+    def __init__(self, parent):
+        super().__init__(parent)
+        
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+        
+        self.display = ctk.CTkTextbox(self, font=("Consolas", 14), wrap="none", state="disabled")
+        self.display.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+
+        self.filename = "skills.json"
+        self.refresh_display()
+
+    def load_data(self):
+        if not os.path.exists(self.filename):
+            # Default starter skills if file doesn't exist
+            default_skills = [
+                {"Name": "Perception", "Level": 1, "XP": 0, "Threshold": 5},
+                {"Name": "Stealth",    "Level": 1, "XP": 0, "Threshold": 5},
+                {"Name": "Survival",   "Level": 1, "XP": 0, "Threshold": 5}
+            ]
+            self.save_data(default_skills)
+            return default_skills
+        try:
+            with open(self.filename, "r") as f:
+                return json.load(f)
+        except:
+            return []
+
+    def save_data(self, data):
+        # Always sort alphabetically by Name before saving
+        data.sort(key=lambda x: x["Name"])
+        
+        with open(self.filename, "w") as f:
+            json.dump(data, f, indent=4)
+        self.refresh_display()
+
+    def get_text(self):
+        """Returns the raw text for the AI to read context."""
+        return self.display.get("0.0", "end")
+
+    def refresh_display(self):
+        data = self.load_data()
+        
+        # Prepare data for tabulate
+        headers = ["Skill Name", "Level (Bonus)", "XP", "Next Level"]
+        table_data = []
+        
+        for s in data:
+            # Row: [Name, +X, CurrentXP, Threshold]
+            lvl_str = f"+{s['Level']}"
+            table_data.append([s["Name"], lvl_str, s["XP"], s["Threshold"]])
+            
+        full_text = "# Skills\n" + tabulate(table_data, headers, tablefmt="rounded_grid")
+        
+        self.display.configure(state="normal")
+        self.display.delete("0.0", "end")
+        self.display.insert("0.0", full_text)
+        self.display.configure(state="disabled")
+
 class GameApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -465,6 +654,10 @@ class GameApp(ctk.CTk):
                 self.notebook_widgets[tab_name] = inv_editor 
                 # Note: InventoryTab doesn't have .get_text(), 
                 # so if your AI query uses .get_text(), you might need a small adapter.
+            elif tab_name == "Skills":
+                skills_tab = SkillsTab(frame)
+                skills_tab.grid(row=0, column=0, sticky="nsew")
+                self.notebook_widgets[tab_name] = skills_tab
             else:
                 # All other tabs use our new MarkdownEditor
                 editor = MarkdownEditorTab(frame, default_text=f"# {tab_name}\n")
@@ -540,46 +733,51 @@ class GameApp(ctk.CTk):
         threading.Thread(target=self.query_ai, args=(full_prompt, user_text), daemon=True).start()
 
     def perform_skill_check(self, skill_name):
-        # 1. Clean up the skill name (e.g., remove parens if "Stealth (Dex)" is passed)
-        clean_name = skill_name.split('(')[0].strip()
-        safe_skill = re.escape(clean_name)
+        # 1. Clean up name
+        clean_name = skill_name.split('(')[0].strip().title() # Title case (Stealth, not stealth)
         
-        # 2. Roll the D20
+        # 2. Load Data from the SkillsTab
+        skills_tab = self.notebook_widgets["Skills"]
+        data = skills_tab.load_data()
+        
+        skill_entry = None
+        
+        # 3. Find the skill
+        for item in data:
+            if item["Name"].lower() == clean_name.lower():
+                skill_entry = item
+                break
+        
+        # 4. If new skill, create it (Level 0, No Bonus)
+        if not skill_entry:
+            skill_entry = {"Name": clean_name, "Level": 0, "XP": 0, "Threshold": 5}
+            data.append(skill_entry)
+            self.print_to_story(f"🆕 Learned new skill: {clean_name}!", sender="System")
+
+        # 5. Apply XP Logic
+        skill_entry["XP"] += 1
+        
+        leveled_up = False
+        if skill_entry["XP"] >= skill_entry["Threshold"]:
+            skill_entry["Level"] += 1
+            skill_entry["XP"] = 0 # Reset to 0 as requested
+            skill_entry["Threshold"] += 2
+            leveled_up = True
+            
+        # 6. Save Data (This also triggers the Sort and UI Refresh)
+        skills_tab.save_data(data)
+        
+        # 7. Calculate Result
+        bonus = skill_entry["Level"]
         die_roll = random.randint(1, 20)
-        
-        # 3. Get the Raw Text from the Skills Tab
-        # We use .get_text() because we are using the new MarkdownEditorTab class
-        skills_text = self.notebook_widgets["Skills"].get_text()
-        
-        bonus = 0
-
-        # --- REGEX EXPLANATION for your Skills.md ---
-        # We are looking for a table row that looks like this:
-        # | Skill Name | Description | Level | ...
-        #
-        # 1. \|\s*{safe_skill}\s*\|  -> Match the Skill Name column
-        # 2. [^|]*\|                 -> Skip the entire Description column (everything until the next pipe)
-        # 3. \s*(\d+)                -> Capture the Digits in the Level column
-        
-        pattern = rf"\|\s*{safe_skill}\s*\|[^|]*\|\s*(\d+)"
-        
-        match = re.search(pattern, skills_text, re.IGNORECASE)
-        
-        if match:
-            try:
-                bonus = int(match.group(1))
-            except ValueError:
-                bonus = 0
-        else:
-            pass
-            # Fallback: If we can't find it in the table, check if the AI hallucinated 
-            # a skill not on the sheet. We'll default to 0 bonus.
-            #print(f"System Warning: Could not find skill '{clean_name}' in Skills tab.")
-
         total = die_roll + bonus
         
-        # Log to the story
-        self.print_to_story(f"🎲 Rolling {clean_name}: {die_roll} + ({bonus}) = {total}", sender="System")
+        # 8. Output
+        msg = f"🎲 Rolling {clean_name}: {die_roll} + ({bonus}) = {total}"
+        if leveled_up:
+            msg += f"\n🎉 **LEVEL UP!** {clean_name} is now Level {skill_entry['Level']}!"
+            
+        self.print_to_story(msg, sender="System")
         
         return total
 
@@ -596,16 +794,38 @@ class GameApp(ctk.CTk):
             )
             ai_text = response.text
             if not ai_text: raise ValueError("Empty response")
+            
+            # --- 1. CHECK FOR INVENTORY ADDS ---
+            # Finds [[ADD: ...]]
+            # We use finditer to handle multiple adds in one turn
+            add_matches = re.finditer(r"\[\[ADD:\s*(.*?)\]\]", ai_text)
+            for match in add_matches:
+                args = match.group(1)
+                # Call the function in the inventory tab
+                result_msg = self.notebook_widgets["Inventory"].autonomous_add(args)
+                print(result_msg) # Log to console for debugging
 
+            # --- 2. CHECK FOR INVENTORY REMOVES ---
+            remove_matches = re.finditer(r"\[\[REMOVE:\s*(.*?)\]\]", ai_text)
+            for match in remove_matches:
+                args = match.group(1)
+                result_msg = self.notebook_widgets["Inventory"].autonomous_remove(args)
+                print(result_msg)
+
+            # --- 3. CHECK FOR ROLLS (Your existing logic) ---
             roll_match = re.search(r"\[\[ROLL:\s*(.*?)\]\]", ai_text)
             
             if roll_match and recursion_depth < 2:
                 skill = roll_match.group(1).strip()
                 result = self.perform_skill_check(skill)
-                follow_up = f"{prompt}\nGM: {ai_text}\n[System: Player rolled {result} for {skill}.]"
+                # We strip the ADD/REMOVE tags before sending history back to prevent duplication
+                clean_prev = re.sub(r"\[\[(ADD|REMOVE):.*?\]\]", "", ai_text).strip()
+                follow_up = f"{prompt}\nGM: {clean_prev}\n[System: Player rolled {result} for {skill}.]"
                 self.query_ai(follow_up, user_text, recursion_depth + 1)
             else:
-                final_text = re.sub(r"\[\[ROLL:.*?\]\]", "", ai_text).strip() if recursion_depth >= 2 else ai_text
+                # Remove ALL tags (ROLL, ADD, REMOVE) from the final text displayed to user
+                final_text = re.sub(r"\[\[.*?\]\]", "", ai_text).strip()
+                #final_text = re.sub(r"\[\[ROLL:.*?\]\]", "", ai_text).strip() if recursion_depth >= 2 else ai_text
                 self.print_to_story(final_text, sender="GM")
                 self.conversation_history += f"Player: {user_text}\nGM: {final_text}\n"
 
