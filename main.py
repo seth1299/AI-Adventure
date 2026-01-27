@@ -108,8 +108,10 @@ class GameApp(ctk.CTk):
     def load_adventure(self, save_name):
         self.game_loaded_successfully = False
         self.current_adventure_path = os.path.join(SAVES_DIR, save_name)
-        
         self.story_tab.clear_chat()
+        # Migrate legacy inventory format (old list items -> dict items)
+        self._migrate_inventory_legacy_format()
+
         
         # UI Switch
         self.main_menu.grid_forget()
@@ -138,6 +140,7 @@ class GameApp(ctk.CTk):
             try:
                 with open(history_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                    self.is_creating = bool(data.get("is_creating", False))
                     hist = data.get("Chat History", [])
                     self.conversation_history = "\n".join(hist) if isinstance(hist, list) else hist
                     
@@ -211,6 +214,115 @@ class GameApp(ctk.CTk):
                     with open(local_rules, "r") as f: return f.read()
                 except: pass
         return DEFAULT_RULES
+    
+        # --- Legacy Migration Helpers ---
+
+    def _migrate_inventory_legacy_format(self):
+        """
+        Converts old inventory item lists:
+          [Name, Desc, Amount, Value]
+        into the new dict format:
+          {"name":..., "desc":..., "amount":..., "value":...}
+        """
+        if not self.current_adventure_path:
+            return
+
+        inv_path = os.path.join(self.current_adventure_path, "inventory.json")
+        if not os.path.exists(inv_path):
+            return
+
+        try:
+            with open(inv_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return
+
+        if not isinstance(data, dict):
+            return
+
+        changed = False
+        for cat, items in list(data.items()):
+            if not isinstance(items, list):
+                continue
+
+            new_items = []
+            for item in items:
+                if isinstance(item, dict):
+                    # Already new format
+                    new_items.append(item)
+                elif isinstance(item, list):
+                    # Legacy format
+                    name = item[0] if len(item) > 0 else "Unknown"
+                    desc = item[1] if len(item) > 1 else "No desc"
+                    amt  = item[2] if len(item) > 2 else "1"
+                    val  = item[3] if len(item) > 3 else "0"
+                    new_items.append({"name": name, "desc": desc, "amount": str(amt), "value": str(val)})
+                    changed = True
+                else:
+                    # Skip broken entries
+                    changed = True
+
+            data[cat] = new_items
+
+        if changed:
+            try:
+                with open(inv_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=4)
+            except Exception:
+                pass
+
+    # --- Stat Helpers ---
+
+    def _apply_modify_stat(self, stat_name: str, raw_value: str) -> str:
+        """
+        Supports:
+          [[MODIFY_STAT: Stamina | -10]]  (delta)
+          [[MODIFY_STAT: Nutrition | +5]] (delta)
+          [[MODIFY_STAT: Stamina | 80]]   (sets absolute if no + or -)
+          [[MODIFY_STAT: Nutrition | SET 60]] (sets absolute)
+        Clamps 0..100.
+        """
+        stat = (stat_name or "").strip().lower()
+        raw = (raw_value or "").strip()
+
+        if stat not in ("stamina", "nutrition"):
+            return f"System: Unknown stat '{stat_name}'."
+
+        cur = self.story_tab.get_status_data()
+        cur_val = int(cur.get(stat, 100))
+
+        # Parse set vs delta
+        new_val = None
+        raw_upper = raw.upper()
+        try:
+            if raw_upper.startswith("SET "):
+                new_val = int(raw.split(None, 1)[1].strip())
+            elif raw.startswith(("+", "-")):
+                new_val = cur_val + int(raw)
+            else:
+                # plain number => set
+                new_val = int(raw)
+        except Exception:
+            return f"System: Bad MODIFY_STAT value '{raw_value}'."
+
+        new_val = max(0, min(100, int(new_val)))
+
+        # Preserve current time/location/turn/day; only change the stat
+        turn = cur.get("turn", "1")
+        location = cur.get("location", "Unknown")
+        day = cur.get("day", "Day 1")
+        time = cur.get("time", "Morning")
+
+        nutrition = int(cur.get("nutrition", 100))
+        stamina = int(cur.get("stamina", 100))
+        if stat == "nutrition":
+            nutrition = new_val
+        else:
+            stamina = new_val
+
+        self.after(0, lambda: self.story_tab.update_status(turn, location, day, time, nutrition=nutrition, stamina=stamina))
+        return f"System: {stat.title()} is now {new_val}."
+
 
     # --- Game Logic ---
 
@@ -288,9 +400,13 @@ class GameApp(ctk.CTk):
         msg = f"🎲 Rolling {clean_name}: {die_roll} + ({bonus}) = {total}"
         
         if leveled_up:
-            msg += f"\n🎉 **LEVEL UP!** {clean_name} is now Level {skill_entry['Level']}! {skill_entry["Threshold"]} XP required until level {skill_entry["Level"] + 1}."
+            msg += (
+                f"\n🎉 **LEVEL UP!** {clean_name} is now Level {skill_entry['Level']}! "
+                f"{skill_entry['Threshold']} XP required until level {skill_entry['Level'] + 1}."
+            )
         else:
-            msg += f"\n{clean_name}: {skill_entry["XP"]} / {skill_entry["Threshold"]} XP towards next level up."
+            msg += f"\n{clean_name}: {skill_entry['XP']} / {skill_entry['Threshold']} XP towards next level up."
+
             
         self.story_tab.print_text(msg, sender="System")
         return total
@@ -357,6 +473,23 @@ class GameApp(ctk.CTk):
                 res = self.notebook_widgets["Inventory"].autonomous_remove(match.group(1))
                 self.story_tab.print_text(res, sender="GM")
                 self.conversation_history += res
+                
+            # 1.5 Modify Items
+            for match in re.finditer(r"\[\[MODIFY_ITEM:\s*(.*?)\]\]", ai_text, re.DOTALL):
+                res = self.notebook_widgets["Inventory"].modify_item(match.group(1).strip())
+                if res:
+                    self.story_tab.print_text(res, sender="System")
+                    self.conversation_history += f"\n{res}\n"
+
+            # 1.6 Modify Stats
+            for match in re.finditer(r"\[\[MODIFY_STAT:\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text):
+                stat_name = match.group(1).strip()
+                stat_val = match.group(2).strip()
+                res = self._apply_modify_stat(stat_name, stat_val)
+                if res:
+                    self.story_tab.print_text(res, sender="System")
+                    self.conversation_history += f"\n{res}\n"
+
             
             # 2. Status Update
             status_match = re.search(r"\[\[STATUS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text)
@@ -365,7 +498,11 @@ class GameApp(ctk.CTk):
                 location = status_match.group(2).strip()
                 day = status_match.group(3).strip()
                 time = status_match.group(4).strip()
-                self.after(0, lambda: self.story_tab.update_status(turn, location, day, time))
+                cur_stats = self.story_tab.get_status_data()
+                nut = cur_stats.get("nutrition", 100)
+                sta = cur_stats.get("stamina", 100)
+                self.after(0, lambda: self.story_tab.update_status(turn, location, day, time, nutrition=nut, stamina=sta))
+
                 
                 # Check Processing Tab (Only if NOT creating)
                 if not self.is_creating and "Processing" in self.notebook_widgets:
@@ -375,19 +512,25 @@ class GameApp(ctk.CTk):
                         self.story_tab.print_text(sys_msg, sender="System")
                         self.conversation_history += f"\n{sys_msg}\n"
                         
-            # Tag: [[START_PROCESS: Name | Description | Time_Slots]]
+            # Tag: [[START_PROCESS: Name | Description | Time_Slots | Yield]]
             # We need the CURRENT status to calculate the target time.
             current_status = self.story_tab.get_status_data() # Gets current UI values
             
-            for match in re.finditer(r"\[\[START_PROCESS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text):
+            for match in re.finditer(r"\[\[START_PROCESS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(\d+)\s*\|\s*(.*?)\]\]", ai_text):
                 p_name = match.group(1).strip()
                 p_desc = match.group(2).strip()
                 p_slots = match.group(3).strip()
+                p_yield = match.group(4).strip()
                 
                 # Pass current Day/Time to calculate target
                 res = self.notebook_widgets["Processing"].add_process(
-                    p_name, p_desc, p_slots, 
-                    current_status['day'], current_status['time']
+                    p_name,
+                    p_desc,
+                    p_slots,
+                    current_status["day"],
+                    current_status["time"],
+                    p_yield,
+                    mode="auto"
                 )
                 self.story_tab.print_text(res, sender="System")
                 
@@ -397,18 +540,23 @@ class GameApp(ctk.CTk):
                 res = self.notebook_widgets["Processing"].remove_process(p_name)
                 if res: self.story_tab.print_text(res, sender="System")
                 
-            # Tag: [[START_PROJECT: Name | Desc | Total_Slots]]
+            # Tag: [[START_PROJECT: Name | Desc | Total_Slots | Yield]]
             # This creates a "Manual" task that requires work.
-            for match in re.finditer(r"\[\[START_PROJECT:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text):
+            for match in re.finditer(r"\[\[START_PROJECT:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(\d+)\s*\|\s*(.*?)\]\]", ai_text):
                 p_name = match.group(1).strip()
                 p_desc = match.group(2).strip()
                 p_slots = match.group(3).strip()
+                p_yield = match.group(4).strip()
                 current_status = self.story_tab.get_status_data()
                 
                 # We pass mode="manual" here
                 res = self.notebook_widgets["Processing"].add_process(
-                    p_name, p_desc, p_slots, 
-                    current_status['day'], current_status['time'], 
+                    p_name,
+                    p_desc,
+                    p_slots,
+                    current_status["day"],
+                    current_status["time"],
+                    p_yield,
                     mode="manual"
                 )
                 if res: self.story_tab.print_text(res, sender="System")
@@ -444,7 +592,11 @@ class GameApp(ctk.CTk):
                 follow_up = f"{prompt}\nGM: {clean_prev}\n[System: Player rolled {result} for {skill}.]"
                 self.query_ai(follow_up, user_text, recursion_depth + 1)
             else:
-                clean_pattern = re.compile(r"\[\[(WORLD_INFO|CHARACTER_INFO|SKILL|ADD|REMOVE|STATUS|ROLL|START_GAME|XP|START_PROCESS|REMOVE_PROCESS|START_PROJECT|WORK|ADD_FOOD|CONSUME).*?\]\]", re.DOTALL)
+                clean_pattern = re.compile(
+    r"\[\[(WORLD_INFO|CHARACTER_INFO|SKILL|ADD|REMOVE|MODIFY_ITEM|MODIFY_STAT|STATUS|ROLL|START_GAME|XP|START_PROCESS|REMOVE_PROCESS|START_PROJECT|WORK|ADD_FOOD|CONSUME).*?\]\]",
+    re.DOTALL
+)
+
                 final_text = clean_pattern.sub("", ai_text)
                 #final_text = re.sub(r"\[\[.*?\]\]", "", ai_text, flags=re.DOTALL).strip()
                 # Replace 3 or more newlines with just 2 (Standard paragraph break)

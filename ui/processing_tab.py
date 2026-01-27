@@ -2,7 +2,7 @@ import customtkinter as ctk
 import os
 import json
 from tabulate import tabulate
-from tqdm import tqdm  # <--- NEW IMPORT
+from tqdm import tqdm
 from config import TIME_ORDER
 
 class ProcessingTab(ctk.CTkFrame):
@@ -46,7 +46,8 @@ class ProcessingTab(ctk.CTkFrame):
         except: d = 1
         return (d * len(TIME_ORDER)) + self._time_to_index(time_str)
 
-    def add_process(self, name, desc, total_slots, current_day, current_time_str, mode="auto"):
+    # --- UPDATED: ADD PROCESS NOW TAKES YIELD ---
+    def add_process(self, name, desc, total_slots, current_day, current_time_str, expected_yield, mode="auto"):
         data = self.load_data()
         start_ticks = self._get_absolute_ticks(current_day, current_time_str)
         total_slots = int(total_slots)
@@ -55,10 +56,11 @@ class ProcessingTab(ctk.CTkFrame):
             "name": name,
             "desc": desc,
             "mode": mode,
+            "yield": expected_yield, # <--- NEW FIELD
             "total_slots": total_slots,
-            "progress_slots": 0,             # Slots completed so far
-            "start_ticks": start_ticks,      # When it began
-            "target_ticks": start_ticks + total_slots if mode == "auto" else 0, # Target (Auto only)
+            "progress_slots": 0,             
+            "start_ticks": start_ticks,      
+            "target_ticks": start_ticks + total_slots if mode == "auto" else 0, 
             "status": "In Progress"
         }
         
@@ -69,9 +71,9 @@ class ProcessingTab(ctk.CTkFrame):
             end_ticks = entry["target_ticks"]
             total_days = end_ticks // len(TIME_ORDER)
             finish_time = TIME_ORDER[end_ticks % len(TIME_ORDER)]
-            return f"(Started Auto-Process: {name}. Finishes Day {total_days} at {finish_time})."
+            return f"(Started Auto-Process: {name}. Yields: {expected_yield}. Finishes Day {total_days} at {finish_time})."
         else:
-            return f"(Started Project: {name}. Requires {total_slots} slots of work)."
+            return f"(Started Project: {name}. Yields: {expected_yield}. Requires {total_slots} slots)."
 
     def check_active_tasks(self, current_day, current_time_str):
         data = self.load_data()
@@ -85,7 +87,9 @@ class ProcessingTab(ctk.CTkFrame):
                 if item.get("mode", "auto") == "auto":
                     if current_ticks >= item["target_ticks"]:
                         item["status"] = "COMPLETED"
-                        completed_names.append(item["name"])
+                        # We append the name AND yield so the System Notification tells the AI what to add
+                        y = item.get("yield", "Unknown")
+                        completed_names.append(f"{item['name']} (Yield: {y})")
         
         if completed_names:
             self.save_data(data)
@@ -107,7 +111,7 @@ class ProcessingTab(ctk.CTkFrame):
                 if item["progress_slots"] >= item["total_slots"]:
                     item["status"] = "COMPLETED"
                     self.save_data(data)
-                    return f"(Work Complete! {name} is finished.)"
+                    return f"(Work Complete! {name} is finished. Yield: {item.get('yield', 'Unknown')})"
                 else:
                     remaining = item["total_slots"] - item["progress_slots"]
                     self.save_data(data)
@@ -130,33 +134,36 @@ class ProcessingTab(ctk.CTkFrame):
         if not data: return "No active processes."
         txt = "ACTIVE PROCESSES:\n"
         for item in data:
+            y_str = item.get("yield", "Unknown") # Get Yield for context
+            
             if item["status"] == "COMPLETED":
-                state = "READY TO COLLECT"
+                state = f"READY TO COLLECT (Yield: {y_str})"
             elif item.get("mode") == "manual":
                 p = item["progress_slots"]
                 t = item["total_slots"]
-                state = f"Progress: {p}/{t} slots"
+                state = f"Progress: {p}/{t} slots (Yield: {y_str})"
             else:
                 target = item["target_ticks"]
                 d = target // len(TIME_ORDER)
                 t = TIME_ORDER[target % len(TIME_ORDER)]
-                state = f"Finishes Day {d}, {t}"
+                state = f"Finishes Day {d}, {t} (Yield: {y_str})"
                 
             txt += f"- {item['name']}: {item['desc']} [{state}]\n"
         return txt
 
     def refresh_display(self):
-        """Refreshes the UI table using TQDM for bars."""
+        """Refreshes the UI table."""
         data = self.load_data()
-        headers = ["Activity", "Type", "Progress", "Status"]
+        # UPDATED HEADERS
+        headers = ["Activity", "Type", "Progress", "Yield", "Status"]
         table_data = []
         
         for item in data:
             mode = item.get("mode", "auto").upper()
             status = item["status"]
+            yield_val = item.get("yield", "N/A") # Backward compatibility
             
             if status == "COMPLETED":
-                # Full green bar
                 prog_display = tqdm.format_meter(
                     n=100, total=100, elapsed=0, ncols=12, 
                     bar_format='{bar}', ascii=False
@@ -167,27 +174,20 @@ class ProcessingTab(ctk.CTkFrame):
                 p = item["progress_slots"]
                 t = item["total_slots"]
                 
-                # CALCULATE HOURS REMAINING
-                # 1 Slot approx 3 Hours (24hrs / 8 slots)
                 remaining_slots = t - p
                 hours_left = remaining_slots * 3
                 
-                # Custom info string
                 if hours_left >= 24:
-                    # If more than a day, show days (e.g. "1.5 Days")
                     days = round(hours_left / 24, 1)
                     time_str = f"~{days} Days left"
                 else:
                     time_str = f"~{hours_left} Hrs left"
 
-                # We inject the time string into the bar format manually
-                # ncols=12 keeps the bar compact
                 bar_str = tqdm.format_meter(
                     n=p, total=t, elapsed=0, ncols=12, 
                     bar_format='{bar}', ascii=False
                 )
                 
-                # Combine Bar + Time String
                 prog_display = f"{bar_str.strip('|')} {time_str}"
                 status_str = "In Progress"
             else:
@@ -197,7 +197,7 @@ class ProcessingTab(ctk.CTkFrame):
                 prog_display = f"Due: Day {d}, {t}"
                 status_str = "Waiting..."
 
-            table_data.append([item["name"], mode, prog_display, status_str])
+            table_data.append([item["name"], mode, prog_display, yield_val, status_str])
             
         full_text = "ONGOING TASKS\n" + tabulate(table_data, headers, tablefmt="simple_grid")
         

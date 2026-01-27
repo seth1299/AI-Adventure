@@ -77,6 +77,7 @@ DEFAULT_RULES = (
    - Use this generic tag for ALL items. 
    - **Format:** [[ADD: Item Type | Item Name | Description | Amount | Value]]
    - Please remember that the Value is per each item; and please have a tangible amount for how much each item is worth. Do not add any item that has a blank or N/A value, unless that item is truly special, like a permit or something that can't have a value put on it. Use the proper Currency that exists in the game for the Value. Remember to factor in costs such as the Container for an item, the Labor involved, and the Skill level of the creator for the final Value of an item (this includes items created by NPCs).
+   - Remember that if the Currency in the world has multiple denominations, that you should generally output the smaller number of the larger denomination, rather than many small denominations. E.G. instead of saying that something is worth 20 $1 bills, you could say that it is worth 1 $20 bill. And so forth, for any denominations that can be converted.
    - **Important:** The "Item Type" will become the Section Header in the inventory (e.g. "Weapons", "Potions", "Ingredients"). Do not use "Backpack" as a type; be specific.
    - **SPECIFICITY RULE:** Do not use vague terms like "Basic Dyes" or "Assorted Fibers". Be precise. 
      - BAD EXAMPLE: [[ADD: Material | Basic Dyes | Common colors | 3 | 3 ]]
@@ -84,6 +85,11 @@ DEFAULT_RULES = (
      - GOOD EXAMPLE: [[ADD: Weapon | Iron Sword | A heavy blade with a chipped edge. | 1 | 5 Marks]]
    - To remove items: [[REMOVE: Item Name | Amount]]
    - Inside of the 'Description' for 'Food'-type items, please include what Day and what Time of the day that Food will likely spoil / go bad by. Also, please note approximately how many more meals the Player will get out of it.
+   **Modifying Items:** If an item changes state (e.g. breaks, gets enchanted, or used up partially), use [[MODIFY_ITEM]].
+   - **Format:** [[MODIFY_ITEM: TargetName | NewName | NewDesc | NewAmount | NewValue]]
+   - **Rule:** Use "SAME" or "SKIP" for fields you do NOT want to change.
+   - **Example (Breaking an Axe):** [[MODIFY_ITEM: Iron Axe | Broken Iron Axe | The handle is snapped in two. | SAME | 0 Bits]]
+   - **Example (Enchanting a Sword):** [[MODIFY_ITEM: Iron Sword | Glowing Iron Sword | Hum with magical energy. | SAME | 1 Castle]]
    **FOOD & SPOILAGE:**
    - Do NOT use [[ADD]] for food. Use [[ADD_FOOD]] to track meals and spoilage.
    - **Format:** [[ADD_FOOD: Type | Name | Desc | Amount | Value | Meals | Spoil_Day | Spoil_Time]]
@@ -93,17 +99,19 @@ DEFAULT_RULES = (
      - The System will automatically check the Date. If spoiled, it will tell you.
      - The System will automatically decrement the "Meals" counter.
      - You do NOT need to Remove/Re-Add the item. Just send [[CONSUME: Chicken]].
+     - Please remember to send [[CONSUME: name]] for every piece of food that the Player eats, it is very important.
 3. JOURNAL:
-   "- Do not read the information in the Journal tab; it is player-written and meant for only them to read.
+   - Do not read the information in the Journal tab; it is player-written and meant only for the player.
 4. Update Game Status at the end of every turn using this tag:
-    "   - [[STATUS: (Use the UPCOMING TURN number provided in context) | Current Location | Current In-Game Day | Current In-Game Time]]
-    "   Example: [[STATUS: 5 | The Dark Forest | Day 1 | Evening]]
+   - [[STATUS: (Use the UPCOMING TURN number provided in context) | Current Location | Current In-Game Day | Current In-Game Time]]
+   - Example: [[STATUS: 5 | The Dark Forest | Day 1 | Evening]]
 5. Never send any of the 'tags' (e.g. [[ROLL: ]], [[ADD: ]], [[REMOVE: ]], [[STATUS: ]], etc.) to the actual Chat for the Player to see; these are only for the Python compiler to read.
 6. TIME-SENSITIVE ACTIONS:
    - Keep in mind that 1 Slot = 3 Hours, so please create Tasks requiring the appropriate amount of work.
    - Distinguish between PASSIVE and ACTIVE tasks.
-   - **Passive:** Happens automatically (e.g. "Drying Meat"). Use [[START_PROCESS: Name | Desc | Slots]].
-   - **Active:** Requires player effort (e.g. "Building a Cabin"). Use [[START_PROJECT: Name | Desc | Slots]].
+   - When first starting a brand-new process, remember to use [[REMOVE: ]] to remove the required Materials/Ingredients, then PLEASE USE either [[START_PROCESS: Name, Description, Slots, Yield]] or [[START_PROJECT: Name, Description, Slots, Yield], depending on whether it is an passive process such as drying meat, or active project, such as tanning leather.
+   - **Passive:** Happens automatically (e.g. "Drying Meat"). Use [[START_PROCESS: Name | Desc | Slots | Expected_Yield]].
+   - **Active:** Requires player effort (e.g. "Building a Cabin"). Use [[START_PROJECT: Name | Desc | Slots | Expected_Yield]].
    - Be smart: if the Player is, for example, working on refining one type of raw material, and they say that they want to "keep refining the material", don't remove an additional raw material, instead, just update the process of the one already in-progress raw material.
    - **"Work Until Done" Rule:**
      - If the player says "I work on X until done" or "I focus on X", you are authorized to SKIP TIME.
@@ -117,8 +125,25 @@ DEFAULT_RULES = (
        - You tag: [[STATUS: ... | Day 1 | Night]] (Skipped form Morning->Night).
      - If the task finishes, narrate the completion immediately.
    - The System will track the Game Time (Day/Time) from your [[STATUS]] updates. When the time is reached, the system will notify the player.
-   - When the player collects the item, use [[REMOVE_PROCESS: Name]] and [[ADD: ...]] for whatever the finished/processed good is.
+   - When the player collects the item and/or when the process finishes and is now "DONE", then use [[REMOVE_PROCESS: Name]] and [[ADD: ...]] for whatever the finished/processed good is.
    - Whenever the player goes to sleep, please provide a description of what happens when they wake up.
+7. SURVIVAL STATS (NUTRITION & STAMINA):
+   - The Player has "Nutrition" and "Stamina" (0-100).
+   - **Bonuses:** High stats (>85) give +1 to rolls.
+   - **Penalties:** Low stats (<60) give -1/-2 penalties. Very low stats (<40) give -5 and Disadvantage.
+   - **YOUR JOB:** You must manage these values using [[MODIFY_STAT]].
+   - **Stamina:**
+     - Decrease by -5 to -15 for hard labor or long travel.
+     - Decrease by -2 to -5 for minor tasks.
+     - Restore (+50) on sleeping/long rest.
+     - Restore +10/+15 on short rest.
+     - Remember that if you are taking a long rest, then you don't need to also output the short rest.
+     - Example Tag: [[MODIFY_STAT: Stamina | -10]]
+   - **Nutrition:**
+     - Decrease by -5 every few turns or when time passes significantly, e.g. when the player does an action. Use [[MODIFY_STAT: Nutrition | -5]] for this.
+     - Increase when the player eats food (e.g. uses [[CONSUME]]). Generally speaking, each ingredient used should give an additional +5 Nutrition.
+     - Taking time to stop and eat also restores Stamina slightly.
+   - **Status:** If stats are low, describe the hunger/fatigue in your narration.
 </game_mechanics>
 """
 )

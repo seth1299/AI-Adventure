@@ -121,6 +121,65 @@ class InventoryTab(ctk.CTkFrame):
         if pos:
             txt.tag_add("h1", pos, f"{pos} lineend")
             
+    def modify_item(self, raw_args):
+        # Format: TargetName | NewName | NewDesc | NewAmount | NewValue
+        # Use "SAME" or "SKIP" to keep the current value for that field
+        try:
+            parts = [p.strip() for p in raw_args.split("|")]
+            if len(parts) < 1: return "Error: Missing Target Name."
+            
+            target = parts[0]
+            # Helper to check if we should update a field
+            def should_update(idx):
+                if len(parts) <= idx: return False
+                val = parts[idx].upper()
+                return val not in ["SAME", "SKIP", "", "N/A"]
+
+            new_name = parts[1] if should_update(1) else None
+            new_desc = parts[2] if should_update(2) else None
+            new_amt  = parts[3] if should_update(3) else None
+            new_val  = parts[4] if should_update(4) else None
+            
+            data = self.load_data()
+            found = False
+            
+            for cat, items in data.items():
+                for item in items:
+                    # check name (handle both dict and list format for safety)
+                    if isinstance(item, dict):
+                        current_name = item.get("name", "Unknown")
+                    else:
+                        current_name = item[0] if item else "Unknown"
+                    
+                    if current_name.lower() == target.lower():
+                        # Found it! Update in place.
+                        if isinstance(item, dict):
+                            if new_name: item["name"] = new_name
+                            if new_desc: item["desc"] = new_desc
+                            if new_amt:  item["amount"] = new_amt
+                            if new_val:  item["value"] = new_val
+                        else:
+                            # Legacy List Support
+                            if new_name: item[0] = new_name
+                            if new_desc: item[1] = new_desc
+                            if new_amt:  item[2] = new_amt
+                            if new_val:  item[3] = new_val
+                        found = True
+                        break
+                if found: break
+            
+            if found:
+                self.save_data(data)
+                changes = []
+                if new_name: changes.append(f"Name->{new_name}")
+                if new_desc: changes.append("Description updated")
+                if new_val:  changes.append("Value updated")
+                return f"(Updated {target}: {', '.join(changes)})"
+            else:
+                return f"System: Could not find item '{target}' to modify."
+        except Exception as e:
+            return f"Error modifying item: {e}"
+            
     def autonomous_add(self, raw_args):
         # UPDATED FORMAT: Type | Name | Description | Amount
         try:
@@ -144,7 +203,7 @@ class InventoryTab(ctk.CTkFrame):
             amount = parts[3] if len(parts) > 3 else "1"
             
             # 5. Value
-            value = parts[4] if len(parts) > 3 else "N/A"
+            value = parts[4] if len(parts) > 4 else "N/A"
 
             # NEW: Dictionary Structure
             new_item = {
@@ -244,7 +303,6 @@ class InventoryTab(ctk.CTkFrame):
                         # 2. Consumption Logic
                         meta["meals"] -= 1
                         remaining = meta["meals"]
-                        
                         msg = ""
                         if remaining <= 0:
                             # Finished
