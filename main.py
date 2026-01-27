@@ -8,88 +8,26 @@ import customtkinter as ctk
 import random
 import re
 from dotenv import load_dotenv
-
-# Import Config and UI
 from config import GEMINI_API_KEY, MODEL, SAVES_DIR, DEFAULT_RULES
-from ui import MainMenu, InventoryTab, SkillsTab, MarkdownEditorTab, StoryTab, ProcessingTab
+#from ui.general_ui import apply_general_ui
+from ui import MainMenu, InventoryTab, SkillsTab, MarkdownEditorTab, StoryTab, ProcessingTab, GeneralUI
 
 # --- Configuration ---
 load_dotenv()
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-def resource_path(relative_path):
-    """ Get absolute path to resource, works for dev and for PyInstaller """
-    # getattr(object, name, default) tries to get the attribute, 
-    # and returns the default (current path) if it doesn't exist.
-    base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
-    return os.path.join(base_path, relative_path)
-
-class GameApp(ctk.CTk):
+class GameApp(ctk.CTk, GeneralUI):
     def __init__(self):
         super().__init__()
+        self.apply(self)
         self.is_creating = False
         self.game_loaded_successfully = False
-        self.title("AI RPG Adventure")
-        self.geometry("1000x700")
-        ctk.set_appearance_mode("Dark")
-        # Use the helper to find the icon inside the EXE
-        icon_path = resource_path("game_icon.ico")
-        if os.path.exists(icon_path):
-            try:
-                self.iconbitmap(icon_path)
-            except Exception as e:
-                print(f"Icon error: {e}")
-
         self.current_adventure_path = None
         self.conversation_history = ""
 
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+        
 
-        # --- VIEW 1: Main Menu ---
-        self.main_menu = MainMenu(self, on_load_callback=self.load_adventure)
-        self.main_menu.grid(row=0, column=0, sticky="nsew")
-
-        # --- VIEW 2: Game Tabs (Hidden initially) ---
-        self.tab_view = ctk.CTkTabview(self)
-        self.tabs = ["Story", "Inventory", "Skills", "Processing", "Character", "World", "Journal"]
-        self.notebook_widgets = {} 
-
-        for tab_name in self.tabs:
-            self.tab_view.add(tab_name)
-            frame = self.tab_view.tab(tab_name)
-            frame.grid_columnconfigure(0, weight=1)
-            frame.grid_rowconfigure(0, weight=1)
-
-            if tab_name == "Story":
-                # Initialize StoryTab with a callback to our 'handle_player_action' method
-                self.story_tab = StoryTab(frame, 
-                                          on_send_callback=self.handle_player_action,
-                                          on_main_menu_callback=self.return_to_menu)
-                self.story_tab.grid(row=0, column=0, sticky="nsew")
-                self.notebook_widgets[tab_name] = self.story_tab
-            
-            elif tab_name == "Inventory":
-                inv = InventoryTab(frame)
-                inv.grid(row=0, column=0, sticky="nsew")
-                self.notebook_widgets[tab_name] = inv
-            
-            elif tab_name == "Skills":
-                skl = SkillsTab(frame)
-                skl.grid(row=0, column=0, sticky="nsew")
-                self.notebook_widgets[tab_name] = skl
-                
-            elif tab_name == "Processing":
-                proc = ProcessingTab(frame)
-                proc.grid(row=0, column=0, sticky="nsew")
-                self.notebook_widgets[tab_name] = proc
-            
-            else:
-                editor = MarkdownEditorTab(frame, default_text=f"{tab_name}\n")
-                editor.grid(row=0, column=0, sticky="nsew")
-                self.notebook_widgets[tab_name] = editor
-
-        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        
         
     def return_to_menu(self):
         """Saves game and goes back to main menu."""
@@ -206,14 +144,7 @@ class GameApp(ctk.CTk):
         except Exception as e:
             self.story_tab.print_text(f"Creation Error: {e}", sender="System")
 
-    def load_rules(self):
-        if self.current_adventure_path:
-            local_rules = os.path.join(self.current_adventure_path, "rules.md")
-            if os.path.exists(local_rules):
-                try:
-                    with open(local_rules, "r") as f: return f.read()
-                except: pass
-        return DEFAULT_RULES
+    
     
         # --- Legacy Migration Helpers ---
 
@@ -639,6 +570,7 @@ class GameApp(ctk.CTk):
         finally:
             self.after(0, lambda: self.story_tab.set_controls_state(True))
 
+    """
     def save_game(self):
         if not self.current_adventure_path or not self.game_loaded_successfully: 
             return
@@ -664,11 +596,13 @@ class GameApp(ctk.CTk):
             print(f"Game saved to {self.current_adventure_path}")
         except Exception as e:
             print(f"Save failed: {e}")
-
-    def on_close(self):
-        self.save_game()
-        self.destroy()
+            """
+            
+def get_app():
+    return ctk.CTk
 
 if __name__ == "__main__":
     app = GameApp()
     app.mainloop()
+    
+    

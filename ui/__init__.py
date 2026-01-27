@@ -4,3 +4,6 @@ from .editor_tab import MarkdownEditorTab
 from .inventory_tab import InventoryTab
 from .story_tab import StoryTab
 from .processing_tab import ProcessingTab
+from .general_ui import GeneralUI
+from file_io import FileIO
+from main import GameApp
