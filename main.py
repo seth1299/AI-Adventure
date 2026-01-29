@@ -2,640 +2,59 @@ from google import genai
 from google.genai import types
 import threading
 import json
+import sys
 import os
-import tkinter as tk
 import customtkinter as ctk
 import random
 import re
-import markdown
-from tkhtmlview import HTMLLabel
+from time_utils import add_hours, normalize_day_time
 from dotenv import load_dotenv
-from tabulate import tabulate
 
-# Build the project
-# pyinstaller --noconsole --onefile --add-data "game_icon.ico;." --icon=game_icon.ico --name "Text Adventure" main.py
+# Import Config and UI
+from config import GEMINI_API_KEY, MODEL, SAVES_DIR, DEFAULT_RULES
+from ui import MainMenu, InventoryTab, SkillsTab, MarkdownEditorTab, StoryTab, ProcessingTab
 
 # --- Configuration ---
 load_dotenv()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-MODEL = "gemini-2.5-flash" 
-
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-SAVE_FILE = "savegame.json"
-RULES_FILE = "rules.md"
-INVENTORY_FILE = "Inventory.md"
-
-DEFAULT_RULES = (
-    "You are a Dungeon Master for a text-based RPG.\n"
-    "1. Describe the environment vividly but concisely.\n"
-    "2. Output [[ROLL: SkillName]] for checks.\n"
-    "3. Manage Inventory using tags (Pipe | separated):\n"
-    "   - [[ADD: Backpack | Item Name | Description | Amount]]\n"
-    "   - [[ADD: Currency | Gold/Silver/Copper | Description | Amount]]\n"
-    "   - [[ADD: Weapon | Range of Weapon (in feet) | To-Hit bonus for weapon | Damage for weapon | Ammunition type (or 'None')\n"
-    "   - [[REMOVE: Item Name | Amount]]\n"
-    "4. Do not output the inventory state manually, just use the tags."
-)
-
-INVENTORY_SCHEMA = {
-    "Backpack": ["Name", "Description", "Amount"],
-    "Weapons":  ["Name", "Range", "To-Hit", "Damage", "Ammo"],
-    "Currency": ["Coin Type", "Description", "Amount"],
-    "Clothes":  ["Body Part", "Equipment Name"]
-}
-
-AMMO_TYPES = ["None", "Arrow", "Bolt", "Dart", "Stone"]
-
-COIN_DESCRIPTIONS = {
-    "Gold": "The largest denomination of coin. Used for large purchases.",
-    "Silver": "The second-largest denomination. 10 Silver equals 1 Gold.",
-    "Copper": "The lowest denomination. Used for common goods. 10 Copper equals 1 Silver."
-}
-
-class MarkdownEditorTab(ctk.CTkFrame):
-    """A Frame that holds both a raw Textbox and an HTML Preview."""
-    def __init__(self, parent, default_text="# New Tab\n"):
-        super().__init__(parent)
-        
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1) # Row 1 is the content
-        
-        # --- Toolbar ---
-        self.toolbar = ctk.CTkFrame(self, height=30)
-        self.toolbar.grid(row=0, column=0, sticky="ew", padx=5, pady=5)
-        
-        self.mode_btn = ctk.CTkButton(self.toolbar, text="👁️ Preview", width=80, height=24, command=self.toggle_view)
-        self.mode_btn.pack(side="right", padx=5)
-
-        # --- Raw Editor (Visible by default) ---
-        self.editor = ctk.CTkTextbox(self, font=("Consolas", 14), wrap="word")
-        self.editor.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
-        self.editor.insert("0.0", default_text)
-        
-        # --- HTML Preview (Hidden by default) ---
-        self.preview_frame = ctk.CTkFrame(self, fg_color="transparent")
-        
-        # We set the background match the dark theme, but we also need inline HTML styles for text
-        self.html_view = HTMLLabel(
-            self.preview_frame, 
-            html="<h1>Preview</h1>", 
-            background="#2b2b2b", 
-            foreground="#e0e0e0"
-        )
-        self.html_view.pack(expand=True, fill="both")
-
-        self.is_preview_active = False
-
-    def get_text(self):
-        """Returns the raw markdown text."""
-        return self.editor.get("0.0", "end")
-    
-    def get_inventory_text(self):
-        """
-        Generates a beautiful ASCII table for the inventory.
-        """
-        # 1. Define your data (You would normally load this from your JSON or class)
-        headers = ["Item Name", "Description", "Amount"]
-        data = [
-            ["Arrow", "A basic arrow used as ammunition.", "20"],
-            ["Backpack", "A nice leather backpack.", "1"],
-            ["Torch", "A standard torch.", "10"],
-            ["Bone Whistle", "An odd whistle made out of bone.", "1"]
-        ]
-
-        # 2. Generate the table
-        # "github" format looks like standard Markdown
-        # "presto" or "grid" looks like a cool RPG menu
-        table_str = tabulate(data, headers, tablefmt="grid")
-        
-        return table_str
-
-    def set_text(self, text):
-        self.editor.delete("0.0", "end")
-        self.editor.insert("0.0", text)
-
-    def toggle_view(self):
-        if not self.is_preview_active:
-             # Just show the text in a monospaced font!
-             formatted_table = self.get_inventory_text()
-             
-             self.editor.grid_forget()
-             
-             # Create a simple text box for the preview
-             self.preview_box = ctk.CTkTextbox(self, font=("Consolas", 14), wrap="none")
-             self.preview_box.insert("0.0", formatted_table)
-             self.preview_box.configure(state="disabled") # Read-only
-             self.preview_box.grid(row=1, column=0, sticky="nsew")
-             
-             self.is_preview_active = True
-
-class InventoryTab(ctk.CTkFrame):
-    def __init__(self, parent):
-        super().__init__(parent)
-        
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(0, weight=1) 
-        
-        # 1. Read-Only Display
-        self.display = ctk.CTkTextbox(self, font=("Consolas", 14), wrap="none", state="disabled")
-        self.display.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-        
-        # 2. Control Panel
-        self.filename = "inventory.json"
-        self.refresh_display()
-
-    def autonomous_add(self, raw_args):
-        """
-        Parses a string like "Backpack | Potion | Heals 5HP | 1"
-        and adds it to the JSON safely.
-        """
-        try:
-            # 1. Parse Args (Allowing for pipe | or comma , separation)
-            if "|" in raw_args:
-                parts = [p.strip() for p in raw_args.split("|")]
-            else:
-                parts = [p.strip() for p in raw_args.split(",")]
-
-            if len(parts) < 3:
-                return f"Error: AI tried to add item with insufficient data: {parts}"
-
-            category = parts[0].strip() # e.g. "Backpack"
-            
-            # Normalize Category Name (Handle "backpack" vs "Backpack")
-            valid_cats = {k.lower(): k for k in INVENTORY_SCHEMA.keys()}
-            if category.lower() in valid_cats:
-                real_cat = valid_cats[category.lower()]
-            else:
-                # Default to Backpack if AI invents a category
-                real_cat = "Backpack"
-
-            # 2. Prepare Data Row based on Schema
-            # We must match the length of the list expected by INVENTORY_SCHEMA
-            # Backpack: [Name, Desc, Amount]
-            # Weapons:  [Name, Range, To-Hit, Damage, Ammo]
-            
-            row_data = []
-            
-            # Standard mappings
-            name = parts[1]
-            desc = parts[2]
-            amount = parts[3] if len(parts) > 3 else "1"
-
-            if real_cat == "Backpack":
-                row_data = [name, desc, amount]
-                
-            elif real_cat == "Currency":
-                # Schema: [Coin Type, Description, Amount]
-                # AI might send: "Currency | Gold | A gold coin | 10"
-                # OR just:       "Currency | Gold | 10" (If it forgets description)
-                
-                coin_type = name.capitalize()
-                if coin_type not in ["Gold", "Silver", "Copper"]:
-                    coin_type = "Gold"
-                
-                # Auto-fill description from your constant
-                auto_desc = COIN_DESCRIPTIONS.get(coin_type, "Coin")
-                
-                # If the AI sent 3 args (Cat, Type, Amount), handle that
-                if len(parts) == 3:
-                    final_amt = parts[2]
-                else:
-                    final_amt = amount
-                    
-                row_data = [coin_type, auto_desc, final_amt]
-
-            elif real_cat == "Weapons":
-                # This is tricky. AI likely won't give range/damage stats in the tag.
-                # We will set defaults for safety.
-                # Schema: [Name, Range, To-Hit, Damage, Ammo]
-                row_data = [name, "5 ft", "+0", "1d4", "None"] 
-
-            # 3. Save
-            data = self.load_data()
-            if real_cat not in data: data[real_cat] = []
-            data[real_cat].append(row_data)
-            self.save_data(data)
-            
-            return f"System: Added {amount}x {name} to {real_cat}."
-
-        except Exception as e:
-            print(f"Auto-Add Failed: {e}")
-            return "System: Failed to add item."
-
-    def autonomous_remove(self, raw_args):
-        """
-        Parses string like "Arrow | 1" or just "Arrow"
-        """
-        try:
-            if "|" in raw_args:
-                parts = [p.strip() for p in raw_args.split("|")]
-                target_name = parts[0]
-                amount = int(parts[1]) if len(parts) > 1 else 1
-            else:
-                # Assuming just name "Arrow"
-                target_name = raw_args.strip()
-                amount = 1
-
-            data = self.load_data()
-            removed = False
-            
-            # Search all categories
-            for cat, items in data.items():
-                for i in range(len(items) - 1, -1, -1):
-                    # Index 0 is always Name in your schema
-                    if target_name.lower() in items[i][0].lower():
-                        
-                        # Logic to decrement Amount column if it exists
-                        headers = INVENTORY_SCHEMA.get(cat, [])
-                        if "Amount" in headers:
-                            amt_idx = headers.index("Amount")
-                            try:
-                                curr = int(items[i][amt_idx])
-                                new_val = curr - amount
-                                if new_val <= 0:
-                                    items.pop(i)
-                                else:
-                                    items[i][amt_idx] = str(new_val)
-                                removed = True
-                            except:
-                                items.pop(i)
-                                removed = True
-                        else:
-                            # No amount column (Clothes), just delete
-                            items.pop(i)
-                            removed = True
-                        
-                        if removed: break
-                if removed: break
-            
-            if removed:
-                self.save_data(data)
-                return f"System: Removed {amount}x {target_name}."
-            else:
-                return f"System: Could not find {target_name} to remove."
-
-        except Exception as e:
-            return f"System Error: {e}"
-
-    def get_text(self):
-        return self.display.get("0.0", "end")
-
-    def load_data(self):
-        if not os.path.exists(self.filename):
-            return {}
-        try:
-            with open(self.filename, "r") as f:
-                return json.load(f)
-        except:
-            return {}
-
-    def save_data(self, data):
-        with open(self.filename, "w") as f:
-            json.dump(data, f, indent=4)
-        self.refresh_display()
-
-    def refresh_display(self):
-        data = self.load_data()
-        full_text = ""
-        
-        for category, items in data.items():
-            if items:
-                headers = INVENTORY_SCHEMA.get(category, [])
-                full_text += f"\n{category}\n"
-                full_text += tabulate(items, headers, tablefmt="rounded_grid")
-                full_text += "\n"
-        
-        self.display.configure(state="normal")
-        self.display.delete("0.0", "end")
-        self.display.insert("0.0", full_text)
-        self.display.configure(state="disabled")
-
-    def open_add_dialog(self):
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("Add Item")
-        dialog.geometry("450x600")
-        dialog.attributes("-topmost", True)
-        
-        # --- Category Selector ---
-        ctk.CTkLabel(dialog, text="Category:").pack(pady=5)
-        cat_var = ctk.StringVar(value="Backpack")
-        cat_dropdown = ctk.CTkOptionMenu(dialog, variable=cat_var, values=list(INVENTORY_SCHEMA.keys()))
-        cat_dropdown.pack(pady=5)
-
-        # Container for dynamic fields
-        fields_frame = ctk.CTkFrame(dialog)
-        fields_frame.pack(fill="both", expand=True, padx=10, pady=10)
-        
-        # Error Label
-        error_label = ctk.CTkLabel(dialog, text="", text_color="red")
-        error_label.pack(pady=5)
-
-        # Dictionary to store functions that retrieve values from the generated widgets
-        # Format: { "HeaderName": lambda: widget.get() }
-        self.value_getters = {} 
-
-        def update_fields(choice):
-            # 1. Clear old fields
-            for widget in fields_frame.winfo_children():
-                widget.destroy()
-            self.value_getters.clear()
-            error_label.configure(text="")
-            
-            headers = INVENTORY_SCHEMA.get(choice, [])
-            
-            for h in headers:
-                # --- Skip "Description" for Currency (Auto-filled) ---
-                if choice == "Currency" and h == "Description":
-                    continue
-
-                ctk.CTkLabel(fields_frame, text=h).pack(anchor="w")
-
-                # --- SPECIAL WIDGET: CURRENCY TYPE ---
-                if choice == "Currency" and h == "Coin Type":
-                    coin_var = ctk.StringVar(value="Gold")
-                    cmb = ctk.CTkOptionMenu(fields_frame, variable=coin_var, values=["Gold", "Silver", "Copper"])
-                    cmb.pack(fill="x", pady=(0, 10))
-                    self.value_getters[h] = lambda v=coin_var: v.get()
-
-                # --- SPECIAL WIDGET: DAMAGE (Composite) ---
-                elif choice == "Weapons" and h == "Damage":
-                    dmg_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
-                    dmg_frame.pack(fill="x", pady=(0, 10))
-                    
-                    # Number of dice
-                    num_entry = ctk.CTkEntry(dmg_frame, width=50, placeholder_text="1")
-                    num_entry.pack(side="left", padx=(0, 5))
-                    
-                    lbl_d = ctk.CTkLabel(dmg_frame, text="d")
-                    lbl_d.pack(side="left")
-                    
-                    # Die Type
-                    die_var = ctk.StringVar(value="6")
-                    die_menu = ctk.CTkOptionMenu(dmg_frame, variable=die_var, values=["4", "6", "8", "10", "12"], width=70)
-                    die_menu.pack(side="left", padx=(5, 0))
-                    
-                    # Getter combines them: "2" + "d" + "6" -> "2d6"
-                    def get_damage_str(e=num_entry, d=die_var):
-                        val = e.get().strip()
-                        if not val: return "" # validation will catch empty
-                        return f"{val}d{d.get()}"
-                        
-                    self.value_getters[h] = get_damage_str
-
-                # --- SPECIAL WIDGET: AMMO ---
-                elif choice == "Weapons" and h == "Ammo":
-                    ammo_var = ctk.StringVar(value="None")
-                    ammo_menu = ctk.CTkOptionMenu(fields_frame, variable=ammo_var, values=AMMO_TYPES)
-                    ammo_menu.pack(fill="x", pady=(0, 10))
-                    self.value_getters[h] = lambda v=ammo_var: v.get()
-
-                # --- STANDARD ENTRY (With Validation Hooks) ---
-                else:
-                    entry = ctk.CTkEntry(fields_frame)
-                    entry.pack(fill="x", pady=(0, 10))
-                    self.value_getters[h] = lambda e=entry: e.get()
-
-        cat_dropdown.configure(command=update_fields)
-        update_fields("Backpack") 
-
-        def validate_and_submit():
-            category = cat_var.get()
-            headers = INVENTORY_SCHEMA.get(category, [])
-            row_data = []
-            
-            error_msg = None
-
-            try:
-                for h in headers:
-                    # 1. Handle Auto-Generated Description for Currency
-                    if category == "Currency" and h == "Description":
-                        coin_type = self.value_getters["Coin Type"]()
-                        row_data.append(COIN_DESCRIPTIONS.get(coin_type, "Unknown Coin"))
-                        continue
-
-                    # 2. Get Raw Value
-                    raw_val = self.value_getters[h]()
-                    
-                    # 3. Check Not Empty
-                    if not raw_val or raw_val.strip() == "":
-                        raise ValueError(f"'{h}' cannot be empty.")
-
-                    # 4. Specific Validations
-                    if h == "Amount":
-                        if not raw_val.isdigit() or int(raw_val) <= 0:
-                            raise ValueError(f"Amount must be a positive integer (got '{raw_val}').")
-                    
-                    if category == "Weapons":
-                        if h == "Range":
-                            if not raw_val.isdigit() or int(raw_val) < 5:
-                                raise ValueError("Range must be an integer >= 5.")
-                        
-                        if h == "To-Hit":
-                            # Allow negative numbers (e.g. -1)
-                            # isdigit() fails on negative, so we try int() casting
-                            try:
-                                int(raw_val)
-                            except:
-                                raise ValueError("To-Hit must be an integer.")
-
-                        if h == "Damage":
-                            # raw_val comes in as "XdY" e.g. "2d6"
-                            parts = raw_val.split('d')
-                            if len(parts) != 2: raise ValueError("Invalid damage format.")
-                            dice_count = parts[0]
-                            if not dice_count.isdigit() or int(dice_count) <= 0:
-                                raise ValueError("Damage dice count must be > 0.")
-
-                    row_data.append(raw_val)
-
-                # If we get here, all validations passed
-                data = self.load_data()
-                if category not in data: data[category] = []
-                data[category].append(row_data)
-                
-                self.save_data(data)
-                dialog.destroy()
-
-            except ValueError as ve:
-                error_label.configure(text=str(ve))
-            except Exception as e:
-                error_label.configure(text=f"Error: {str(e)}")
-
-        ctk.CTkButton(dialog, text="Save", command=validate_and_submit).pack(pady=10)
-
-    def open_remove_dialog(self):
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("Remove Item")
-        dialog.geometry("350x250")
-        dialog.attributes("-topmost", True)
-
-        # 1. Flatten inventory into a list of strings for the dropdown
-        # Format: "Item Name (Category)"
-        data = self.load_data()
-        item_list = []
-        # Mapping to help us find the item later: "ItemName (Category)" -> (Category, Index, ActualName)
-        item_map = {} 
-
-        for cat, rows in data.items():
-            for idx, row in enumerate(rows):
-                name = row[0] # Name is always index 0
-                display_str = f"{name} ({cat})"
-                item_list.append(display_str)
-                item_map[display_str] = (cat, idx, name)
-
-        if not item_list:
-            ctk.CTkLabel(dialog, text="Inventory is empty.").pack(pady=20)
-            return
-
-        ctk.CTkLabel(dialog, text="Select Item:").pack(pady=5)
-        
-        # Dropdown
-        selected_item_var = ctk.StringVar(value=item_list[0])
-        dropdown = ctk.CTkOptionMenu(dialog, variable=selected_item_var, values=item_list)
-        dropdown.pack(pady=5)
-
-        ctk.CTkLabel(dialog, text="Amount to remove (0 = All):").pack(pady=5)
-        amount_entry = ctk.CTkEntry(dialog)
-        amount_entry.insert(0, "1")
-        amount_entry.pack(pady=5)
-
-        def submit_remove():
-            selection = selected_item_var.get()
-            if selection not in item_map: return
-
-            cat, idx, name = item_map[selection]
-            
-            try:
-                amount_to_remove = int(amount_entry.get())
-            except:
-                amount_to_remove = 1
-
-            # Reload data fresh in case it changed
-            curr_data = self.load_data()
-            items = curr_data.get(cat, [])
-            
-            # Find the item again by index (safest) or name
-            # Since lists shift when you delete, we need to be careful.
-            # However, since this dialog blocks interaction, index *should* be safe 
-            # UNLESS you open two remove dialogs at once. 
-            # Safer to search by name again to be robust.
-            
-            target_idx = -1
-            for i, row in enumerate(items):
-                if row[0] == name:
-                    target_idx = i
-                    break
-            
-            if target_idx != -1:
-                item_row = items[target_idx]
-                headers = INVENTORY_SCHEMA.get(cat, [])
-                
-                if "Amount" in headers:
-                    amt_idx = headers.index("Amount")
-                    try:
-                        current_amt = int(item_row[amt_idx])
-                        if amount_to_remove == 0:
-                            new_amt = 0 # Trigger full delete
-                        else:
-                            new_amt = current_amt - amount_to_remove
-                        
-                        if new_amt <= 0:
-                            items.pop(target_idx)
-                        else:
-                            item_row[amt_idx] = str(new_amt)
-                    except:
-                        items.pop(target_idx) # If amount is corrupt, just delete
-                else:
-                    # No amount column (e.g. Clothes), just delete
-                    items.pop(target_idx)
-
-                self.save_data(curr_data)
-                dialog.destroy()
-
-        ctk.CTkButton(dialog, text="Remove", fg_color="red", command=submit_remove).pack(pady=10)
-
-class SkillsTab(ctk.CTkFrame):
-    def __init__(self, parent):
-        super().__init__(parent)
-        
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(0, weight=1)
-        
-        self.display = ctk.CTkTextbox(self, font=("Consolas", 14), wrap="none", state="disabled")
-        self.display.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-
-        self.filename = "skills.json"
-        self.refresh_display()
-
-    def load_data(self):
-        if not os.path.exists(self.filename):
-            # Default starter skills if file doesn't exist
-            default_skills = [
-                {"Name": "Perception", "Level": 1, "XP": 0, "Threshold": 5},
-                {"Name": "Stealth",    "Level": 1, "XP": 0, "Threshold": 5},
-                {"Name": "Survival",   "Level": 1, "XP": 0, "Threshold": 5}
-            ]
-            self.save_data(default_skills)
-            return default_skills
-        try:
-            with open(self.filename, "r") as f:
-                return json.load(f)
-        except:
-            return []
-
-    def save_data(self, data):
-        # Always sort alphabetically by Name before saving
-        data.sort(key=lambda x: x["Name"])
-        
-        with open(self.filename, "w") as f:
-            json.dump(data, f, indent=4)
-        self.refresh_display()
-
-    def get_text(self):
-        """Returns the raw text for the AI to read context."""
-        return self.display.get("0.0", "end")
-
-    def refresh_display(self):
-        data = self.load_data()
-        
-        # Prepare data for tabulate
-        headers = ["Skill Name", "Level (Bonus)", "XP", "Next Level"]
-        table_data = []
-        
-        for s in data:
-            # Row: [Name, +X, CurrentXP, Threshold]
-            lvl_str = f"+{s['Level']}"
-            table_data.append([s["Name"], lvl_str, s["XP"], s["Threshold"]])
-            
-        full_text = "# Skills\n" + tabulate(table_data, headers, tablefmt="rounded_grid")
-        
-        self.display.configure(state="normal")
-        self.display.delete("0.0", "end")
-        self.display.insert("0.0", full_text)
-        self.display.configure(state="disabled")
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    # getattr(object, name, default) tries to get the attribute, 
+    # and returns the default (current path) if it doesn't exist.
+    base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
+    return os.path.join(base_path, relative_path)
 
 class GameApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        
+        self.is_creating = False
+        self.game_loaded_successfully = False
         self.title("AI RPG Adventure")
         self.geometry("1000x700")
         ctk.set_appearance_mode("Dark")
-        
-        try:
-            self.iconbitmap("game_icon.ico")
-        except:
-            pass
+        # Use the helper to find the icon inside the EXE
+        icon_path = resource_path("game_icon.ico")
+        if os.path.exists(icon_path):
+            try:
+                self.iconbitmap(icon_path)
+            except Exception as e:
+                print(f"Icon error: {e}")
+
+        self.current_adventure_path = None
+        self.conversation_history = ""
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
+        # --- VIEW 1: Main Menu ---
+        self.main_menu = MainMenu(self, on_load_callback=self.load_adventure)
+        self.main_menu.grid(row=0, column=0, sticky="nsew")
+
+        # --- VIEW 2: Game Tabs (Hidden initially) ---
         self.tab_view = ctk.CTkTabview(self)
-        self.tab_view.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
-        
-        self.tabs = ["Story", "Inventory", "Quests", "Journal", "Skills", "Character", "World"]
-        self.notebook_widgets = {} # Stores our MarkdownEditorTab instances
+        self.tabs = ["Story", "Inventory", "Skills", "Processing", "Character", "World", "Journal"]
+        self.notebook_widgets = {} 
 
         for tab_name in self.tabs:
             self.tab_view.add(tab_name)
@@ -644,145 +63,391 @@ class GameApp(ctk.CTk):
             frame.grid_rowconfigure(0, weight=1)
 
             if tab_name == "Story":
-                # Story is unique (Chat history)
-                self.setup_story_tab(frame)
+                # Initialize StoryTab with a callback to our 'handle_player_action' method
+                self.story_tab = StoryTab(frame, 
+                                          on_send_callback=self.handle_player_action,
+                                          on_main_menu_callback=self.return_to_menu)
+                self.story_tab.grid(row=0, column=0, sticky="nsew")
+                self.notebook_widgets[tab_name] = self.story_tab
+            
             elif tab_name == "Inventory":
-                # --- CHANGE HERE ---
-                # Use the new specialized InventoryTab
-                inv_editor = InventoryTab(frame)
-                inv_editor.grid(row=0, column=0, sticky="nsew")
-                self.notebook_widgets[tab_name] = inv_editor 
-                # Note: InventoryTab doesn't have .get_text(), 
-                # so if your AI query uses .get_text(), you might need a small adapter.
+                inv = InventoryTab(frame)
+                inv.grid(row=0, column=0, sticky="nsew")
+                self.notebook_widgets[tab_name] = inv
+            
             elif tab_name == "Skills":
-                skills_tab = SkillsTab(frame)
-                skills_tab.grid(row=0, column=0, sticky="nsew")
-                self.notebook_widgets[tab_name] = skills_tab
+                skl = SkillsTab(frame)
+                skl.grid(row=0, column=0, sticky="nsew")
+                self.notebook_widgets[tab_name] = skl
+                
+            elif tab_name == "Processing":
+                proc = ProcessingTab(frame)
+                proc.grid(row=0, column=0, sticky="nsew")
+                self.notebook_widgets[tab_name] = proc
+            
             else:
-                # All other tabs use our new MarkdownEditor
-                editor = MarkdownEditorTab(frame, default_text=f"# {tab_name}\n")
+                editor = MarkdownEditorTab(frame, default_text=f"{tab_name}\n")
                 editor.grid(row=0, column=0, sticky="nsew")
                 self.notebook_widgets[tab_name] = editor
 
-        # Save/Load
         self.protocol("WM_DELETE_WINDOW", self.on_close)
-        self.conversation_history = "" 
-        self.load_game()
-
-    def setup_story_tab(self, frame):
-        self.chat_display = ctk.CTkTextbox(frame, state="disabled", wrap="word", font=("Consolas", 14))
-        self.chat_display.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="nsew")
-
-        self.input_entry = ctk.CTkEntry(frame, placeholder_text="What do you do?")
-        self.input_entry.grid(row=1, column=0, padx=10, pady=(5, 10), sticky="ew")
-        self.input_entry.bind("<Return>", self.send_message)
-
-        self.send_btn = ctk.CTkButton(frame, text="Act", command=self.send_message)
-        self.send_btn.grid(row=1, column=1, padx=10, pady=(5, 10))
         
-        self.status_label = ctk.CTkLabel(frame, text="", text_color="gray")
-        self.status_label.grid(row=2, column=0, columnspan=2, sticky="w", padx=10)
+    def _get_skill_level(self, skill_name: str) -> int:
+        clean = (skill_name or "").split('(')[0].strip().title()
+        try:
+            skills_tab = self.notebook_widgets["Skills"]
+            data = skills_tab.load_data()
+            for item in data:
+                if item.get("Name", "").lower() == clean.lower():
+                    return int(item.get("Level", 0) or 0)
+        except Exception:
+            pass
+        return 0
+
+    def _advance_time_hours(self, hours: float):
+        cur = self.story_tab.get_status_data()
+        gt = add_hours(cur.get("day", "Day 1"), cur.get("time", "12:00 AM"), hours)
+
+        turn = cur.get("turn", "1")
+        location = cur.get("location", "Unknown")
+        nutrition = int(cur.get("nutrition", 100))
+        stamina = int(cur.get("stamina", 100))
+
+        self.after(0, lambda: self.story_tab.update_status(
+            turn, location, gt.as_day_string(), gt.as_time_string(),
+            nutrition=nutrition, stamina=stamina
+        ))
+
+        
+    def return_to_menu(self):
+        """Saves game and goes back to main menu."""
+        self.save_game()
+        self.current_adventure_path = None
+        self.is_creating = False
+        
+        # Hide Game Tabs
+        self.tab_view.grid_forget()
+        self.title("AI RPG Adventure")
+        
+        # Show Main Menu
+        self.main_menu.refresh_list()
+        self.main_menu.grid(row=0, column=0, sticky="nsew")
+
+    def load_adventure(self, save_name):
+        self.game_loaded_successfully = False
+        self.current_adventure_path = os.path.join(SAVES_DIR, save_name)
+        self.story_tab.clear_chat()
+        # Migrate legacy inventory format (old list items -> dict items)
+        self._migrate_inventory_legacy_format()
+
+        
+        # UI Switch
+        self.main_menu.grid_forget()
+        self.tab_view.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
+        self.title(f"AI RPG Adventure - {save_name}")
+
+        # Propagate Path (Now with Error Handling)
+        for name, widget in self.notebook_widgets.items():
+            try:
+                if hasattr(widget, 'set_base_path'):
+                    widget.set_base_path(self.current_adventure_path)
+                elif isinstance(widget, MarkdownEditorTab):
+                    widget.filename = os.path.join(self.current_adventure_path, f"{name}.md")
+                    if os.path.exists(widget.filename):
+                        with open(widget.filename, "r", encoding="utf-8") as f:
+                            widget.set_text(f.read())
+                    else: widget.set_text(f"{name}\n")
+            except Exception as e:
+                # This prevents the "Silent Freeze" if a tab crashes
+                print(f"Error loading tab {name}: {e}")
+                self.story_tab.print_text(f"[System Error loading {name}: {e}]", sender="System")
+
+        # Load History & Status
+        history_path = os.path.join(self.current_adventure_path, "savegame.json")
+        if os.path.exists(history_path):
+            try:
+                with open(history_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.is_creating = bool(data.get("is_creating", False))
+                    hist = data.get("Chat History", [])
+                    self.conversation_history = "\n".join(hist) if isinstance(hist, list) else hist
+                    
+                    # Update StoryTab Status
+                    status = data.get("Status", {})
+                    if status:
+                        self.story_tab.update_status(
+                            status.get("turn", "1"),
+                            status.get("location", "Unknown"),
+                            status.get("day", "1"),
+                            status.get("time", "Start"),
+                            status.get("nutrition", 100),
+                            status.get("stamina", 100)
+                        )
+                
+                self.story_tab.print_text(f"System: Loaded '{save_name}'.", sender="System")
+                if self.is_creating:
+                    # If we are mid-creation, DO NOT generate a recap (hallucination risk).
+                    # Instead, find the last thing the GM said and repeat it so the player knows what to answer.
+                    last_gm_msg = "Resuming character creation..."
+                    for line in reversed(self.conversation_history.split('\n')):
+                        if line.startswith("GM:"):
+                            last_gm_msg = line.replace("GM:", "").strip()
+                            break
+                    self.story_tab.print_text(last_gm_msg, sender="GM")
+                else:
+                    # Normal game: Generate Recap
+                    recent = self.conversation_history[-3000:]
+                    # We grab the text from Inventory, World, Character, etc. NOW, 
+                    # because accessing these widgets inside the thread later might crash Tkinter.
+                    context_data = ""
+                    for name, widget in self.notebook_widgets.items():
+                        if name != "Story": 
+                            if hasattr(widget, 'get_text'):
+                                context_data += f"\n[{name.upper()}]:\n{widget.get_text().strip()}\n"
+                    curr_stat = self.story_tab.get_status_data()
+                    context_data += f"\n[STATUS]\nLocation: {curr_stat['location']}\nDay: {curr_stat['day']}\nTime: {curr_stat['time']}\n"
+                    threading.Thread(target=self.generate_recap, args=(recent,context_data), daemon=True).start()
+            except Exception as e:
+                self.story_tab.print_text(f"Error loading history: {e}", sender="System")
+        else:
+            self.conversation_history = ""
+            self.is_creating = True
+            self.story_tab.print_text("System: Initialization Sequence Started...", sender="System")
+            threading.Thread(target=self.start_creation_wizard, daemon=True).start()
+            
+        self.game_loaded_successfully = True
+            
+    def start_creation_wizard(self):
+        """Sends the initial system prompt to start the interview."""
+        # Use config.py's CREATION_RULES specifically for this
+        from config import CREATION_RULES 
+        
+        prompt = "System: Begin the Step 1 of the Character Creation process."
+        
+        try:
+            # We send this with the CREATION_RULES as system instruction
+            resp = client.models.generate_content(
+                model=MODEL, 
+                contents=prompt, 
+                config=types.GenerateContentConfig(system_instruction=CREATION_RULES)
+            )
+            self.story_tab.print_text(resp.text, sender="GM")
+            self.conversation_history += f"GM: {resp.text}\n"
+        except Exception as e:
+            self.story_tab.print_text(f"Creation Error: {e}", sender="System")
 
     def load_rules(self):
-        if os.path.exists(RULES_FILE):
-            try:
-                with open(RULES_FILE, "r", encoding="utf-8") as f:
-                    return f.read()
-            except:
-                return DEFAULT_RULES
+        if self.current_adventure_path:
+            local_rules = os.path.join(self.current_adventure_path, "rules.md")
+            if os.path.exists(local_rules):
+                try:
+                    with open(local_rules, "r") as f: return f.read()
+                except: pass
         return DEFAULT_RULES
+    
+        # --- Legacy Migration Helpers ---
 
-    def print_to_story(self, text, sender="System"):
-        self.chat_display.configure(state="normal")
-        if sender == "Player":
-            self.chat_display.insert("end", f"\n> {text}\n")
-        elif sender == "GM":
-            self.chat_display.insert("end", f"\n{text}\n")
+    def _migrate_inventory_legacy_format(self):
+        """
+        Converts old inventory item lists:
+          [Name, Desc, Amount, Value]
+        into the new dict format:
+          {"name":..., "desc":..., "amount":..., "value":...}
+        """
+        if not self.current_adventure_path:
+            return
+
+        inv_path = os.path.join(self.current_adventure_path, "inventory.json")
+        if not os.path.exists(inv_path):
+            return
+
+        try:
+            with open(inv_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return
+
+        if not isinstance(data, dict):
+            return
+
+        changed = False
+        for cat, items in list(data.items()):
+            if not isinstance(items, list):
+                continue
+
+            new_items = []
+            for item in items:
+                if isinstance(item, dict):
+                    # Already new format
+                    new_items.append(item)
+                elif isinstance(item, list):
+                    # Legacy format
+                    name = item[0] if len(item) > 0 else "Unknown"
+                    desc = item[1] if len(item) > 1 else "No desc"
+                    amt  = item[2] if len(item) > 2 else "1"
+                    val  = item[3] if len(item) > 3 else "0"
+                    new_items.append({"name": name, "desc": desc, "amount": str(amt), "value": str(val)})
+                    changed = True
+                else:
+                    # Skip broken entries
+                    changed = True
+
+            data[cat] = new_items
+
+        if changed:
+            try:
+                with open(inv_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=4)
+            except Exception:
+                pass
+
+    # --- Stat Helpers ---
+
+    def _apply_modify_stat(self, stat_name: str, raw_value: str) -> str:
+        """
+        Supports:
+          [[MODIFY_STAT: Stamina | -10]]  (delta)
+          [[MODIFY_STAT: Nutrition | +5]] (delta)
+          [[MODIFY_STAT: Stamina | 80]]   (sets absolute if no + or -)
+          [[MODIFY_STAT: Nutrition | SET 60]] (sets absolute)
+        Clamps 0..100.
+        """
+        stat = (stat_name or "").strip().lower()
+        raw = (raw_value or "").strip()
+
+        if stat not in ("stamina", "nutrition"):
+            return f"System: Unknown stat '{stat_name}'."
+
+        cur = self.story_tab.get_status_data()
+        cur_val = int(cur.get(stat, 100))
+
+        # Parse set vs delta
+        new_val = None
+        raw_upper = raw.upper()
+        try:
+            if raw_upper.startswith("SET "):
+                new_val = int(raw.split(None, 1)[1].strip())
+            elif raw.startswith(("+", "-")):
+                new_val = cur_val + int(raw)
+            else:
+                # plain number => set
+                new_val = int(raw)
+        except Exception:
+            return f"System: Bad MODIFY_STAT value '{raw_value}'."
+
+        new_val = max(0, min(100, int(new_val)))
+
+        # Preserve current time/location/turn/day; only change the stat
+        turn = cur.get("turn", "1")
+        location = cur.get("location", "Unknown")
+        day = cur.get("day", "Day 1")
+        time = cur.get("time", "Morning")
+
+        nutrition = int(cur.get("nutrition", 100))
+        stamina = int(cur.get("stamina", 100))
+        if stat == "nutrition":
+            nutrition = new_val
         else:
-            self.chat_display.insert("end", f"\n[{text}]\n")
-        self.chat_display.configure(state="disabled")
-        self.chat_display.see("end")
+            stamina = new_val
 
-    def toggle_controls(self, enable, status_text=""):
-        state = "normal" if enable else "disabled"
-        self.after(0, lambda: self.input_entry.configure(state=state))
-        self.after(0, lambda: self.send_btn.configure(state=state))
-        self.after(0, lambda: self.status_label.configure(text=status_text))
-        
-        if enable:
-            self.after(0, lambda: self.input_entry.focus()) # Fix cursor focus
+        self.after(0, lambda: self.story_tab.update_status(turn, location, day, time, nutrition=nutrition, stamina=stamina))
+        return f"System: {stat.title()} is now {new_val}."
 
-    def send_message(self, event=None):
-        user_text = self.input_entry.get()
-        if not user_text.strip(): return
-        
-        self.toggle_controls(enable=False, status_text="GM is thinking...") 
-        self.print_to_story(user_text, sender="Player")
-        self.input_entry.delete(0, "end")
 
-        # Gather Context from our new Editor classes
+    # --- Game Logic ---
+
+    def handle_player_action(self, user_text):
+        """Called by StoryTab when user clicks Act."""
+        # 1. Update UI
+        self.story_tab.set_controls_state(False, "GM is thinking...")
+        self.story_tab.print_text(user_text, sender="Player")
+
+        # 2. Gather Context
         context_data = ""
         for name, widget in self.notebook_widgets.items():
-            # If the user left it in "Preview" mode, we still grab the raw text safely
-            context_data += f"\n[{name.upper()}]:\n{widget.get_text().strip()}\n"
+            # StoryTab doesn't need to feed into context, other tabs do
+            if name != "Story": 
+                # Note: Inventory/Skills tabs now have .get_text() methods from previous steps
+                if hasattr(widget, 'get_text'):
+                    context_data += f"\n[{name.upper()}]:\n{widget.get_text().strip()}\n"
+                    
+        current_status = self.story_tab.get_status_data()
+        try:
+            current_turn_int = int(current_status['turn'])
+        except:
+            current_turn_int = 1
+        
+        next_turn_int = current_turn_int + 1
+        # We tell the AI exactly what the *Next* turn is.
+        status_context = (
+            f"\n[CURRENT STATUS]\n"
+            f"Location: {current_status['location']}\n"
+            f"Day: {current_status['day']}\n"
+            f"Time: {current_status['time']}\n"
+            f"Current Turn: {current_turn_int}\n"
+            f"UPCOMING TURN: {next_turn_int} (You MUST use this number in the [[STATUS]] tag)"
+        )
+        context_data += status_context
 
+        # 3. Build Prompt
         recent_history = self.conversation_history[-3000:] if len(self.conversation_history) > 3000 else self.conversation_history
-
         full_prompt = f"{context_data}\nHistory:\n{recent_history}\nPlayer: {user_text}\nGM:"
 
+        # 4. Thread the AI Call
         threading.Thread(target=self.query_ai, args=(full_prompt, user_text), daemon=True).start()
 
     def perform_skill_check(self, skill_name):
-        # 1. Clean up name
-        clean_name = skill_name.split('(')[0].strip().title() # Title case (Stealth, not stealth)
-        
-        # 2. Load Data from the SkillsTab
+        clean_name = skill_name.split('(')[0].strip().title()
         skills_tab = self.notebook_widgets["Skills"]
         data = skills_tab.load_data()
         
         skill_entry = None
-        
-        # 3. Find the skill
         for item in data:
             if item["Name"].lower() == clean_name.lower():
                 skill_entry = item
                 break
         
-        # 4. If new skill, create it (Level 0, No Bonus)
         if not skill_entry:
             skill_entry = {"Name": clean_name, "Level": 0, "XP": 0, "Threshold": 5}
             data.append(skill_entry)
-            self.print_to_story(f"🆕 Learned new skill: {clean_name}!", sender="System")
+            self.story_tab.print_text(f"🆕 Learned new skill: {clean_name}!", sender="System")
 
-        # 5. Apply XP Logic
+        # XP Logic
         skill_entry["XP"] += 1
-        
         leveled_up = False
         if skill_entry["XP"] >= skill_entry["Threshold"]:
             skill_entry["Level"] += 1
-            skill_entry["XP"] = 0 # Reset to 0 as requested
+            skill_entry["XP"] = 0
             skill_entry["Threshold"] += 2
             leveled_up = True
             
-        # 6. Save Data (This also triggers the Sort and UI Refresh)
         skills_tab.save_data(data)
         
-        # 7. Calculate Result
         bonus = skill_entry["Level"]
         die_roll = random.randint(1, 20)
         total = die_roll + bonus
         
-        # 8. Output
         msg = f"🎲 Rolling {clean_name}: {die_roll} + ({bonus}) = {total}"
-        if leveled_up:
-            msg += f"\n🎉 **LEVEL UP!** {clean_name} is now Level {skill_entry['Level']}!"
-            
-        self.print_to_story(msg, sender="System")
         
+        if leveled_up:
+            msg += (
+                f"\n🎉 **LEVEL UP!** {clean_name} is now Level {skill_entry['Level']}! "
+                f"{skill_entry['Threshold']} XP required until level {skill_entry['Level'] + 1}."
+            )
+        else:
+            msg += f"\n{clean_name}: {skill_entry['XP']} / {skill_entry['Threshold']} XP towards next level up."
+
+            
+        self.story_tab.print_text(msg, sender="System")
         return total
 
     def query_ai(self, prompt, user_text, recursion_depth=0):
-        current_rules = self.load_rules()
+        from config import CREATION_RULES
+        
+        if self.is_creating:
+            current_rules = CREATION_RULES
+        else:
+            current_rules = self.load_rules()
         try:
             response = client.models.generate_content(
                 model=MODEL,
@@ -792,104 +457,266 @@ class GameApp(ctk.CTk):
                     temperature=0.7
                 )
             )
-            ai_text = response.text
+            ai_text = response.text or ""
             if not ai_text: raise ValueError("Empty response")
             
-            # --- 1. CHECK FOR INVENTORY ADDS ---
-            # Finds [[ADD: ...]]
-            # We use finditer to handle multiple adds in one turn
-            add_matches = re.finditer(r"\[\[ADD:\s*(.*?)\]\]", ai_text)
-            for match in add_matches:
-                args = match.group(1)
-                # Call the function in the inventory tab
-                result_msg = self.notebook_widgets["Inventory"].autonomous_add(args)
-                print(result_msg) # Log to console for debugging
+            # --- PARSE CREATION TAGS (Only if creating) ---
+            if self.is_creating:
+                # 1. World Info -> World Tab
+                world_match = re.search(r"\[\[WORLD_INFO:\s*(.*?)\]\]", ai_text, re.DOTALL)
+                if world_match:
+                    content = world_match.group(1).strip()
+                    self.notebook_widgets["World"].set_text(f"World Setting\n\n{content}")
+                
+                # 2. Character Info -> Character Tab
+                char_match = re.search(r"\[\[CHARACTER_INFO:\s*(.*?)\]\]", ai_text, re.DOTALL)
+                if char_match:
+                    content = char_match.group(1).strip()
+                    self.notebook_widgets["Character"].set_text(f"Character Bio\n\n{content}")
 
-            # --- 2. CHECK FOR INVENTORY REMOVES ---
-            remove_matches = re.finditer(r"\[\[REMOVE:\s*(.*?)\]\]", ai_text)
-            for match in remove_matches:
-                args = match.group(1)
-                result_msg = self.notebook_widgets["Inventory"].autonomous_remove(args)
-                print(result_msg)
+                # 3. Skills -> Force Learn
+                # Format: [[SKILL: Name | Level]]
+                for match in re.finditer(r"\[\[SKILL:\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text):
+                    s_name = match.group(1).strip()
+                    s_lvl = int(match.group(2))
+                    self.notebook_widgets["Skills"].force_learn_skill(s_name, s_lvl)
 
-            # --- 3. CHECK FOR ROLLS (Your existing logic) ---
+                # 4. Start Game Trigger
+                if "[[START_GAME]]" in ai_text:
+                    self.is_creating = False
+                    self.story_tab.print_text("\n[System: Creation Complete. Saving Data...]\n", sender="System")
+                    self.save_game()
+                    # Clean the tag out of the text so player doesn't see it
+                    ai_text = ai_text.replace("[[START_GAME]]", "")
+                    self.conversation_history += response.text or ""
+                    #return
+                    
+            
+            # 1. Add/Remove Items
+            for match in re.finditer(r"\[\[ADD:\s*(.*?)\]\]", ai_text):
+                res = self.notebook_widgets["Inventory"].autonomous_add(match.group(1))
+                self.story_tab.print_text(res, sender="GM")
+                self.conversation_history += res
+
+            for match in re.finditer(r"\[\[REMOVE:\s*(.*?)\]\]", ai_text):
+                res = self.notebook_widgets["Inventory"].autonomous_remove(match.group(1))
+                self.story_tab.print_text(res, sender="GM")
+                self.conversation_history += res
+                
+            # 1.5 Modify Items
+            for match in re.finditer(r"\[\[MODIFY_ITEM:\s*(.*?)\]\]", ai_text, re.DOTALL):
+                res = self.notebook_widgets["Inventory"].modify_item(match.group(1).strip())
+                if res:
+                    self.story_tab.print_text(res, sender="System")
+                    self.conversation_history += f"\n{res}\n"
+
+            # 1.6 Modify Stats
+            for match in re.finditer(r"\[\[MODIFY_STAT:\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text):
+                stat_name = match.group(1).strip()
+                stat_val = match.group(2).strip()
+                res = self._apply_modify_stat(stat_name, stat_val)
+                if res:
+                    self.story_tab.print_text(res, sender="System")
+                    self.conversation_history += f"\n{res}\n"
+
+            
+            # 2. Status Update
+            status_match = re.search(r"\[\[STATUS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text)
+            if status_match:
+                turn = status_match.group(1).strip()
+                location = status_match.group(2).strip()
+                day = status_match.group(3).strip()
+                time = status_match.group(4).strip()
+                cur_stats = self.story_tab.get_status_data()
+                nut = cur_stats.get("nutrition", 100)
+                sta = cur_stats.get("stamina", 100)
+                self.after(0, lambda: self.story_tab.update_status(turn, location, day, time, nutrition=nut, stamina=sta))
+
+                
+                # Check Processing Tab (Only if NOT creating)
+                if not self.is_creating and "Processing" in self.notebook_widgets:
+                    finished_items = self.notebook_widgets["Processing"].check_active_tasks(day, time)
+                    if finished_items:
+                        sys_msg = f"System: Process completed - {', '.join(finished_items)}"
+                        self.story_tab.print_text(sys_msg, sender="System")
+                        self.conversation_history += f"\n{sys_msg}\n"
+                        
+            # Tag: [[START_PROCESS: Name | Description | Time_Slots | Yield]]
+            # We need the CURRENT status to calculate the target time.
+            current_status = self.story_tab.get_status_data() # Gets current UI values
+            
+            for match in re.finditer(r"\[\[START_PROCESS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\]\]", ai_text):
+                p_name = match.group(1).strip()
+                p_desc = match.group(2).strip()
+                p_slots = match.group(3).strip()
+                p_yield = match.group(4).strip()
+                
+                # Pass current Day/Time to calculate target
+                res = self.notebook_widgets["Processing"].add_timed_process(
+                    p_name,
+                    p_desc,
+                    p_slots,
+                    current_status["day"],
+                    current_status["time"],
+                    p_yield
+                )
+                self.story_tab.print_text(res, sender="System")
+                
+            # --- REMOVE PROCESS TAG (Same as before) ---
+            for match in re.finditer(r"\[\[REMOVE_PROCESS:\s*(.*?)\]\]", ai_text):
+                p_name = match.group(1).strip()
+                res = self.notebook_widgets["Processing"].remove_process(p_name)
+                if res: self.story_tab.print_text(res, sender="System")
+                
+            # Tag: [[START_PROJECT: Name | Desc | Total_Slots | Yield]]
+            # This creates a "Manual" task that requires work.
+            # Tag: [[START_PROJECT: Name | Desc | Work_Amount | SkillName | Expected_Yield]]
+            for match in re.finditer(
+                r"\[\[START_PROJECT:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]",
+                ai_text
+            ):
+                p_name = match.group(1).strip()
+                p_desc = match.group(2).strip()
+                work_required = match.group(3).strip()     # Work Amount
+                skill_name = match.group(4).strip()        # SkillName (this was missing)
+                p_yield = match.group(5).strip()           # Expected_Yield
+
+                lvl = self._get_skill_level(skill_name)
+
+                # ProcessingTab.add_project(name, desc, work_required, skill_name, skill_level_at_start, expected_yield)
+                res = self.notebook_widgets["Processing"].add_project(
+                    p_name,
+                    p_desc,
+                    work_required,
+                    skill_name,
+                    lvl,
+                    p_yield
+                )
+                if res:
+                    self.story_tab.print_text(res, sender="System")
+
+            # Tag: [[WORK: Name | Slots]]
+            # This applies progress to a manual task.
+            # Tag: [[WORK: ProjectName | Hours_Worked]]
+            for match in re.finditer(r"\[\[WORK:\s*(.*?)\s*\|\s*([\d.]+)\]\]", ai_text):
+                project_name = match.group(1).strip()
+                hours_worked = float(match.group(2).strip())
+
+                # Look up what skill this project uses, then get the player's level in that skill
+                req_skill = self.notebook_widgets["Processing"].get_required_skill(project_name) or ""
+                lvl = self._get_skill_level(req_skill) if req_skill else 0
+
+                # Apply progress + advance time
+                res = self.notebook_widgets["Processing"].apply_work_hours(project_name, hours_worked, lvl)
+                self._advance_time_hours(hours_worked)
+
+                # After time advances, check if any passive processes finished
+                status_now = self.story_tab.get_status_data()
+                completed = self.notebook_widgets["Processing"].check_active_tasks(status_now["day"], status_now["time"])
+                if completed:
+                    sys_msg = f"System: Process completed - {', '.join(completed)}"
+                    self.story_tab.print_text(sys_msg, sender="System")
+                    self.conversation_history += f"\n{sys_msg}\n"
+
+                if res:
+                    self.story_tab.print_text(res, sender="System")
+
+                
+            # Tag: [[ADD_FOOD: Type | Name | Desc | Amount | Value | Meals | SpoilDay | SpoilTime]]
+            for match in re.finditer(r"\[\[ADD_FOOD:\s*(.*?)\]\]", ai_text):
+                res = self.notebook_widgets["Inventory"].add_food(match.group(1))
+                self.story_tab.print_text(res, sender="GM")
+                
+            # Tag: [[CONSUME: FoodName]]
+            for match in re.finditer(r"\[\[CONSUME:\s*(.*?)\]\]", ai_text):
+                f_name = match.group(1).strip()
+                # Get current time to check spoilage
+                status = self.story_tab.get_status_data()
+                res = self.notebook_widgets["Inventory"].consume_food(f_name, status['day'], status['time'])
+                self.story_tab.print_text(res, sender="System")
+
+            # 3. Rolls & Recursion
             roll_match = re.search(r"\[\[ROLL:\s*(.*?)\]\]", ai_text)
             
             if roll_match and recursion_depth < 2:
                 skill = roll_match.group(1).strip()
                 result = self.perform_skill_check(skill)
-                # We strip the ADD/REMOVE tags before sending history back to prevent duplication
                 clean_prev = re.sub(r"\[\[(ADD|REMOVE):.*?\]\]", "", ai_text).strip()
                 follow_up = f"{prompt}\nGM: {clean_prev}\n[System: Player rolled {result} for {skill}.]"
                 self.query_ai(follow_up, user_text, recursion_depth + 1)
             else:
-                # Remove ALL tags (ROLL, ADD, REMOVE) from the final text displayed to user
-                final_text = re.sub(r"\[\[.*?\]\]", "", ai_text).strip()
-                #final_text = re.sub(r"\[\[ROLL:.*?\]\]", "", ai_text).strip() if recursion_depth >= 2 else ai_text
-                self.print_to_story(final_text, sender="GM")
-                self.conversation_history += f"Player: {user_text}\nGM: {final_text}\n"
+                clean_pattern = re.compile(
+    r"\[\[(WORLD_INFO|CHARACTER_INFO|SKILL|ADD|REMOVE|MODIFY_ITEM|MODIFY_STAT|STATUS|ROLL|START_GAME|XP|START_PROCESS|REMOVE_PROCESS|START_PROJECT|WORK|ADD_FOOD|CONSUME).*?\]\]",
+    re.DOTALL
+)
+
+                final_text = clean_pattern.sub("", ai_text)
+                #final_text = re.sub(r"\[\[.*?\]\]", "", ai_text, flags=re.DOTALL).strip()
+                # Replace 3 or more newlines with just 2 (Standard paragraph break)
+                final_text = re.sub(r'\n{3,}', '\n\n', final_text)
+                # Strip leading/trailing whitespace completely
+                final_text = final_text.strip()
+                # Only print if there is actually text left
+                if final_text:
+                    self.story_tab.print_text(final_text, sender="GM")
+                    self.conversation_history += f"Player: {user_text}\nGM: {final_text}\n"
 
         except Exception as e:
-            self.print_to_story(f"AI Error: {e}", sender="System")
+            self.story_tab.print_text(f"AI Error: {e}", sender="System")
         finally:
-            self.toggle_controls(enable=True)
+            self.after(0, lambda: self.story_tab.set_controls_state(True))
 
-    def save_game(self):
-        # Save individual markdown files
-        for name, widget in self.notebook_widgets.items():
-            try:
-                with open(f"{name}.md", "w", encoding="utf-8") as f:
-                    f.write(widget.get_text())
-            except Exception as e:
-                print(f"Error saving {name}: {e}")
-
-        # Save history
-        history_list = [line for line in self.conversation_history.split("\n") if line.strip()]
-        with open(SAVE_FILE, "w", encoding="utf-8") as f:
-            json.dump({"Chat History": history_list}, f, indent=4)
-        print("Game Saved.")
-
-    def load_game(self):
-        # Load markdown files
-        for name, widget in self.notebook_widgets.items():
-            if os.path.exists(f"{name}.md"):
-                try:
-                    with open(f"{name}.md", "r", encoding="utf-8") as f:
-                        widget.set_text(f.read())
-                except Exception as e:
-                    print(f"Error loading {name}: {e}")
-
-        # Load history
-        if os.path.exists(SAVE_FILE):
-            try:
-                with open(SAVE_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    hist = data.get("Chat History", [])
-                    self.conversation_history = "\n".join(hist) if isinstance(hist, list) else hist
-                self.print_to_story("System: Game Loaded.", sender="System")
-                
-                # Generate Recap logic
-                recent = self.conversation_history[-3000:]
-                threading.Thread(target=self.generate_recap, args=(recent,), daemon=True).start()
-            except Exception as e:
-                self.print_to_story(f"Save Corrupt: {e}")
-        else:
-            self.print_to_story("Welcome. What is your name?", sender="GM")
-
-    def generate_recap(self, history):
-        self.toggle_controls(False, "Recapping...")
+    def generate_recap(self, history, context_data):
+        self.after(0, lambda: self.story_tab.set_controls_state(False, "Recapping..."))
         try:
-            prompt = f"History:\n{history}\nSummarize situation in 2 sentences. Ask 'What do you do?'"
+            # We feed the AI the full Context (Inventory, World, Status) PLUS the (possibly empty) History.
+            prompt = f"Context Data:\n{context_data}\n\nRecent Chat History:\n{history}\n\nTask: Summarize the current situation in a single paragraph based on the Context and Status provided above. Do not output anything that starts with \"[[\". End by asking 'What do you do?'"
+            
             resp = client.models.generate_content(
                 model=MODEL, 
                 contents=prompt, 
                 config=types.GenerateContentConfig(system_instruction=self.load_rules())
             )
-            self.print_to_story(f"📝 RECAP: {resp.text}", sender="GM")
-        except:
-            pass
+            ai_text = resp.text or ""
+            
+            # 1. Remove Tags (The AI might try to reprint the status, we strip that)
+            clean_text = re.sub(r"\[\[.*?\]\]", "", ai_text, flags=re.DOTALL).strip()
+            
+            # 2. Fix Whitespace
+            clean_text = re.sub(r'\n{3,}', '\n\n', clean_text).strip()
+            
+            if clean_text:
+                self.story_tab.print_text(f"RECAP: {clean_text}", sender="GM")
+        except Exception as e:
+            self.story_tab.print_text(f"Recap Error: {e}", sender="System")
         finally:
-            self.toggle_controls(True)
+            self.after(0, lambda: self.story_tab.set_controls_state(True))
+
+    def save_game(self):
+        if not self.current_adventure_path or not self.game_loaded_successfully: 
+            return
+
+        # Save Markdown Tabs
+        for name, widget in self.notebook_widgets.items():
+            if isinstance(widget, MarkdownEditorTab):
+                try:
+                    with open(widget.filename, "w", encoding="utf-8") as f:
+                        f.write(widget.get_text())
+                except: pass
+
+        # Save History & Status
+        history_path = os.path.join(self.current_adventure_path, "savegame.json")
+        history_list = [line for line in self.conversation_history.split("\n") if line.strip()]
+        
+        # Get Status from StoryTab
+        status_data = self.story_tab.get_status_data()
+        
+        try:
+            with open(history_path, "w", encoding="utf-8") as f:
+                json.dump({"Chat History": history_list, "Status": status_data, "is_creating": self.is_creating}, f, indent=4)
+            print(f"Game saved to {self.current_adventure_path}")
+        except Exception as e:
+            print(f"Save failed: {e}")
 
     def on_close(self):
         self.save_game()
