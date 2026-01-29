@@ -2,7 +2,7 @@ import customtkinter as ctk
 import os
 import json
 from tabulate import tabulate
-from config import TIME_ORDER
+from time_utils import to_abs_minutes
 
 class InventoryTab(ctk.CTkFrame):
     """Displays Inventory dynamically based on Item Types."""
@@ -40,18 +40,7 @@ class InventoryTab(ctk.CTkFrame):
         
     # --- Time Helper ---
     def _get_ticks(self, day, time_str):
-        """Converts Day/Time to an integer for comparison."""
-        try:
-            d = int(''.join(filter(str.isdigit, str(day))))
-        except: d = 1
-        
-        t_idx = 0
-        t_clean = time_str.lower().strip()
-        for i, val in enumerate(TIME_ORDER):
-            if val.lower() in t_clean: 
-                t_idx = i
-                break
-        return (d * len(TIME_ORDER)) + t_idx
+        return int(to_abs_minutes(day, time_str))
 
     def refresh_display(self):
         data = self.load_data()
@@ -82,7 +71,7 @@ class InventoryTab(ctk.CTkFrame):
                             if "meals" in meta:
                                 extra_info = f" [Meals: {meta['meals']}"
                                 if "spoil_day" in meta:
-                                    extra_info += f", Spoils: {meta['spoil_day']} {meta['spoil_time']}"
+                                    extra_info += f", Spoils: Day {meta['spoil_day']} at {meta['spoil_time']}."
                                 extra_info += "]"
                                 desc += extra_info
                     
@@ -251,7 +240,7 @@ class InventoryTab(ctk.CTkFrame):
             value = parts[4]
             meals = parts[5]
             spoil_day = parts[6] if len(parts) > 6 else "Day 99"
-            spoil_time = parts[7] if len(parts) > 7 else "Midnight"
+            spoil_time = parts[7] if len(parts) > 7 else "11:59 P.M."
 
             # Metadata Dict
             meta = {
@@ -277,7 +266,7 @@ class InventoryTab(ctk.CTkFrame):
             data[category].append(new_item)
 
             self.save_data(data)
-            return f"(Added {name} [Meals: {meals}, Spoils: {spoil_day} {spoil_time}])."
+            return f"(Added {name} [Meals: {meals}, Spoils: Day {spoil_day} at {spoil_time}])."
 
         except Exception as e:
             return f"System Error adding food: {e}"
@@ -298,7 +287,8 @@ class InventoryTab(ctk.CTkFrame):
                         spoil_ticks = self._get_ticks(meta.get("spoil_day", "Day 99"), meta.get("spoil_time", "Midnight"))
                         
                         if current_ticks >= spoil_ticks:
-                            return f"System: You cannot eat {name}. It smells rotten (Spoiled {meta.get('spoil_day')} {meta.get('spoil_time')})."
+                            items.pop(i)
+                            return f"System: You cannot eat {name}. It smells rotten (Spoiled on day {meta.get('spoil_day')} at {meta.get('spoil_time')}. You decide it's best to get rid of it.)."
 
                         # 2. Consumption Logic
                         meta["meals"] -= 1

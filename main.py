@@ -7,6 +7,7 @@ import os
 import customtkinter as ctk
 import random
 import re
+from time_utils import add_hours, normalize_day_time
 from dotenv import load_dotenv
 
 # Import Config and UI
@@ -91,6 +92,33 @@ class GameApp(ctk.CTk):
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         
+    def _get_skill_level(self, skill_name: str) -> int:
+        clean = (skill_name or "").split('(')[0].strip().title()
+        try:
+            skills_tab = self.notebook_widgets["Skills"]
+            data = skills_tab.load_data()
+            for item in data:
+                if item.get("Name", "").lower() == clean.lower():
+                    return int(item.get("Level", 0) or 0)
+        except Exception:
+            pass
+        return 0
+
+    def _advance_time_hours(self, hours: float):
+        cur = self.story_tab.get_status_data()
+        gt = add_hours(cur.get("day", "Day 1"), cur.get("time", "12:00 AM"), hours)
+
+        turn = cur.get("turn", "1")
+        location = cur.get("location", "Unknown")
+        nutrition = int(cur.get("nutrition", 100))
+        stamina = int(cur.get("stamina", 100))
+
+        self.after(0, lambda: self.story_tab.update_status(
+            turn, location, gt.as_day_string(), gt.as_time_string(),
+            nutrition=nutrition, stamina=stamina
+        ))
+
+        
     def return_to_menu(self):
         """Saves game and goes back to main menu."""
         self.save_game()
@@ -151,7 +179,9 @@ class GameApp(ctk.CTk):
                             status.get("turn", "1"),
                             status.get("location", "Unknown"),
                             status.get("day", "1"),
-                            status.get("time", "Start")
+                            status.get("time", "Start"),
+                            status.get("nutrition", 100),
+                            status.get("stamina", 100)
                         )
                 
                 self.story_tab.print_text(f"System: Loaded '{save_name}'.", sender="System")
@@ -459,8 +489,7 @@ class GameApp(ctk.CTk):
                     # Clean the tag out of the text so player doesn't see it
                     ai_text = ai_text.replace("[[START_GAME]]", "")
                     self.conversation_history += response.text or ""
-                    self.handle_player_action("We have completed character creation. Please describe the starting scene, updating the location and time values as necessary.")
-                    return
+                    #return
                     
             
             # 1. Add/Remove Items
@@ -516,21 +545,20 @@ class GameApp(ctk.CTk):
             # We need the CURRENT status to calculate the target time.
             current_status = self.story_tab.get_status_data() # Gets current UI values
             
-            for match in re.finditer(r"\[\[START_PROCESS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(\d+)\s*\|\s*(.*?)\]\]", ai_text):
+            for match in re.finditer(r"\[\[START_PROCESS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\]\]", ai_text):
                 p_name = match.group(1).strip()
                 p_desc = match.group(2).strip()
                 p_slots = match.group(3).strip()
                 p_yield = match.group(4).strip()
                 
                 # Pass current Day/Time to calculate target
-                res = self.notebook_widgets["Processing"].add_process(
+                res = self.notebook_widgets["Processing"].add_timed_process(
                     p_name,
                     p_desc,
                     p_slots,
                     current_status["day"],
                     current_status["time"],
-                    p_yield,
-                    mode="auto"
+                    p_yield
                 )
                 self.story_tab.print_text(res, sender="System")
                 
@@ -542,32 +570,57 @@ class GameApp(ctk.CTk):
                 
             # Tag: [[START_PROJECT: Name | Desc | Total_Slots | Yield]]
             # This creates a "Manual" task that requires work.
-            for match in re.finditer(r"\[\[START_PROJECT:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(\d+)\s*\|\s*(.*?)\]\]", ai_text):
+            # Tag: [[START_PROJECT: Name | Desc | Work_Amount | SkillName | Expected_Yield]]
+            for match in re.finditer(
+                r"\[\[START_PROJECT:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]",
+                ai_text
+            ):
                 p_name = match.group(1).strip()
                 p_desc = match.group(2).strip()
-                p_slots = match.group(3).strip()
-                p_yield = match.group(4).strip()
-                current_status = self.story_tab.get_status_data()
-                
-                # We pass mode="manual" here
-                res = self.notebook_widgets["Processing"].add_process(
+                work_required = match.group(3).strip()     # Work Amount
+                skill_name = match.group(4).strip()        # SkillName (this was missing)
+                p_yield = match.group(5).strip()           # Expected_Yield
+
+                lvl = self._get_skill_level(skill_name)
+
+                # ProcessingTab.add_project(name, desc, work_required, skill_name, skill_level_at_start, expected_yield)
+                res = self.notebook_widgets["Processing"].add_project(
                     p_name,
                     p_desc,
-                    p_slots,
-                    current_status["day"],
-                    current_status["time"],
-                    p_yield,
-                    mode="manual"
+                    work_required,
+                    skill_name,
+                    lvl,
+                    p_yield
                 )
-                if res: self.story_tab.print_text(res, sender="System")
+                if res:
+                    self.story_tab.print_text(res, sender="System")
 
             # Tag: [[WORK: Name | Slots]]
             # This applies progress to a manual task.
-            for match in re.finditer(r"\[\[WORK:\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text):
-                p_name = match.group(1).strip()
-                p_slots = match.group(2).strip()
-                res = self.notebook_widgets["Processing"].progress_manual_task(p_name, p_slots)
-                if res: self.story_tab.print_text(res, sender="System")
+            # Tag: [[WORK: ProjectName | Hours_Worked]]
+            for match in re.finditer(r"\[\[WORK:\s*(.*?)\s*\|\s*([\d.]+)\]\]", ai_text):
+                project_name = match.group(1).strip()
+                hours_worked = float(match.group(2).strip())
+
+                # Look up what skill this project uses, then get the player's level in that skill
+                req_skill = self.notebook_widgets["Processing"].get_required_skill(project_name) or ""
+                lvl = self._get_skill_level(req_skill) if req_skill else 0
+
+                # Apply progress + advance time
+                res = self.notebook_widgets["Processing"].apply_work_hours(project_name, hours_worked, lvl)
+                self._advance_time_hours(hours_worked)
+
+                # After time advances, check if any passive processes finished
+                status_now = self.story_tab.get_status_data()
+                completed = self.notebook_widgets["Processing"].check_active_tasks(status_now["day"], status_now["time"])
+                if completed:
+                    sys_msg = f"System: Process completed - {', '.join(completed)}"
+                    self.story_tab.print_text(sys_msg, sender="System")
+                    self.conversation_history += f"\n{sys_msg}\n"
+
+                if res:
+                    self.story_tab.print_text(res, sender="System")
+
                 
             # Tag: [[ADD_FOOD: Type | Name | Desc | Amount | Value | Meals | SpoilDay | SpoilTime]]
             for match in re.finditer(r"\[\[ADD_FOOD:\s*(.*?)\]\]", ai_text):

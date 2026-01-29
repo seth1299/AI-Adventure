@@ -1,5 +1,6 @@
 import customtkinter as ctk
 from tqdm import tqdm
+from time_utils import normalize_day_time
 
 class StoryTab(ctk.CTkFrame):
     def __init__(self, parent, on_send_callback, on_main_menu_callback):
@@ -116,11 +117,16 @@ class StoryTab(ctk.CTkFrame):
             nut_val = 100
             sta_val = 100
 
+        day_disp, time_disp, h, m, ap = normalize_day_time(day, time)
+
         self.status_cache = {
             "turn": str(turn),
             "location": location,
-            "day": day,
-            "time": time,
+            "day": day_disp,
+            "time": time_disp,
+            "hour": int(h),
+            "minute": int(m),
+            "ampm": ap,
             "nutrition": nut_val,
             "stamina": sta_val
         }
