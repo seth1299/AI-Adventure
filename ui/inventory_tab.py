@@ -3,6 +3,7 @@ import os
 import json
 from tabulate import tabulate
 from time_utils import to_abs_minutes
+import logging
 
 class InventoryTab(ctk.CTkFrame):
     """Displays Inventory dynamically based on Item Types."""
@@ -29,7 +30,8 @@ class InventoryTab(ctk.CTkFrame):
         try:
             with open(self.data_path, "r") as f:
                 return json.load(f)
-        except:
+        except Exception as e:
+            logging.error(f"Error loading data in inventory_tab: {e}")
             return {}
 
     def save_data(self, data):
@@ -167,7 +169,8 @@ class InventoryTab(ctk.CTkFrame):
             else:
                 return f"System: Could not find item '{target}' to modify."
         except Exception as e:
-            return f"Error modifying item: {e}"
+            logging.error(f"Error modifying {target} in modify_item: {e}")
+            return f"Sorry, I had trouble modifying '{target}'."
             
     def autonomous_add(self, raw_args):
         # UPDATED FORMAT: Type | Name | Description | Amount
@@ -214,7 +217,7 @@ class InventoryTab(ctk.CTkFrame):
                         add_amt = int(amount)
                         item["amount"] = str(cur_amt + add_amt)
                         found = True
-                    except: pass
+                    except Exception as e: logging.error(f"Error adding {name} in autonomous_add: {e}")
                     break
             
             if not found:
@@ -224,7 +227,8 @@ class InventoryTab(ctk.CTkFrame):
             return f"(Added {amount}x {name} to inventory as \"{category}\"!)."
 
         except Exception as e:
-            return f"System: Failed to add item ({e})."
+            logging.error(f"Error adding {name} to player inventory in autonomous_add: {e}")
+            return f"Sorry, I had trouble adding {name} to your inventory."
         
     # --- NEW: Food Add ---
     def add_food(self, raw_args):
@@ -349,7 +353,8 @@ class InventoryTab(ctk.CTkFrame):
                 return f"System: Could not find {target_name}."
 
         except Exception as e:
-            return f"System Error: {e}"
+            logging.error(f"Error removing {target_name} in autonomous remove: {e}")
+            return f"Sorry, I had trouble finding {target_name}."
         
     def _make_plural(self, word):
         """Simple logic to pluralize headers."""

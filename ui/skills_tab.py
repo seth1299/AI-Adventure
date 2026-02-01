@@ -2,6 +2,7 @@ import customtkinter as ctk
 import os
 import json
 from tabulate import tabulate
+import logging
 
 class SkillsTab(ctk.CTkFrame):
     """Displays Skills.json using Tabulate. Handles XP Logic."""
@@ -25,7 +26,8 @@ class SkillsTab(ctk.CTkFrame):
         try:
             with open(self.data_path, "r") as f:
                 return json.load(f)
-        except:
+        except Exception as e:
+            logging.error(f"Error loading Skills in load_data: {e}")
             return []
 
     def save_data(self, data):

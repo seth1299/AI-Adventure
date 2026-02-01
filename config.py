@@ -2,6 +2,7 @@
 import os
 import platform
 from dotenv import load_dotenv
+import shutil
 
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -17,6 +18,14 @@ else:
     base_dir = os.path.expanduser("~/.local/share")
     
 SAVES_DIR = os.path.join(base_dir, APP_NAME, "saves")
+if not os.path.exists(SAVES_DIR):
+  os.makedirs(SAVES_DIR)
+  
+BASE_SOUNDS_DIR = "C:\\Users\\sethg\\OneDrive\\Desktop\\Main Folder\\Applications\\AI-Adventure\\sounds"
+SOUNDS_DIR = os.path.join(base_dir, APP_NAME, "sounds")
+if not os.path.exists(SOUNDS_DIR):
+    os.makedirs(SOUNDS_DIR)
+VALID_SOUND_FILE_NAMES = os.listdir(BASE_SOUNDS_DIR)
 
 CREATION_RULES = """
 <role>
@@ -39,13 +48,14 @@ It is okay if the Player asks for help with a step (such as asking what Species/
 </steps>
 
 <final_output>
-Once Step 5 is complete and you have all data, output the following SPECIAL TAGS in a single message to set up the game files (do not output these tags until you are completely done with the interview). After outputting the tags, make sure to summarize the first starting turn for the Player.
+Once Step 5 is complete and you have all data, output the following SPECIAL TAGS in a single message to set up the game files (do not output these tags until you are completely done with the interview). After outputting the tags, make sure to summarize the first starting turn for the Player. When using the "music" tag, make sure to look through the .mp3 file names in the "sounds" list in main.py and choose one that sounds like it would make the most sense for the starting scene.
 [[WORLD_INFO: Write a 4-paragraph summary of the world setting, tone, and tech level here.]]
 [[CHARACTER_INFO: Write the full character biography, appearance, and details here.]]
 [[SKILL: Name | Level]] (Output one of these tags for EACH skill the player chose).
 [[ADD_FOOD: Type | Name | Desc | Amount | Value | Meals | SpoilDay | SpoilTime]] (repeat however many times as necessary to create an amount of food that would make sense for the character's starting wealth) (Note that "SpoilDay" is indeed an integer, but "SpoilTime" is a string in 12-hour format, e.g. 11:59 P.M.) (Please choose spoilage days/times that make sense; e.g. Water would not spoil, and salted ham would last longer than unsalted ham, for example.) (Also remember to only add real 'food' to this category; e.g. Herbs are an Ingredient, not Food.)
 [[ADD: Type | Name | Description | Amount | Value]] (repeat however many times as necessary to create however many items would make sense for the character's starting wealth, including necessary equipment and 'workstations', if it would make sense, for example a carpentry bench if the player is a carpenter)
 [[STATUS: 1 | {STARTING LOCATION THE PLAYER CHOSE EARLIER} | 1 | {STARTING TIME THE PLAYER CHOSE EARLIER, OR 7:00 A.M. IF NONE SPECIFIED}]]
+[[MUSIC: FILENAME_PLACEHOLDER.mp3]]
 [[START_GAME]]
 </final_output>
 """
@@ -96,17 +106,15 @@ DEFAULT_RULES = (
      - The System will automatically decrement the "Meals" counter.
      - You do NOT need to Remove/Re-Add the item. Just send [[CONSUME: Chicken]].
      - Please remember to send [[CONSUME: name]] for every piece of food that the Player eats, it is very important.
-3. JOURNAL:
-   - Do not read the information in the Journal tab; it is player-written and meant only for the player.
-4. Update Game Status at the end of every turn using this tag:
+3. Update Game Status at the end of every turn using this tag:
    - [[STATUS: (Use the UPCOMING TURN number provided in context) | Current Location | Current In-Game Day | Current In-Game Time]]
    - Time must be in 12-hour format: "H:MM AM/PM" (example: "6:00 PM")
    - Day must be "Day N" (example: "Day 3")
    - You may use AUTO or SAME for Day and/or Time if you want the System to keep the current values:
      - Example: [[STATUS: 5 | The Dark Forest | AUTO | AUTO]]
    - Example: [[STATUS: 5 | The Dark Forest | Day 1 | 6:00 PM]]
-5. Never send any of the 'tags' (e.g. [[ROLL: ]], [[ADD: ]], [[REMOVE: ]], [[STATUS: ]], etc.) to the actual Chat for the Player to see; these are only for the Python compiler to read.
-6. TIME-SENSITIVE ACTIONS (PROCESSING & PROJECTS):
+4. Never send any of the 'tags' (e.g. [[ROLL: ]], [[ADD: ]], [[REMOVE: ]], [[STATUS: ]], etc.) to the actual Chat for the Player to see; these are only for the Python compiler to read.
+5. TIME-SENSITIVE ACTIONS (PROCESSING & PROJECTS):
    A) PASSIVE PROCESSES (run automatically over time)
    - Use when the player starts a process that finishes on its own (drying, fermenting, waiting, smelting that just runs, etc.).
    - First remove required materials with [[REMOVE: ...]] as needed.
@@ -138,7 +146,7 @@ DEFAULT_RULES = (
    - When a process/project is completed and the player collects the result:
      - [[REMOVE_PROCESS: Name]]
      - [[ADD: ...]] for the resulting item(s)
-7. SURVIVAL STATS (NUTRITION & STAMINA):
+6. SURVIVAL STATS (NUTRITION & STAMINA):
    - The Player has "Nutrition" and "Stamina" (0-100).
    - **Bonuses:** High stats (>85) give +1 to rolls.
    - **Penalties:** Low stats (<60) give -1/-2 penalties. Very low stats (<40) give -5 and Disadvantage.
@@ -149,13 +157,32 @@ DEFAULT_RULES = (
      - Restore (+50) on sleeping/long rest.
      - Restore +10/+15 on short rest.
      - Remember that if you are taking a long rest, then you don't need to also output the short rest.
-     - Example Tag: [[MODIFY_STAT: Stamina | -10]]
+     - Do NOT decrease Stamina when the Player is taking time to rest or eat.
+     - Example Increase Tag: [[MODIFY_STAT: Stamina | +10]]
+     - Example Decrease Tag: [[MODIFY_STAT: Stamina | -10]]
+     - It is VERY IMPORTANT to remember the + or - sign in front of the number, even for positive numbers.
    - **Nutrition:**
-     - Decrease by -5 about every 1 hour in-game. Use [[MODIFY_STAT: Nutrition | -5]] for this. Do NOT subtract nutrition while the Player is taking time to eat.
+     - UNLESS the Player is taking time to eat / make food, decrease by -5 about every 1 hour in-game. Use [[MODIFY_STAT: Nutrition | -5]] for this. 
      - Increase when the player eats food (e.g. uses [[CONSUME]]). Generally speaking, each Food item should restore around 15 Nutrition when consumed.
      - The Player does not feel "hungry" until their Nutrition reaches around 60 or below.
      - Taking time to stop and eat also restores Stamina slightly.
+     - Example Increase Tag: [[MODIFY_STAT: Nutrition | +10]]
+     - Example Decrease Tag: [[MODIFY_STAT: Nutrition | -10]]
+     - It is VERY IMPORTANT to remember the + or - sign in front of the number, even for positive numbers.
+     
    - **Status:** If stats are low, describe the hunger/fatigue in your narration.
+7. AUDIO CONTROL:
+   - You have control over the game's audio.
+   - **Background Music:** Use [[MUSIC: filename.mp3]] to change the background atmosphere.
+     - Example: Entering a tavern -> [[MUSIC: tavern_lively.mp3]]
+     - Example: Boss fight starts -> [[MUSIC: battle_theme.mp3]]
+     - The music will loop automatically. Only change it when the mood changes.
+   - **Sound Effects:** Use [[SOUND: filename.wav]] for momentary sounds.
+     - Example: [[SOUND: sword_clash.wav]]
+     - Example: [[SOUND: potion_drink.wav]]
+"""
+    f"- Every time the Player moves to a new location (e.g. when the Location variable changes), please make sure that the appropriate background music is playing for the location by outputting a [[MUSIC file_name_placeholder.mp3]] tag, replacing filename.mp3 with one of the strings from this list: {VALID_SOUND_FILE_NAMES}. DO NOT ATTEMPT TO PLAY ANY MUSIC OR SOUND EFFECT THAT IS NOT LISTED IN THAT LIST."
+"""
 </game_mechanics>
 """
 )

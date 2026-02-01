@@ -9,14 +9,26 @@ import random
 import re
 from time_utils import add_hours, normalize_day_time
 from dotenv import load_dotenv
+from sound_manager import SoundManager
+import logging
+import shutil
 
 # Import Config and UI
-from config import GEMINI_API_KEY, MODEL, SAVES_DIR, DEFAULT_RULES
+from config import GEMINI_API_KEY, MODEL, SAVES_DIR, DEFAULT_RULES, SOUNDS_DIR, BASE_SOUNDS_DIR, VALID_SOUND_FILE_NAMES, APP_NAME
 from ui import MainMenu, InventoryTab, SkillsTab, MarkdownEditorTab, StoryTab, ProcessingTab
 
 # --- Configuration ---
 load_dotenv()
 client = genai.Client(api_key=GEMINI_API_KEY)
+
+# Configure logging to write to a file; currently not working how I am intending it to.
+log_file_path = os.path.join(SAVES_DIR, f"error_log.txt")
+logging.basicConfig(
+    filename=log_file_path,
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filemode='w' # 'a' means Append mode (add to end of file), 'w' would overwrite each time
+)
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -26,12 +38,15 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 class GameApp(ctk.CTk):
+    
     def __init__(self):
         super().__init__()
         self.is_creating = False
         self.game_loaded_successfully = False
         self.title("AI RPG Adventure")
         self.geometry("1000x700")
+        self.sound_manager = SoundManager(SOUNDS_DIR)
+        #self.sound_manager.play_music("main_menu.mp3")
         ctk.set_appearance_mode("Dark")
         # Use the helper to find the icon inside the EXE
         icon_path = resource_path("game_icon.ico")
@@ -39,11 +54,10 @@ class GameApp(ctk.CTk):
             try:
                 self.iconbitmap(icon_path)
             except Exception as e:
-                print(f"Icon error: {e}")
+                logging.error(f"Icon error: {e}")
 
         self.current_adventure_path = None
         self.conversation_history = ""
-
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
@@ -54,8 +68,13 @@ class GameApp(ctk.CTk):
         # --- VIEW 2: Game Tabs (Hidden initially) ---
         self.tab_view = ctk.CTkTabview(self)
         self.tabs = ["Story", "Inventory", "Skills", "Processing", "Character", "World", "Journal"]
-        self.notebook_widgets = {} 
-
+        self.notebook_widgets = {}
+        for sound in VALID_SOUND_FILE_NAMES:
+            current_path = os.path.join(BASE_SOUNDS_DIR, sound)
+            destination_path = os.path.join(SOUNDS_DIR, sound)
+            if os.path.exists(destination_path): pass
+            else: shutil.copyfile(current_path, destination_path)
+        
         for tab_name in self.tabs:
             self.tab_view.add(tab_name)
             frame = self.tab_view.tab(tab_name)
@@ -89,8 +108,51 @@ class GameApp(ctk.CTk):
                 editor = MarkdownEditorTab(frame, default_text=f"{tab_name}\n")
                 editor.grid(row=0, column=0, sticky="nsew")
                 self.notebook_widgets[tab_name] = editor
+                
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        
+    def update_logger(self, save_name=None):
+        """
+        Switches logging to the specific save folder, or back to global if None.
+        """
+        # 1. Determine the new path
+        if save_name:
+            # Path: saves/MySave/MySave_error_log.txt
+            save_dir = os.path.join(SAVES_DIR, save_name)
+            # Ensure folder exists (just in case)
+            if not os.path.exists(save_dir):
+                return
+            new_log_path = os.path.join(save_dir, f"{save_name}_error_log.txt")
+        else:
+            # Path: saves/error_log.txt (Global Fallback)
+            new_log_path = os.path.join(SAVES_DIR, "generic_text_adventure_error_log.txt")
+
+        # 2. Get the Root Logger
+        logger = logging.getLogger()
+
+        # 3. Remove existing FileHandlers (Close the old file)
+        # We iterate over a copy [:] so we can remove items while looping
+        for handler in logger.handlers[:]:
+            if isinstance(handler, logging.FileHandler):
+                handler.close() # Release the file lock on the previous log
+                logger.removeHandler(handler)
+
+        # 4. Add the New Handler
+        try:
+            # Create new file handler
+            file_handler = logging.FileHandler(new_log_path, mode='w', encoding='utf-8')
+            
+            # Apply the same format we used in basicConfig
+            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+            file_handler.setFormatter(formatter)
+            
+            # Attach it
+            logger.addHandler(file_handler)
+            
+            logging.info(f"Logger switched to: {new_log_path}")
+        except Exception as e:
+            print(f"Failed to switch logger: {e}")
         
     def _get_skill_level(self, skill_name: str) -> int:
         clean = (skill_name or "").split('(')[0].strip().title()
@@ -100,8 +162,8 @@ class GameApp(ctk.CTk):
             for item in data:
                 if item.get("Name", "").lower() == clean.lower():
                     return int(item.get("Level", 0) or 0)
-        except Exception:
-            pass
+        except Exception as e:
+            logging.error("Get skill level error: {e}")
         return 0
 
     def _advance_time_hours(self, hours: float):
@@ -124,6 +186,7 @@ class GameApp(ctk.CTk):
         self.save_game()
         self.current_adventure_path = None
         self.is_creating = False
+        self.update_logger(None)
         
         # Hide Game Tabs
         self.tab_view.grid_forget()
@@ -136,15 +199,17 @@ class GameApp(ctk.CTk):
     def load_adventure(self, save_name):
         self.game_loaded_successfully = False
         self.current_adventure_path = os.path.join(SAVES_DIR, save_name)
+        self.current_sounds_path = os.path.join(SOUNDS_DIR, save_name)
         self.story_tab.clear_chat()
+        self.update_logger(save_name)
+        
         # Migrate legacy inventory format (old list items -> dict items)
         self._migrate_inventory_legacy_format()
-
         
         # UI Switch
         self.main_menu.grid_forget()
         self.tab_view.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
-        self.title(f"AI RPG Adventure - {save_name}")
+        self.title(f"{save_name}")
 
         # Propagate Path (Now with Error Handling)
         for name, widget in self.notebook_widgets.items():
@@ -159,8 +224,7 @@ class GameApp(ctk.CTk):
                     else: widget.set_text(f"{name}\n")
             except Exception as e:
                 # This prevents the "Silent Freeze" if a tab crashes
-                print(f"Error loading tab {name}: {e}")
-                self.story_tab.print_text(f"[System Error loading {name}: {e}]", sender="System")
+                logging.error(f"Error loading tab {name}: {e}")
 
         # Load History & Status
         history_path = os.path.join(self.current_adventure_path, "savegame.json")
@@ -196,19 +260,20 @@ class GameApp(ctk.CTk):
                     self.story_tab.print_text(last_gm_msg, sender="GM")
                 else:
                     # Normal game: Generate Recap
-                    recent = self.conversation_history[-3000:]
+                    recent = self.conversation_history[-2000:]
                     # We grab the text from Inventory, World, Character, etc. NOW, 
                     # because accessing these widgets inside the thread later might crash Tkinter.
                     context_data = ""
                     for name, widget in self.notebook_widgets.items():
-                        if name != "Story": 
+                        # Skip unnecessessary tabs such as inventory, skills, and processing, and only pass in relevant context for the purposes of a recap, e.g. the last bit of the conversation history.
+                        if name != "Story" and name != "Inventory" and name != "Skills" and name != "Processing": 
                             if hasattr(widget, 'get_text'):
                                 context_data += f"\n[{name.upper()}]:\n{widget.get_text().strip()}\n"
                     curr_stat = self.story_tab.get_status_data()
                     context_data += f"\n[STATUS]\nLocation: {curr_stat['location']}\nDay: {curr_stat['day']}\nTime: {curr_stat['time']}\n"
                     threading.Thread(target=self.generate_recap, args=(recent,context_data), daemon=True).start()
             except Exception as e:
-                self.story_tab.print_text(f"Error loading history: {e}", sender="System")
+                logging.error(f"Error loading history: {e}")
         else:
             self.conversation_history = ""
             self.is_creating = True
@@ -234,7 +299,7 @@ class GameApp(ctk.CTk):
             self.story_tab.print_text(resp.text, sender="GM")
             self.conversation_history += f"GM: {resp.text}\n"
         except Exception as e:
-            self.story_tab.print_text(f"Creation Error: {e}", sender="System")
+            logging.error(f"Creation Error: {e}")
 
     def load_rules(self):
         if self.current_adventure_path:
@@ -264,7 +329,8 @@ class GameApp(ctk.CTk):
         try:
             with open(inv_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except Exception:
+        except Exception as e:
+            logging.error(f"Json load error: {e}")
             return
 
         if not isinstance(data, dict):
@@ -298,12 +364,13 @@ class GameApp(ctk.CTk):
             try:
                 with open(inv_path, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=4)
-            except Exception:
+            except Exception as e:
+                logging.error(f"Inventory loading error: {e}")
                 pass
 
     # --- Stat Helpers ---
 
-    def _apply_modify_stat(self, stat_name: str, raw_value: str) -> str:
+    def _apply_modify_stat(self, stat_name: str, raw_value: str):
         """
         Supports:
           [[MODIFY_STAT: Stamina | -10]]  (delta)
@@ -316,7 +383,7 @@ class GameApp(ctk.CTk):
         raw = (raw_value or "").strip()
 
         if stat not in ("stamina", "nutrition"):
-            return f"System: Unknown stat '{stat_name}'."
+           logging.error(f"System: Unknown stat '{stat_name}'.")
 
         cur = self.story_tab.get_status_data()
         cur_val = int(cur.get(stat, 100))
@@ -333,7 +400,10 @@ class GameApp(ctk.CTk):
                 # plain number => set
                 new_val = int(raw)
         except Exception:
-            return f"System: Bad MODIFY_STAT value '{raw_value}'."
+            logging.error(f"System: Bad MODIFY_STAT value '{raw_value}'.")
+        finally:
+            if new_val == None:
+                new_val = -1000
 
         new_val = max(0, min(100, int(new_val)))
 
@@ -351,7 +421,6 @@ class GameApp(ctk.CTk):
             stamina = new_val
 
         self.after(0, lambda: self.story_tab.update_status(turn, location, day, time, nutrition=nutrition, stamina=stamina))
-        return f"System: {stat.title()} is now {new_val}."
 
 
     # --- Game Logic ---
@@ -514,10 +583,23 @@ class GameApp(ctk.CTk):
             for match in re.finditer(r"\[\[MODIFY_STAT:\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text):
                 stat_name = match.group(1).strip()
                 stat_val = match.group(2).strip()
-                res = self._apply_modify_stat(stat_name, stat_val)
-                if res:
-                    self.story_tab.print_text(res, sender="System")
-                    self.conversation_history += f"\n{res}\n"
+                self._apply_modify_stat(stat_name, stat_val)
+                #if res:
+                    #self.story_tab.print_text(res, sender="System")
+                    #self.conversation_history += f"\n{res}\n"
+                    
+            music_match = re.search(r"\[\[MUSIC:\s*(.*?)\]\]", ai_text)
+            if music_match:
+                track = music_match.group(1).strip()
+                #self.sound_manager.play_music(track, True)
+                # Run on main thread to be safe, though mixer is usually thread-safe
+                self.after(0, lambda: self.sound_manager.play_music(track))
+
+            # 2. SFX Tags: [[SOUND: filename]]
+            for match in re.finditer(r"\[\[SOUND:\s*(.*?)\]\]", ai_text):
+                sfx = match.group(1).strip()
+                #self.sound_manager.play_sfx(sfx)
+                self.after(0, lambda s=sfx: self.sound_manager.play_sfx(s))
 
             
             # 2. Status Update
@@ -645,11 +727,11 @@ class GameApp(ctk.CTk):
                 follow_up = f"{prompt}\nGM: {clean_prev}\n[System: Player rolled {result} for {skill}.]"
                 self.query_ai(follow_up, user_text, recursion_depth + 1)
             else:
+                logging.info(f"AI text: {ai_text}")
                 clean_pattern = re.compile(
-    r"\[\[(WORLD_INFO|CHARACTER_INFO|SKILL|ADD|REMOVE|MODIFY_ITEM|MODIFY_STAT|STATUS|ROLL|START_GAME|XP|START_PROCESS|REMOVE_PROCESS|START_PROJECT|WORK|ADD_FOOD|CONSUME).*?\]\]",
+    r"\[\[(WORLD_INFO|CHARACTER_INFO|SKILL|ADD|REMOVE|MODIFY_ITEM|MODIFY_STAT|STATUS|ROLL|START_GAME|XP|START_PROCESS|REMOVE_PROCESS|START_PROJECT|WORK|ADD_FOOD|CONSUME|MUSIC|SOUND).*?\]\]",
     re.DOTALL
 )
-
                 final_text = clean_pattern.sub("", ai_text)
                 #final_text = re.sub(r"\[\[.*?\]\]", "", ai_text, flags=re.DOTALL).strip()
                 # Replace 3 or more newlines with just 2 (Standard paragraph break)
@@ -662,7 +744,7 @@ class GameApp(ctk.CTk):
                     self.conversation_history += f"Player: {user_text}\nGM: {final_text}\n"
 
         except Exception as e:
-            self.story_tab.print_text(f"AI Error: {e}", sender="System")
+            logging.error(f"AI Error: {e}")
         finally:
             self.after(0, lambda: self.story_tab.set_controls_state(True))
 
@@ -670,14 +752,26 @@ class GameApp(ctk.CTk):
         self.after(0, lambda: self.story_tab.set_controls_state(False, "Recapping..."))
         try:
             # We feed the AI the full Context (Inventory, World, Status) PLUS the (possibly empty) History.
-            prompt = f"Context Data:\n{context_data}\n\nRecent Chat History:\n{history}\n\nTask: Summarize the current situation in a single paragraph based on the Context and Status provided above. Do not output anything that starts with \"[[\". End by asking 'What do you do?'"
-            
+            prompt = f"Context Data:\n{context_data}\n\nRecent Chat History:\n{history}\n\nMANDATORY TASK: Summarize the current situation in a single paragraph based on the Context and Status provided above. \n\nMANDATORY TASK: Look through the names in this list: {VALID_SOUND_FILE_NAMES}, and choose one that sounds like it would be a good fit for the Player's current situation, and then output a '[[MUSIC: file_name_placeholder.mp3]]' tag, replacing file_name_placeholder.mp3 with one of the strings from that List. \n\nMANDATORY TASK: Do NOT use the [[STATUS]] tag. \n\nMANDATORY TASK: End by asking 'What do you do?'"
             resp = client.models.generate_content(
                 model=MODEL, 
                 contents=prompt, 
                 config=types.GenerateContentConfig(system_instruction=self.load_rules())
             )
             ai_text = resp.text or ""
+            logging.info(f"AI Recap without stripping: {ai_text}")
+            music_match = re.search(r"\[\[MUSIC:\s*(.*?)\]\]", ai_text)
+            if music_match:
+                track = music_match.group(1).strip()
+                #self.sound_manager.play_music(track, True)
+                # Run on main thread to be safe, though mixer is usually thread-safe
+                self.after(0, lambda: self.sound_manager.play_music(track))
+
+            # 2. SFX Tags: [[SOUND: filename]]
+            for match in re.finditer(r"\[\[SOUND:\s*(.*?)\]\]", ai_text):
+                sfx = match.group(1).strip()
+                #self.sound_manager.play_sfx(sfx)
+                self.after(0, lambda s=sfx: self.sound_manager.play_sfx(s))
             
             # 1. Remove Tags (The AI might try to reprint the status, we strip that)
             clean_text = re.sub(r"\[\[.*?\]\]", "", ai_text, flags=re.DOTALL).strip()
@@ -688,7 +782,7 @@ class GameApp(ctk.CTk):
             if clean_text:
                 self.story_tab.print_text(f"RECAP: {clean_text}", sender="GM")
         except Exception as e:
-            self.story_tab.print_text(f"Recap Error: {e}", sender="System")
+            logging.error(f"Recap Error: {e}")
         finally:
             self.after(0, lambda: self.story_tab.set_controls_state(True))
 
@@ -702,7 +796,7 @@ class GameApp(ctk.CTk):
                 try:
                     with open(widget.filename, "w", encoding="utf-8") as f:
                         f.write(widget.get_text())
-                except: pass
+                except Exception as e: logging.error(f"Error saving {name}: e")
 
         # Save History & Status
         history_path = os.path.join(self.current_adventure_path, "savegame.json")
@@ -714,9 +808,11 @@ class GameApp(ctk.CTk):
         try:
             with open(history_path, "w", encoding="utf-8") as f:
                 json.dump({"Chat History": history_list, "Status": status_data, "is_creating": self.is_creating}, f, indent=4)
-            print(f"Game saved to {self.current_adventure_path}")
+            logging.info(f"Game saved to {self.current_adventure_path}")
         except Exception as e:
-            print(f"Save failed: {e}")
+            logging.error(f"Save failed for {self.current_adventure_path}: {e}")
+            with open("LAST_SAVE_FAILED.txt", "w") as f:
+                logging.error(f"Save failed: {e}")
 
     def on_close(self):
         self.save_game()

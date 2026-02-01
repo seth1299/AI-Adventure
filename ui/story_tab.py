@@ -1,6 +1,7 @@
 import customtkinter as ctk
 from tqdm import tqdm
 from time_utils import normalize_day_time
+import logging
 
 class StoryTab(ctk.CTkFrame):
     def __init__(self, parent, on_send_callback, on_main_menu_callback):
@@ -113,7 +114,8 @@ class StoryTab(ctk.CTkFrame):
             nut_val = max(0, min(100, int(nutrition)))
             sta_val = max(0, min(100, int(stamina)))
 
-        except:
+        except Exception as e:
+            logging.error(f"Error setting 'nut_val' or 'sta_val' variable in update_status: {e}")
             nut_val = 100
             sta_val = 100
 
@@ -152,7 +154,7 @@ class StoryTab(ctk.CTkFrame):
             else: self.lbl_stamina.configure(text_color="#2196F3")
 
         except Exception as e:
-            print(f"UI Update Error: {e}")
+            logging.error(f"UI Update Error: {e}")
 
     def get_status_data(self):
         return self.status_cache
