@@ -3,7 +3,7 @@ import os
 import json
 from tabulate import tabulate
 from tqdm import tqdm
-
+import logging
 from time_utils import to_abs_minutes, from_abs_minutes
 
 
@@ -43,14 +43,18 @@ class ProcessingTab(ctk.CTkFrame):
             with open(self.data_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 return data if isinstance(data, list) else []
-        except Exception:
+        except Exception as e:
+            logging.error(f"Failed to load from file \"{self.data_path}\": {e}.")
             return []
 
     def save_data(self, data):
         if not self.data_path:
             return
-        with open(self.data_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4)
+        try:
+            with open(self.data_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            logging.error(f"Error saving processing tab: {e}")
         self.refresh_display()
 
     # ---------- Add ----------
@@ -83,13 +87,15 @@ class ProcessingTab(ctk.CTkFrame):
 
         try:
             req = float(work_required)
-        except Exception:
+        except Exception as e:
+            logging.error(f"Error setting 'req' variable in add_project: {e}")
             req = 0.0
         req = max(0.0, req)
 
         try:
             lvl = int(skill_level_at_start)
-        except Exception:
+        except Exception as e:
+            logging.error(f"Error setting 'lvl' variable in add_project: {e}")
             lvl = 0
         lvl = max(0, lvl)
 
@@ -116,7 +122,10 @@ class ProcessingTab(ctk.CTkFrame):
         return f"(Started Project: {name} (Skill: {skill_name}). Work Amount: {req}. Yields: {expected_yield}. Est: {est}.)"
 
     def remove_process(self, name):
-        data = self.load_data()
+        try:
+            data = self.load_data()
+        except Exception as e:
+            logging.error(f"Error loading data in remove_process: {e}")
         for i, item in enumerate(list(data)):
             if str(item.get("name", "")).lower() == str(name).lower():
                 data.pop(i)
@@ -168,13 +177,15 @@ class ProcessingTab(ctk.CTkFrame):
 
         try:
             hrs = float(hours_worked)
-        except Exception:
+        except Exception as e:
+            logging.error(f"Error setting 'hrs' variable in apply_work_hours: {e}")
             hrs = 0.0
         hrs = max(0.0, hrs)
 
         try:
             lvl = int(skill_level)
-        except Exception:
+        except Exception as e:
+            logging.error(f"Error setting 'lvl' variable in apply_work_hours: {e}")
             lvl = 0
         lvl = max(0, lvl)
 

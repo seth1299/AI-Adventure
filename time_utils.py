@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Tuple
+import logging
 
 # Legacy buckets (backwards compatibility)
 LEGACY_TIME_TO_CLOCK = {
@@ -46,7 +47,8 @@ class GameTime:
 def clamp_day(day: int) -> int:
     try:
         day = int(day)
-    except Exception:
+    except Exception as e:
+        logging.error(f"Error trying to clamp day in time_utils: {e}")
         day = 1
     return max(1, day)
 

@@ -2,6 +2,7 @@ import customtkinter as ctk
 import os
 import shutil
 from config import SAVES_DIR
+import logging
 
 class MainMenu(ctk.CTkFrame):
     """The startup screen to select a save file."""
@@ -81,7 +82,7 @@ class MainMenu(ctk.CTkFrame):
                     os.rename(old_path, new_path)
                     self.refresh_list() # Refresh to show new name
                 except Exception as e:
-                    print(f"Error renaming: {e}")
+                    logging.error(f"Error renaming in main_menu: {e}")
             
     def confirm_delete(self, save_name):
         dialog = ctk.CTkInputDialog(text=f"Type 'DELETE' to confirm deleting '{save_name}':", title="Delete Adventure")
@@ -93,7 +94,7 @@ class MainMenu(ctk.CTkFrame):
                 shutil.rmtree(full_path)
                 self.refresh_list()
             except Exception as e:
-                print(f"Error deleting: {e}")
+                logging.error(f"Error deleting in main_menu: {e}")
 
     def open_new_game_dialog(self):
         dialog = ctk.CTkInputDialog(text="Name your adventure:", title="New Adventure")
