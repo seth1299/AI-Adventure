@@ -58,6 +58,7 @@ class GameApp(ctk.CTk):
 
         self.current_adventure_path = None
         self.conversation_history = ""
+        self.karmic_streak = 0
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
@@ -233,6 +234,7 @@ class GameApp(ctk.CTk):
                 with open(history_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.is_creating = bool(data.get("is_creating", False))
+                    self.karmic_streak = data.get("karmic_streak", 0)
                     hist = data.get("Chat History", [])
                     self.conversation_history = "\n".join(hist) if isinstance(hist, list) else hist
                     
@@ -480,6 +482,42 @@ class GameApp(ctk.CTk):
             skill_entry = {"Name": clean_name, "Level": 0, "XP": 0, "Threshold": 5}
             data.append(skill_entry)
             self.story_tab.print_text(f"🆕 Learned new skill: {clean_name}!", sender="System")
+            
+        # 1. Roll the base die
+        die_roll = random.randint(1, 20)
+        original_roll = die_roll
+        karmic_msg = ""
+
+        # 2. Check for intervention
+        # If we have 3 or more bad rolls in a row, force a better roll
+        if self.karmic_streak <= -3:
+            # Reroll, but ensure it's at least a 10
+            new_roll = random.randint(10, 20)
+            if new_roll > die_roll:
+                die_roll = new_roll
+                # Reset streak slightly so it doesn't trigger every single time
+                self.karmic_streak = -1 
+
+        # If we have 3 or more high rolls in a row, nudge it down (optional, but fair)
+        elif self.karmic_streak >= 3:
+            new_roll = random.randint(1, 12)
+            if new_roll < die_roll:
+                die_roll = new_roll
+                self.karmic_streak = 1
+                
+        # 3. Update the Streak for next time
+        if die_roll < 8:
+            # If currently positive, reset to 0 first, then count down
+            if self.karmic_streak > 0: self.karmic_streak = 0
+            self.karmic_streak -= 1
+        elif die_roll > 13:
+            # If currently negative, reset to 0 first, then count up
+            if self.karmic_streak < 0: self.karmic_streak = 0
+            self.karmic_streak += 1
+        else:
+            # A "normal" roll (8-13) gently decays the streak toward zero
+            if self.karmic_streak > 0: self.karmic_streak -= 1
+            elif self.karmic_streak < 0: self.karmic_streak += 1
 
         # XP Logic
         skill_entry["XP"] += 1
@@ -807,7 +845,7 @@ class GameApp(ctk.CTk):
         
         try:
             with open(history_path, "w", encoding="utf-8") as f:
-                json.dump({"Chat History": history_list, "Status": status_data, "is_creating": self.is_creating}, f, indent=4)
+                json.dump({"Chat History": history_list, "Status": status_data, "is_creating": self.is_creating, "karmic_streak": self.karmic_streak}, f, indent=4)
             logging.info(f"Game saved to {self.current_adventure_path}")
         except Exception as e:
             logging.error(f"Save failed for {self.current_adventure_path}: {e}")
