@@ -16,6 +16,7 @@ import shutil
 # Import Config and UI
 from config import GEMINI_API_KEY, MODEL, SAVES_DIR, DEFAULT_RULES, SOUNDS_DIR, BASE_SOUNDS_DIR, VALID_SOUND_FILE_NAMES, APP_NAME
 from ui import MainMenu, InventoryTab, SkillsTab, MarkdownEditorTab, StoryTab, ProcessingTab
+from ui.recipes_tab import RecipesTab
 
 # --- Configuration ---
 load_dotenv()
@@ -26,7 +27,7 @@ log_file_path = os.path.join(SAVES_DIR, f"error_log.txt")
 logging.basicConfig(
     filename=log_file_path,
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%m/%d/%Y at %I:%M:S %p',
     filemode='w' # 'a' means Append mode (add to end of file), 'w' would overwrite each time
 )
 
@@ -58,6 +59,7 @@ class GameApp(ctk.CTk):
 
         self.current_adventure_path = None
         self.conversation_history = ""
+        self.karmic_streak = 0
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
@@ -67,7 +69,7 @@ class GameApp(ctk.CTk):
 
         # --- VIEW 2: Game Tabs (Hidden initially) ---
         self.tab_view = ctk.CTkTabview(self)
-        self.tabs = ["Story", "Inventory", "Skills", "Processing", "Character", "World", "Journal"]
+        self.tabs = ["Story", "Inventory", "Skills", "Processing", "Recipes", "Character", "World", "Journal"]
         self.notebook_widgets = {}
         for sound in VALID_SOUND_FILE_NAMES:
             current_path = os.path.join(BASE_SOUNDS_DIR, sound)
@@ -103,6 +105,11 @@ class GameApp(ctk.CTk):
                 proc = ProcessingTab(frame)
                 proc.grid(row=0, column=0, sticky="nsew")
                 self.notebook_widgets[tab_name] = proc
+                
+            elif tab_name == "Recipes":
+                rec = RecipesTab(frame)
+                rec.grid(row=0, column=0, sticky="nsew")
+                self.notebook_widgets[tab_name] = rec
             
             else:
                 editor = MarkdownEditorTab(frame, default_text=f"{tab_name}\n")
@@ -233,6 +240,7 @@ class GameApp(ctk.CTk):
                 with open(history_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.is_creating = bool(data.get("is_creating", False))
+                    self.karmic_streak = data.get("karmic_streak", 0)
                     hist = data.get("Chat History", [])
                     self.conversation_history = "\n".join(hist) if isinstance(hist, list) else hist
                     
@@ -379,47 +387,44 @@ class GameApp(ctk.CTk):
           [[MODIFY_STAT: Nutrition | SET 60]] (sets absolute)
         Clamps 0..100.
         """
-        stat = (stat_name or "").strip().lower()
-        raw = (raw_value or "").strip()
+        stat = (stat_name).strip().lower() or "0"
+        raw = (raw_value).strip() or "0"
+        logging.info(f"Stat: {stat}, Raw: {raw}")
 
         if stat not in ("stamina", "nutrition"):
            logging.error(f"System: Unknown stat '{stat_name}'.")
 
         cur = self.story_tab.get_status_data()
         cur_val = int(cur.get(stat, 100))
+        
+        nutrition = int(cur.get("nutrition", 100))
+        stamina = int(cur.get("stamina", 100))
 
         # Parse set vs delta
-        new_val = None
+        new_val = 0
         raw_upper = raw.upper()
         try:
             if raw_upper.startswith("SET "):
-                new_val = int(raw.split(None, 1)[1].strip())
-            elif raw.startswith(("+", "-")):
-                new_val = cur_val + int(raw)
+                if stat_name == "stamina":
+                    stamina = int(raw.split(None, 1)[1].strip())
+                else:
+                    nutrition = int(raw.split(None, 1)[1].strip())
             else:
                 # plain number => set
-                new_val = int(raw)
+                logging.info(f"\nAttempting to add {raw} to {cur_val}...")
+                if stat_name == "stamina":
+                    stamina += int(raw)
+                else:
+                    nutrition += int(raw)
+                logging.info(f"New value: {new_val}")
         except Exception:
             logging.error(f"System: Bad MODIFY_STAT value '{raw_value}'.")
-        finally:
-            if new_val == None:
-                new_val = -1000
-
-        new_val = max(0, min(100, int(new_val)))
 
         # Preserve current time/location/turn/day; only change the stat
         turn = cur.get("turn", "1")
         location = cur.get("location", "Unknown")
         day = cur.get("day", "Day 1")
         time = cur.get("time", "Morning")
-
-        nutrition = int(cur.get("nutrition", 100))
-        stamina = int(cur.get("stamina", 100))
-        if stat == "nutrition":
-            nutrition = new_val
-        else:
-            stamina = new_val
-
         self.after(0, lambda: self.story_tab.update_status(turn, location, day, time, nutrition=nutrition, stamina=stamina))
 
 
@@ -480,6 +485,42 @@ class GameApp(ctk.CTk):
             skill_entry = {"Name": clean_name, "Level": 0, "XP": 0, "Threshold": 5}
             data.append(skill_entry)
             self.story_tab.print_text(f"🆕 Learned new skill: {clean_name}!", sender="System")
+            
+        # 1. Roll the base die
+        die_roll = random.randint(1, 20)
+        original_roll = die_roll
+        karmic_msg = ""
+
+        # 2. Check for intervention
+        # If we have 3 or more bad rolls in a row, force a better roll
+        if self.karmic_streak <= -3:
+            # Reroll, but ensure it's at least a 10
+            new_roll = random.randint(10, 20)
+            if new_roll > die_roll:
+                die_roll = new_roll
+                # Reset streak slightly so it doesn't trigger every single time
+                self.karmic_streak = -1 
+
+        # If we have 3 or more high rolls in a row, nudge it down (optional, but fair)
+        elif self.karmic_streak >= 3:
+            new_roll = random.randint(1, 12)
+            if new_roll < die_roll:
+                die_roll = new_roll
+                self.karmic_streak = 1
+                
+        # 3. Update the Streak for next time
+        if die_roll < 8:
+            # If currently positive, reset to 0 first, then count down
+            if self.karmic_streak > 0: self.karmic_streak = 0
+            self.karmic_streak -= 1
+        elif die_roll > 13:
+            # If currently negative, reset to 0 first, then count up
+            if self.karmic_streak < 0: self.karmic_streak = 0
+            self.karmic_streak += 1
+        else:
+            # A "normal" roll (8-13) gently decays the streak toward zero
+            if self.karmic_streak > 0: self.karmic_streak -= 1
+            elif self.karmic_streak < 0: self.karmic_streak += 1
 
         # XP Logic
         skill_entry["XP"] += 1
@@ -623,6 +664,14 @@ class GameApp(ctk.CTk):
                         self.story_tab.print_text(sys_msg, sender="System")
                         self.conversation_history += f"\n{sys_msg}\n"
                         
+            # Tag: [[RECIPE: Name | Ingredients | Value]]
+            # Regex captures the content inside the tag
+            for match in re.finditer(r"\[\[RECIPE:\s*(.*?)\]\]", ai_text):
+                tag_content = match.group(1)
+                # Call the method in the new tab
+                res = self.notebook_widgets["Recipes"].add_recipe_from_tag(tag_content)
+                self.story_tab.print_text(res, sender="System")
+                        
             # Tag: [[START_PROCESS: Name | Description | Time_Slots | Yield]]
             # We need the CURRENT status to calculate the target time.
             current_status = self.story_tab.get_status_data() # Gets current UI values
@@ -729,7 +778,7 @@ class GameApp(ctk.CTk):
             else:
                 logging.info(f"AI text: {ai_text}")
                 clean_pattern = re.compile(
-    r"\[\[(WORLD_INFO|CHARACTER_INFO|SKILL|ADD|REMOVE|MODIFY_ITEM|MODIFY_STAT|STATUS|ROLL|START_GAME|XP|START_PROCESS|REMOVE_PROCESS|START_PROJECT|WORK|ADD_FOOD|CONSUME|MUSIC|SOUND).*?\]\]",
+    r"\[\[(WORLD_INFO|CHARACTER_INFO|SKILL|ADD|REMOVE|MODIFY_ITEM|MODIFY_STAT|STATUS|ROLL|START_GAME|XP|START_PROCESS|REMOVE_PROCESS|START_PROJECT|WORK|ADD_FOOD|CONSUME|MUSIC|SOUND|RECIPE).*?\]\]",
     re.DOTALL
 )
                 final_text = clean_pattern.sub("", ai_text)
@@ -807,7 +856,7 @@ class GameApp(ctk.CTk):
         
         try:
             with open(history_path, "w", encoding="utf-8") as f:
-                json.dump({"Chat History": history_list, "Status": status_data, "is_creating": self.is_creating}, f, indent=4)
+                json.dump({"Chat History": history_list, "Status": status_data, "is_creating": self.is_creating, "karmic_streak": self.karmic_streak}, f, indent=4)
             logging.info(f"Game saved to {self.current_adventure_path}")
         except Exception as e:
             logging.error(f"Save failed for {self.current_adventure_path}: {e}")
