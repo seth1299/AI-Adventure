@@ -4,3 +4,4 @@ from .editor_tab import MarkdownEditorTab
 from .inventory_tab import InventoryTab
 from .story_tab import StoryTab
 from .processing_tab import ProcessingTab
+from .recipes_tab import RecipesTab
