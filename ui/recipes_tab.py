@@ -44,11 +44,13 @@ class RecipesTab(ctk.CTkFrame):
             widget.destroy()
 
         if not self.csv_path: return
-        
-        logging.info(f"Attempting to load csv from {self.csv_path}...")
 
         # --- Logic: Copy Master File safely ---
         if not os.path.exists(self.csv_path):
+            logging.info("Created empty .csv file.")
+            df = pd.DataFrame(columns=self.columns)
+            df.to_csv(self.csv_path, index=False)
+            """
             base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
             master_path = os.path.join(base_path, "recipes.csv")
             
@@ -59,9 +61,8 @@ class RecipesTab(ctk.CTkFrame):
                 except Exception as e:
                     logging.error(f"Error copying master recipes: {e}")
             else:
-                logging.info("Created empty .csv file.")
-                df = pd.DataFrame(columns=self.columns)
-                df.to_csv(self.csv_path, index=False)
+            """
+            
         # -------------------------------------------------------------
         
         try:
@@ -193,8 +194,6 @@ class RecipesTab(ctk.CTkFrame):
                 if i < 3:
                     new_row[f"ingredient_{i+1}"] = name
                     new_row[f"ingredient_{i+1}_amount"] = amt
-
-            logging.info(f"New Recipes Tab Row: {new_row}")
 
             # 3. Load, Append, Save
             if os.path.exists(self.csv_path):
