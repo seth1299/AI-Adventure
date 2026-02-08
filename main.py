@@ -808,7 +808,6 @@ class GameApp(ctk.CTk):
                 config=types.GenerateContentConfig(system_instruction=self.load_rules())
             )
             ai_text = resp.text or ""
-            logging.info(f"AI Recap without stripping: {ai_text}")
             music_match = re.search(r"\[\[MUSIC:\s*(.*?)\]\]", ai_text)
             if music_match:
                 track = music_match.group(1).strip()
