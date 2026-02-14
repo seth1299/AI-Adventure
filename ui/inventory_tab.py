@@ -245,13 +245,15 @@ class InventoryTab(ctk.CTkFrame):
             meals = parts[5]
             spoil_day = parts[6] if len(parts) > 6 else "Day 99"
             spoil_time = parts[7] if len(parts) > 7 else "11:59 P.M."
+            nutrition_restored = parts[8] if len(parts) > 8 else 15
 
             # Metadata Dict
             meta = {
                 "type": "food",
                 "meals": int(meals),
                 "spoil_day": spoil_day,
-                "spoil_time": spoil_time
+                "spoil_time": spoil_time,
+                "nutrition_restored": nutrition_restored
             }
             
             # NEW: Dictionary Structure with 'meta' key
