@@ -6,8 +6,6 @@ Internal canonical representation:
 - Time-of-day is minutes since midnight (0..1439)
 - Absolute time is minutes since Day 1 12:00 AM:
     abs_minutes = (day-1)*1440 + minutes_since_midnight
-
-Supports legacy "time buckets" like "Morning".
 """
 
 from __future__ import annotations
@@ -16,19 +14,6 @@ import re
 from dataclasses import dataclass
 from typing import Tuple
 import logging
-
-# Legacy buckets (backwards compatibility)
-LEGACY_TIME_TO_CLOCK = {
-    "dawn": (6, 0, "AM"),
-    "morning": (9, 0, "AM"),
-    "noon": (12, 0, "PM"),
-    "afternoon": (3, 0, "PM"),
-    "evening": (6, 0, "PM"),
-    "night": (9, 0, "PM"),
-    "late night": (11, 0, "PM"),
-    "midnight": (12, 0, "AM"),
-}
-
 
 @dataclass(frozen=True)
 class GameTime:
@@ -64,7 +49,7 @@ def parse_day(day_str: str) -> int:
 
 
 def format_day(day: int) -> str:
-    return f"Day {clamp_day(day)}"
+    return f"{clamp_day(day)}"
 
 
 def _to_24h(hour12: int, ampm: str) -> int:
@@ -116,12 +101,6 @@ def parse_time(time_str: str) -> Tuple[int, int, str]:
         return (12, 0, "AM")
 
     s = str(time_str).strip()
-    s_low = s.lower()
-
-    # legacy buckets
-    for bucket, (h, m, ap) in LEGACY_TIME_TO_CLOCK.items():
-        if bucket in s_low:
-            return (h, m, ap)
 
     # HH:MM AM/PM
     m = re.match(r"^\s*(\d{1,2})\s*:\s*(\d{1,2})\s*([AaPp][Mm])\s*$", s)

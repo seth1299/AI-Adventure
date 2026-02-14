@@ -482,46 +482,40 @@ class GameApp(ctk.CTk):
                 break
         
         if not skill_entry:
-            skill_entry = {"Name": clean_name, "Level": 0, "XP": 0, "Threshold": 5}
+            skill_entry = {"Name": clean_name, "Level": 1, "XP": 0, "Threshold": 3}
             data.append(skill_entry)
-            self.story_tab.print_text(f"🆕 Learned new skill: {clean_name}!", sender="System")
+            self.story_tab.print_text(f"Learned new skill: {clean_name}!", sender="System")
             
         # 1. Roll the base die
         die_roll = random.randint(1, 20)
-        original_roll = die_roll
-        karmic_msg = ""
+        karmic_streak_triggered = False
 
         # 2. Check for intervention
-        # If we have 3 or more bad rolls in a row, force a better roll
+        # If we have had 3 or more bad rolls recently, force a better roll
         if self.karmic_streak <= -3:
             # Reroll, but ensure it's at least a 10
             new_roll = random.randint(10, 20)
             if new_roll > die_roll:
                 die_roll = new_roll
-                # Reset streak slightly so it doesn't trigger every single time
-                self.karmic_streak = -1 
+                karmic_streak_triggered = True
 
-        # If we have 3 or more high rolls in a row, nudge it down (optional, but fair)
-        elif self.karmic_streak >= 3:
+        # If we have had 6 or more high rolls recently, nudge it down (optional, but fair)
+        elif self.karmic_streak >= 6:
             new_roll = random.randint(1, 12)
             if new_roll < die_roll:
                 die_roll = new_roll
-                self.karmic_streak = 1
+                karmic_streak_triggered = True
                 
         # 3. Update the Streak for next time
-        if die_roll < 8:
-            # If currently positive, reset to 0 first, then count down
-            if self.karmic_streak > 0: self.karmic_streak = 0
-            self.karmic_streak -= 1
-        elif die_roll > 13:
-            # If currently negative, reset to 0 first, then count up
-            if self.karmic_streak < 0: self.karmic_streak = 0
-            self.karmic_streak += 1
+        if karmic_streak_triggered:
+            self.karmic_streak = 0
         else:
-            # A "normal" roll (8-13) gently decays the streak toward zero
-            if self.karmic_streak > 0: self.karmic_streak -= 1
-            elif self.karmic_streak < 0: self.karmic_streak += 1
-
+            if die_roll < 8:
+                self.karmic_streak -= 1
+            elif die_roll > 13:
+                self.karmic_streak += 1
+            else: pass # Do not adjust the streak if the result is "normal" (e.g. between 8 and 13)
+            
         # XP Logic
         skill_entry["XP"] += 1
         leveled_up = False
@@ -532,16 +526,37 @@ class GameApp(ctk.CTk):
             leveled_up = True
             
         skills_tab.save_data(data)
+        bonus_from_nutrition = self.story_tab.get_status_data().get("nutrition", 100)
+        bonus_from_stamina = self.story_tab.get_status_data().get("stamina", 100)
+        if bonus_from_nutrition >= 85:
+            bonus_from_nutrition = 1
+        elif bonus_from_nutrition >= 61 and bonus_from_nutrition <= 84:
+            bonus_from_nutrition = 0
+        elif bonus_from_nutrition >= 40 and bonus_from_nutrition <= 60:
+            bonus_from_nutrition = -1
+        else:
+            bonus_from_nutrition = -3
+            
+        if bonus_from_stamina >= 85:
+            bonus_from_stamina = 1
+        elif bonus_from_stamina >= 61 and bonus_from_stamina <= 84:
+            bonus_from_stamina = 0
+        elif bonus_from_stamina >= 40 and bonus_from_stamina <= 60:
+            bonus_from_stamina = -1
+        else:
+            bonus_from_stamina = -3
+            
+        skill_bonus = skill_entry["Level"]
+        total = die_roll + skill_bonus + bonus_from_nutrition + bonus_from_stamina
+        bonus_from_skill_message = f"{skill_bonus} (from Skill level)"
+        bonus_from_nutrition_message = f" +{bonus_from_nutrition} (bonus from high nutrition)" if bonus_from_nutrition > 0 else f"{bonus_from_nutrition} (penalty from low nutrition)" if bonus_from_nutrition < 0 else ""
+        bonus_from_stamina_message = f" +{bonus_from_stamina} (bonus from high stamina)" if bonus_from_stamina > 0 else f"{bonus_from_stamina} (penalty from low stamina)" if bonus_from_stamina < 0 else ""
         
-        bonus = skill_entry["Level"]
-        die_roll = random.randint(1, 20)
-        total = die_roll + bonus
-        
-        msg = f"🎲 Rolling {clean_name}: {die_roll} + ({bonus}) = {total}"
+        msg = f"Rolling {clean_name}: {die_roll} + ({bonus_from_skill_message}{bonus_from_nutrition_message}{bonus_from_stamina_message}) = {total}"
         
         if leveled_up:
             msg += (
-                f"\n🎉 **LEVEL UP!** {clean_name} is now Level {skill_entry['Level']}! "
+                f"\n**LEVEL UP!** {clean_name} is now Level {skill_entry['Level']}! "
                 f"{skill_entry['Threshold']} XP required until level {skill_entry['Level'] + 1}."
             )
         else:
@@ -773,12 +788,12 @@ class GameApp(ctk.CTk):
                 skill = roll_match.group(1).strip()
                 result = self.perform_skill_check(skill)
                 clean_prev = re.sub(r"\[\[(ADD|REMOVE):.*?\]\]", "", ai_text).strip()
-                follow_up = f"{prompt}\nGM: {clean_prev}\n[System: Player rolled {result} for {skill}.]"
+                follow_up = f"{prompt}\nGM: {clean_prev}\n[[System: Player rolled {result} for {skill}. Please determine if, based on the context of the story and the Player's Skill set and Inventory, if that is a success or a failure, and narrate the result accordingly.]]"
                 self.query_ai(follow_up, user_text, recursion_depth + 1)
             else:
                 logging.info(f"AI text: {ai_text}")
                 clean_pattern = re.compile(
-    r"\[\[(WORLD_INFO|CHARACTER_INFO|SKILL|ADD|REMOVE|MODIFY_ITEM|MODIFY_STAT|STATUS|ROLL|START_GAME|XP|START_PROCESS|REMOVE_PROCESS|START_PROJECT|WORK|ADD_FOOD|CONSUME|MUSIC|SOUND|RECIPE).*?\]\]",
+    r"\[\[(SYSTEM|WORLD_INFO|CHARACTER_INFO|SKILL|ADD|REMOVE|MODIFY_ITEM|MODIFY_STAT|STATUS|ROLL|START_GAME|XP|START_PROCESS|REMOVE_PROCESS|START_PROJECT|WORK|ADD_FOOD|CONSUME|MUSIC|SOUND|RECIPE).*?\]\]",
     re.DOTALL
 )
                 final_text = clean_pattern.sub("", ai_text)
