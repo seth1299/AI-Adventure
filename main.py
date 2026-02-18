@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from sound_manager import SoundManager
 import logging
 import shutil
+from rapidfuzz import process, fuzz
 
 # Import Config and UI
 from config import GEMINI_API_KEY, MODEL, SAVES_DIR, DEFAULT_RULES, SOUNDS_DIR, BASE_SOUNDS_DIR, VALID_SOUND_FILE_NAMES, APP_NAME
@@ -271,19 +272,7 @@ class GameApp(ctk.CTk):
                             break
                     self.story_tab.print_text(last_gm_msg, sender="GM")
                 else:
-                    # Normal game: Generate Recap
-                    recent = self.conversation_history[-2000:]
-                    # We grab the text from Inventory, World, Character, etc. NOW, 
-                    # because accessing these widgets inside the thread later might crash Tkinter.
-                    context_data = ""
-                    for name, widget in self.notebook_widgets.items():
-                        # Skip unnecessessary tabs such as inventory, skills, and processing, and only pass in relevant context for the purposes of a recap, e.g. the last bit of the conversation history.
-                        if name != "Story" and name != "Inventory" and name != "Skills" and name != "Processing": 
-                            if hasattr(widget, 'get_text'):
-                                context_data += f"\n[{name.upper()}]:\n{widget.get_text().strip()}\n"
-                    curr_stat = self.story_tab.get_status_data()
-                    context_data += f"\n[STATUS]\nLocation: {curr_stat['location']}\nDay: {curr_stat['day']}\nTime: {curr_stat['time']}\n"
-                    threading.Thread(target=self.generate_recap, args=(recent,context_data), daemon=True).start()
+                    self.generate_local_recap()
             except Exception as e:
                 logging.error(f"Error loading history: {e}")
         else:
@@ -293,6 +282,71 @@ class GameApp(ctk.CTk):
             threading.Thread(target=self.start_creation_wizard, daemon=True).start()
             
         self.game_loaded_successfully = True
+        
+    def generate_local_recap(self):
+        """Finds the last GM message in history and displays it."""
+        try:
+            # 1. Restore Music (Fuzzy Match)
+            self._attempt_local_music_restore()
+
+            # 2. Find last GM message
+            last_gm_msg = None
+            if self.conversation_history:
+                # We search backwards for the last time the GM spoke
+                last_gm_index = self.conversation_history.rfind("GM:")
+                
+                if last_gm_index != -1:
+                    # Slice from "GM:" to the end of the string
+                    text_chunk = self.conversation_history[last_gm_index:]
+                    # Remove the "GM:" label itself
+                    text_chunk = text_chunk.replace("GM:", "", 1).strip()
+                    
+                    # Safety: If "Player:" appears after this (unlikely in correct history), cut it off
+                    if "Player:" in text_chunk:
+                         text_chunk = text_chunk.split("Player:")[0].strip()
+                    
+                    last_gm_msg = text_chunk
+            
+            if last_gm_msg:
+                # Since query_ai already trimmed the "What do you do?" part, 
+                # this is pure narrative.
+                self.story_tab.print_text(f"RECAP: {last_gm_msg}", sender="GM")
+                # Re-add the prompt so the player knows it's their turn
+                self.story_tab.print_text("\n[System: It is your turn. What do you do?]", sender="System")
+            else:
+                self.story_tab.print_text("System: No recent history found to recap.", sender="System")
+                
+        except Exception as e:
+            logging.error(f"Local Recap Error: {e}")
+            
+    def _attempt_local_music_restore(self):
+        try:
+            status = self.story_tab.get_status_data()
+            location = status.get("location", "")
+            
+            if not location or not VALID_SOUND_FILE_NAMES:
+                return
+
+            # fuzzy match the Location string against the list of filenames
+            # scorer=fuzz.WRatio handles case insensitivity and partial matching well
+            # limit=1 returns the single best match tuple: (match, score, index)
+            match_tuple = process.extractOne(
+                location, 
+                VALID_SOUND_FILE_NAMES, 
+                scorer=fuzz.WRatio,
+                score_cutoff=55 # Don't play anything if confidence is too low
+            )
+            
+            if match_tuple:
+                best_match_filename = match_tuple[0]
+                # logging.info(f"Music Restore: '{location}' matched with '{best_match_filename}' (Score: {match_tuple[1]})")
+                self.sound_manager.play_music(best_match_filename)
+            else:
+                # Fallback
+                self.sound_manager.play_music("main_menu.mp3")
+
+        except Exception as e:
+            logging.error(f"Music restore error: {e}")
             
     def start_creation_wizard(self):
         """Sends the initial system prompt to start the interview."""
