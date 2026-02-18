@@ -81,6 +81,7 @@ DEFAULT_RULES = (
    - STOP generating text immediately after this tag. Wait for the Python Script to provide the dice result, and then, using the result from the dice roll, determine the outcome of the result and now you can narrate it.
    - Remember that the Die Rolls are NON-DIEGETIC. E.G., the Player is not actually physically rolling dice in the game world. The die roll is a metaphor for a combination of the Player's skill and raw luck.
    - Skill Checks are not limited to only the Skills that the Player currently has; the Player can learn any Skill they want to attempt to attempt.
+   - If the Player is learning a brand-new Skill, please output this tag: [[SKILL: SkillName | 1]], where SkillName is the name of the Skill, and "1" is the level it will start at (almost always 1).
 2. INVENTORY MANAGEMENT:
    - Use this generic tag for ALL non-Food items. 
    - **Format:** [[ADD: Item Type | Item Name | Description | Amount | Value]]

@@ -3,6 +3,8 @@ import customtkinter as ctk
 import pandas as pd
 import os, shutil, sys
 import logging
+import json
+from rapidfuzz import process, fuzz
 
 class RecipesTab(ctk.CTkFrame):
     def __init__(self, parent):
@@ -23,6 +25,15 @@ class RecipesTab(ctk.CTkFrame):
         self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.header_frame.pack(fill="x", padx=10, pady=5)
         ctk.CTkLabel(self.header_frame, text="KNOWN RECIPES", font=("Consolas", 20, "bold")).pack(pady=10)
+        
+        self.crafting_summary_label = ctk.CTkLabel(
+            self.header_frame, 
+            text="Analysis: ...", 
+            font=("Consolas", 12), 
+            text_color="#A8D0E6",  # Light blue for info
+            justify="left"
+        )
+        self.crafting_summary_label.pack(pady=5)
 
         # Scrollable Area
         self.scroll_frame = ctk.CTkScrollableFrame(self)
@@ -37,31 +48,54 @@ class RecipesTab(ctk.CTkFrame):
     def refresh_display(self):
         """Aliases load_recipes for clarity."""
         self.load_recipes()
+        
+    def _get_inventory_map(self):
+        """Reads inventory.json and flattens it into { 'name_lower': count }."""
+        if not self.base_path: return {}
+        inv_path = os.path.join(self.base_path, "inventory.json")
+        if not os.path.exists(inv_path): return {}
+        
+        try:
+            with open(inv_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            counts = {}
+            for cat, items in data.items():
+                for item in items:
+                    name = ""
+                    amt = 0
+                    
+                    # Handle Dict vs List format safely
+                    if isinstance(item, dict):
+                        name = item.get("name", "").strip().lower()
+                        try: amt = int(item.get("amount", 0))
+                        except: amt = 1
+                    elif isinstance(item, list) and len(item) > 2:
+                        name = item[0].strip().lower()
+                        try: amt = int(item[2])
+                        except: amt = 1
+                    
+                    if name:
+                        counts[name] = counts.get(name, 0) + amt
+            return counts
+        except Exception as e:
+            logging.error(f"Error reading inventory for recipes: {e}")
+            return {}
 
     def load_recipes(self):
         # Clear list
         for widget in self.scroll_frame.winfo_children():
             widget.destroy()
 
-        if not self.csv_path: return
+        if not self.csv_path: 
+            self.crafting_summary_label.configure(text="No Save Loaded.")
+            return
 
         # --- Logic: Copy Master File safely ---
         if not os.path.exists(self.csv_path):
             logging.info("Created empty .csv file.")
             df = pd.DataFrame(columns=self.columns)
             df.to_csv(self.csv_path, index=False)
-            """
-            base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
-            master_path = os.path.join(base_path, "recipes.csv")
-            
-            if os.path.exists(master_path):
-                try:
-                    shutil.copy(master_path, self.csv_path)
-                    logging.info(f"Copied master recipes to {self.csv_path}")
-                except Exception as e:
-                    logging.error(f"Error copying master recipes: {e}")
-            else:
-            """
             
         # -------------------------------------------------------------
         
@@ -71,9 +105,74 @@ class RecipesTab(ctk.CTkFrame):
             df.columns = df.columns.str.strip()
             # -------------------------------------------------
             
+            # --- [NEW] Calculate Craftable Amounts ---
+            inventory = self._get_inventory_map()
+            craftable_list = []
+            
+            for _, row in df.iterrows():
+                r_name = row.get("recipe_name", "Unknown")
+                
+                # We track the "Max Limit" for this specific recipe
+                # Start infinite, then clamp down based on each ingredient
+                max_craft = float('inf') 
+                limiting_item = "None"
+                has_ingredients = False
+                
+                limits = [] # List of tuples: (max_possible_with_this_ing, ing_name)
+
+                for i in range(1, 4):
+                    ing_name = row.get(f"ingredient_{i}") or "UNKNOWN"
+                    ing_req_raw = row.get(f"ingredient_{i}_amount") or 1
+                    
+                    # If this column has an ingredient
+                    if pd.notna(ing_name) and str(ing_name).strip():
+                        has_ingredients = True
+                        ing_name_clean = str(ing_name).strip()
+                        try: req = int(ing_req_raw)
+                        except: req = 1
+                        
+                        # How many do we have?
+                        # Using lower() to match the map we built
+                        target_name = ing_name_clean.lower()
+                        avail = inventory.get(ing_name_clean.lower(), 0)
+                        
+                        if avail == 0 and inventory:
+                            # score_cutoff=80 prevents "Iron Ore" matching "Iron Sword"
+                            # WRatio handles "Dandelion" vs "Dandelion Flower" nicely
+                            match_result = process.extractOne(target_name, inventory.keys(), scorer=fuzz.WRatio, score_cutoff=80)
+                            
+                            if match_result:
+                                # extractOne returns (match_key, score, index)
+                                best_key = match_result[0]
+                                score = match_result[1]
+                                avail = inventory[best_key]
+                                # Optional debug log to see what it matched
+                                # logging.info(f"Fuzzy Matched: '{target_name}' -> '{best_key}' (Score: {score})")
+                        
+                        # Math: available // required
+                        can_make_with_this = int(avail // req)
+                        limits.append((can_make_with_this, ing_name_clean))
+                
+                if has_ingredients and limits:
+                    # The ACTUAL limit is the lowest number in our list
+                    limits.sort(key=lambda x: x[0]) 
+                    max_craft = limits[0][0]
+                    limiting_item = limits[0][1]
+                    
+                    if max_craft > 0:
+                        craftable_list.append(f"• {r_name}: Can craft {max_craft} (Limited by {limiting_item})")
+                
+            # Update the Label
+            if craftable_list:
+                summary_text = "--- Craftable Now ---\n" + "\n".join(craftable_list)
+                self.crafting_summary_label.configure(text=summary_text, text_color="#A8D0E6")
+            else:
+                self.crafting_summary_label.configure(text="--- No Craftable Recipes (Check Inventory) ---", text_color="gray")
+
+            # -------------------------------------------------
+
             # Display each row
             for _, row in df.iterrows():
-                # logging.info(f"Creating recipe card for {row}...")
                 self._create_recipe_card(row)
         except Exception as e:
             logging.error(f"Error loading recipes CSV: {e}")
