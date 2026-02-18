@@ -47,7 +47,7 @@ class GameApp(ctk.CTk):
         self.title("AI RPG Adventure")
         self.geometry("1000x700")
         self.sound_manager = SoundManager(SOUNDS_DIR)
-        #self.sound_manager.play_music("main_menu.mp3")
+        self.creation_summary_path = os.path.join(SAVES_DIR, "creation_summary.txt")
         ctk.set_appearance_mode("Dark")
         # Use the helper to find the icon inside the EXE
         icon_path = resource_path("game_icon.ico")
@@ -161,6 +161,11 @@ class GameApp(ctk.CTk):
         except Exception as e:
             print(f"Failed to switch logger: {e}")
         
+    def clean_quotes(self, text):
+        """Replaces smart quotes (unicode) with standard ASCII quotes."""
+        if not text: return ""
+        return text.replace("‘", "'").replace("’", "'").replace("“", '"').replace("”", '"')
+    
     def _get_skill_level(self, skill_name: str) -> int:
         clean = (skill_name or "").split('(')[0].strip().title()
         try:
@@ -256,7 +261,6 @@ class GameApp(ctk.CTk):
                             status.get("stamina", 100)
                         )
                 
-                self.story_tab.print_text(f"System: Loaded '{save_name}'.", sender="System")
                 if self.is_creating:
                     # If we are mid-creation, DO NOT generate a recap (hallucination risk).
                     # Instead, find the last thing the GM said and repeat it so the player knows what to answer.
@@ -294,7 +298,11 @@ class GameApp(ctk.CTk):
         """Sends the initial system prompt to start the interview."""
         # Use config.py's CREATION_RULES specifically for this
         from config import CREATION_RULES 
-        
+        if os.path.exists(self.creation_summary_path):
+            try:
+                os.remove(self.creation_summary_path)
+            except Exception as e:
+                logging.error(f"Error clearing creation summary: {e}")
         prompt = "System: Begin the Step 1 of the Character Creation process."
         
         try:
@@ -304,8 +312,10 @@ class GameApp(ctk.CTk):
                 contents=prompt, 
                 config=types.GenerateContentConfig(system_instruction=CREATION_RULES)
             )
-            self.story_tab.print_text(resp.text, sender="GM")
-            self.conversation_history += f"GM: {resp.text}\n"
+            raw_text = self.clean_quotes(resp.text)
+            clean_text = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", raw_text, flags=re.DOTALL).strip()
+            self.story_tab.print_text(clean_text, sender="GM")
+            self.conversation_history += f"GM: {clean_text}\n"
         except Exception as e:
             logging.error(f"Creation Error: {e}")
 
@@ -464,8 +474,24 @@ class GameApp(ctk.CTk):
         context_data += status_context
 
         # 3. Build Prompt
-        recent_history = self.conversation_history[-3000:] if len(self.conversation_history) > 3000 else self.conversation_history
-        full_prompt = f"{context_data}\nHistory:\n{recent_history}\nPlayer: {user_text}\nGM:"
+        if self.is_creating:
+            # During creation, we prioritize the Summary over the raw history.
+            # We reduce raw history to 1500 chars to save space for the summary.
+            recent_history = self.conversation_history[-1500:] if len(self.conversation_history) > 1500 else self.conversation_history
+            
+            creation_memory = ""
+            if os.path.exists(self.creation_summary_path):
+                try:
+                    with open(self.creation_summary_path, "r", encoding="utf-8") as f:
+                        summaries = f.read()
+                    creation_memory = f"\n[CREATION_HISTORY_SUMMARY (DO NOT IGNORE)]:\n{summaries}\n"
+                except Exception as e:
+                    logging.error(f"Error reading creation summary: {e}")
+            
+            full_prompt = f"{context_data}\n{creation_memory}\nRecent Chat:\n{recent_history}\nPlayer: {user_text}\nGM:"
+        else:
+            recent_history = self.conversation_history[-3000:] if len(self.conversation_history) > 3000 else self.conversation_history
+            full_prompt = f"{context_data}\nHistory:\n{recent_history}\nPlayer: {user_text}\nGM:"
 
         # 4. Thread the AI Call
         threading.Thread(target=self.query_ai, args=(full_prompt, user_text), daemon=True).start()
@@ -578,15 +604,24 @@ class GameApp(ctk.CTk):
                 model=MODEL,
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    system_instruction=current_rules,
-                    temperature=0.7
+                    system_instruction=current_rules
                 )
             )
             ai_text = response.text or ""
             if not ai_text: raise ValueError("Empty response")
+            else: ai_text = self.clean_quotes(ai_text)
             
             # --- PARSE CREATION TAGS (Only if creating) ---
             if self.is_creating:
+                summary_match = re.search(r"\[\[STEP_SUMMARY:\s*(.*?)\]\]", ai_text, re.DOTALL)
+                if summary_match:
+                    new_summary = summary_match.group(1).strip()
+                    try:
+                        # Append to the file
+                        with open(self.creation_summary_path, "a", encoding="utf-8") as f:
+                            f.write(f"- {new_summary}\n")
+                    except Exception as e:
+                        logging.error(f"Error writing creation summary: {e}")
                 # 1. World Info -> World Tab
                 world_match = re.search(r"\[\[WORLD_INFO:\s*(.*?)\]\]", ai_text, re.DOTALL)
                 if world_match:
@@ -610,6 +645,11 @@ class GameApp(ctk.CTk):
                 if "[[START_GAME]]" in ai_text:
                     self.is_creating = False
                     self.story_tab.print_text("\n[System: Creation Complete. Saving Data...]\n", sender="System")
+                    if os.path.exists(self.creation_summary_path):
+                        try:
+                            os.remove(self.creation_summary_path)
+                        except Exception as e:
+                            logging.error(f"Error deleting creation summary: {e}")
                     self.save_game()
                     # Clean the tag out of the text so player doesn't see it
                     ai_text = ai_text.replace("[[START_GAME]]", "")
@@ -621,19 +661,16 @@ class GameApp(ctk.CTk):
             for match in re.finditer(r"\[\[ADD:\s*(.*?)\]\]", ai_text):
                 res = self.notebook_widgets["Inventory"].autonomous_add(match.group(1))
                 self.story_tab.print_text(res, sender="GM")
-                self.conversation_history += res
 
             for match in re.finditer(r"\[\[REMOVE:\s*(.*?)\]\]", ai_text):
                 res = self.notebook_widgets["Inventory"].autonomous_remove(match.group(1))
                 self.story_tab.print_text(res, sender="GM")
-                self.conversation_history += res
                 
             # 1.5 Modify Items
             for match in re.finditer(r"\[\[MODIFY_ITEM:\s*(.*?)\]\]", ai_text, re.DOTALL):
                 res = self.notebook_widgets["Inventory"].modify_item(match.group(1).strip())
                 if res:
                     self.story_tab.print_text(res, sender="System")
-                    self.conversation_history += f"\n{res}\n"
 
             # 1.6 Modify Stats
             for match in re.finditer(r"\[\[MODIFY_STAT:\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text):
@@ -792,10 +829,7 @@ class GameApp(ctk.CTk):
                 self.query_ai(follow_up, user_text, recursion_depth + 1)
             else:
                 logging.info(f"AI text: {ai_text}")
-                clean_pattern = re.compile(
-    r"\[\[(SYSTEM|WORLD_INFO|CHARACTER_INFO|SKILL|ADD|REMOVE|MODIFY_ITEM|MODIFY_STAT|STATUS|ROLL|START_GAME|XP|START_PROCESS|REMOVE_PROCESS|START_PROJECT|WORK|ADD_FOOD|CONSUME|MUSIC|SOUND|RECIPE).*?\]\]",
-    re.DOTALL
-)
+                clean_pattern = re.compile(r"\[\[[A-Z_]+:.*?\]\]", re.DOTALL)
                 final_text = clean_pattern.sub("", ai_text)
                 #final_text = re.sub(r"\[\[.*?\]\]", "", ai_text, flags=re.DOTALL).strip()
                 # Replace 3 or more newlines with just 2 (Standard paragraph break)
@@ -805,7 +839,14 @@ class GameApp(ctk.CTk):
                 # Only print if there is actually text left
                 if final_text:
                     self.story_tab.print_text(final_text, sender="GM")
-                    self.conversation_history += f"Player: {user_text}\nGM: {final_text}\n"
+                    text_to_save = final_text
+                    trim_markers = ["Possible Actions:", "Suggested Actions:", "### Actions", "What would you like to do?", "What do you do?", "What do you do now?"]
+                    for marker in trim_markers:
+                        if marker in text_to_save:
+                            text_to_save = text_to_save.split(marker)[0].strip()
+                            break
+
+                    self.conversation_history += f"Player: {user_text}\nGM: {text_to_save}\n"
 
         except Exception as e:
             logging.error(f"AI Error: {e}")
@@ -816,13 +857,14 @@ class GameApp(ctk.CTk):
         self.after(0, lambda: self.story_tab.set_controls_state(False, "Recapping..."))
         try:
             # We feed the AI the full Context (Inventory, World, Status) PLUS the (possibly empty) History.
-            prompt = f"Context Data:\n{context_data}\n\nRecent Chat History:\n{history}\n\nMANDATORY TASK: Summarize the current situation in a single paragraph based on the Context and Status provided above. \n\nMANDATORY TASK: Look through the names in this list: {VALID_SOUND_FILE_NAMES}, and choose one that sounds like it would be a good fit for the Player's current situation, and then output a '[[MUSIC: file_name_placeholder.mp3]]' tag, replacing file_name_placeholder.mp3 with one of the strings from that List. \n\nMANDATORY TASK: Do NOT use the [[STATUS]] tag. \n\nMANDATORY TASK: End by asking 'What do you do?'"
+            prompt = f"Context Data:\n{context_data}\n\nRecent Chat History:\n{history}\n\nMANDATORY TASK: Summarize the current situation in a single paragraph based on the Context and Status provided above. \n\nMANDATORY TASK: Look through the names in this list: {VALID_SOUND_FILE_NAMES}, and choose one that sounds like it would be a good fit for the Player's current situation, and then output a '[[MUSIC: file_name_placeholder.mp3]]' tag, replacing file_name_placeholder.mp3 with one of the strings from that List. \n\nMANDATORY TASK: Do NOT use the [[STATUS]] tag. \n\nMANDATORY TASK: End by asking 'What do you do now?'"
             resp = client.models.generate_content(
                 model=MODEL, 
                 contents=prompt, 
                 config=types.GenerateContentConfig(system_instruction=self.load_rules())
             )
             ai_text = resp.text or ""
+            if ai_text: ai_text = self.clean_quotes(ai_text)
             music_match = re.search(r"\[\[MUSIC:\s*(.*?)\]\]", ai_text)
             if music_match:
                 track = music_match.group(1).strip()
