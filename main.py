@@ -397,36 +397,40 @@ class GameApp(ctk.CTk):
           [[MODIFY_STAT: Nutrition | SET 60]] (sets absolute)
         Clamps 0..100.
         """
-        stat = (stat_name).strip().lower() or "0"
-        raw = (raw_value).strip() or "0"
+        stat = (stat_name).strip().lower() or "UNKNOWN"
+        raw = (raw_value).strip() or "UNKNOWN"
         logging.info(f"Stat: {stat}, Raw: {raw}")
 
         if stat not in ("stamina", "nutrition"):
-           logging.error(f"System: Unknown stat '{stat_name}'.")
+           logging.error(f"System: Unknown stat '{stat}'.")
 
         cur = self.story_tab.get_status_data()
-        cur_val = int(cur.get(stat, 100))
         
         nutrition = int(cur.get("nutrition", 100))
         stamina = int(cur.get("stamina", 100))
 
         # Parse set vs delta
-        new_val = 0
         raw_upper = raw.upper()
         try:
             if raw_upper.startswith("SET "):
-                if stat_name == "stamina":
+                if stat == "stamina":
                     stamina = int(raw.split(None, 1)[1].strip())
                 else:
                     nutrition = int(raw.split(None, 1)[1].strip())
             else:
                 # plain number => set
-                logging.info(f"\nAttempting to add {raw} to {cur_val}...")
-                if stat_name == "stamina":
+                
+                if stat == "stamina":
+                    logging.info(f"\nAttempting to add {raw} to stamina...")
+                    logging.info(f"\nOld stamina value: {stamina}")
                     stamina += int(raw)
+                    logging.info(f"\nNew stamina value: {stamina}")
                 else:
+                    logging.info(f"\nAttempting to add {raw} to nutrition...")
+                    logging.info(f"\nOld nutrition value: {nutrition}")
                     nutrition += int(raw)
-                logging.info(f"New value: {new_val}")
+                    logging.info(f"\nNew nutrition value: {nutrition}")
+                
         except Exception:
             logging.error(f"System: Bad MODIFY_STAT value '{raw_value}'.")
 
