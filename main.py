@@ -1,13 +1,14 @@
-import os, logging, shutil, random
+import os, random
 import customtkinter as ctk
 from dotenv import load_dotenv
 from sound_manager import SoundManager
-from rapidfuzz import process, fuzz
+import logging
+import shutil
 
 # Import Config and UI
 from config import SAVES_DIR, SOUNDS_DIR, BASE_SOUNDS_DIR, VALID_SOUND_FILE_NAMES
-from ui import MainMenu, InventoryTab, SkillsTab, MarkdownEditorTab, StoryTab, ProcessingTab
-from ui.recipes_tab import RecipesTab
+# [CHANGED] Simplified imports
+from ui import MainMenu, GameView
 
 # Managers
 from file_manager import FileManager
@@ -47,56 +48,46 @@ class GameApp(ctk.CTk):
         self.grid_rowconfigure(0, weight=1)
 
         # --- VIEW 1: Main Menu ---
-        # [CHANGED] Callback is now load_game
         self.main_menu = MainMenu(self, on_load_callback=self.load_game)
         self.main_menu.grid(row=0, column=0, sticky="nsew")
 
-        # --- VIEW 2: Game Tabs (Hidden initially) ---
-        self.tab_view = ctk.CTkTabview(self)
-        self.tabs = ["Story", "Inventory", "Skills", "Processing", "Recipes", "Character", "World", "Journal"]
-        self.notebook_widgets = {}
-        
+        # --- VIEW 2: Game View (Tabs) ---
+        # [CHANGED] Replaced manual tab construction with GameView
+        self.game_view = GameView(self, 
+                                  send_callback=self.ai_manager.handle_player_action,
+                                  menu_callback=self.return_to_menu)
+        # Note: We do not grid it yet; load_game handles that.
+
+        # Ensure sounds are present
         for sound in VALID_SOUND_FILE_NAMES:
             current_path = os.path.join(BASE_SOUNDS_DIR, sound)
             destination_path = os.path.join(SOUNDS_DIR, sound)
             if not os.path.exists(destination_path):
                  shutil.copyfile(current_path, destination_path)
-        
-        for tab_name in self.tabs:
-            self.tab_view.add(tab_name)
-            frame = self.tab_view.tab(tab_name)
-            frame.grid_columnconfigure(0, weight=1)
-            frame.grid_rowconfigure(0, weight=1)
-
-            if tab_name == "Story":
-                self.story_tab = StoryTab(frame, 
-                                          on_send_callback=self.ai_manager.handle_player_action,
-                                          on_main_menu_callback=self.return_to_menu)
-                self.story_tab.grid(row=0, column=0, sticky="nsew")
-                self.notebook_widgets[tab_name] = self.story_tab
-            elif tab_name == "Inventory":
-                inv = InventoryTab(frame)
-                inv.grid(row=0, column=0, sticky="nsew")
-                self.notebook_widgets[tab_name] = inv
-            elif tab_name == "Skills":
-                skl = SkillsTab(frame)
-                skl.grid(row=0, column=0, sticky="nsew")
-                self.notebook_widgets[tab_name] = skl
-            elif tab_name == "Processing":
-                proc = ProcessingTab(frame)
-                proc.grid(row=0, column=0, sticky="nsew")
-                self.notebook_widgets[tab_name] = proc
-            elif tab_name == "Recipes":
-                rec = RecipesTab(frame)
-                rec.grid(row=0, column=0, sticky="nsew")
-                self.notebook_widgets[tab_name] = rec
-            else:
-                editor = MarkdownEditorTab(frame, default_text=f"{tab_name}\n")
-                editor.grid(row=0, column=0, sticky="nsew")
-                self.notebook_widgets[tab_name] = editor
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         
+    # --- COMPATIBILITY PROPERTIES ---
+    # These allow AIManager and FileManager to access widgets 
+    # without needing to rewrite those files.
+    
+    @property
+    def notebook_widgets(self):
+        """Facade for accessing widgets inside GameView."""
+        return self.game_view.widgets
+
+    @property
+    def story_tab(self):
+        """Facade for accessing the StoryTab."""
+        return self.game_view.widgets["Story"]
+
+    @property
+    def tab_view(self):
+        """Facade for FileManager to toggle visibility."""
+        return self.game_view
+
+    # --- GAME LOGIC ---
+
     def _get_skill_level(self, skill_name: str) -> int:
         clean = (skill_name or "").split('(')[0].strip().title()
         try:
@@ -110,7 +101,6 @@ class GameApp(ctk.CTk):
         return 0
 
     def _advance_time_hours(self, hours: float):
-        # Local import to avoid circular dependency if needed, or rely on player/time_utils
         from time_utils import add_hours 
         gt = add_hours(str(self.player.day), self.player.time, hours)
         self.player.day = gt.as_day_string()
@@ -134,12 +124,11 @@ class GameApp(ctk.CTk):
         self.is_creating = False
         FileManager.update_logger_path(None)
         
-        self.tab_view.grid_forget()
+        self.game_view.grid_forget()
         self.title("AI RPG Adventure")
         self.main_menu.refresh_list()
         self.main_menu.grid(row=0, column=0, sticky="nsew")
 
-    # [CHANGED] Renamed to load_game and delegated to FileManager
     def load_game(self, save_name):
         FileManager.load_game(self, save_name)
 
@@ -157,7 +146,7 @@ class GameApp(ctk.CTk):
                     last_gm_msg = text_chunk
             
             if last_gm_msg:
-                self.story_tab.print_text(f"RECAP: {last_gm_msg}", sender="GM")
+                self.story_tab.print_text(f"{last_gm_msg}", sender="GM")
                 self.story_tab.print_text("\nWhat do you do now?", sender="System")
             else:
                 self.story_tab.print_text("System: No recent history found to recap.", sender="System")
@@ -166,6 +155,7 @@ class GameApp(ctk.CTk):
 
     def _attempt_local_music_restore(self):
         try:
+            from rapidfuzz import process, fuzz
             location = self.player.location
             if not location or not VALID_SOUND_FILE_NAMES: return
 
@@ -181,7 +171,7 @@ class GameApp(ctk.CTk):
             else:
                 self.sound_manager.play_music("main_menu.mp3")
         except ImportError:
-            pass # Graceful fail if rapidfuzz missing
+            pass 
         except Exception as e:
             logging.error(f"Music restore error: {e}")
 
@@ -242,7 +232,6 @@ class GameApp(ctk.CTk):
         self.story_tab.print_text(msg, sender="System")
         return total
 
-    # [CHANGED] Delegated to FileManager
     def save_game(self):
         FileManager.save_game(self)
 
