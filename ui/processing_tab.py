@@ -262,7 +262,7 @@ class ProcessingTab(ctk.CTkFrame):
                     stat = "DONE"
                 else:
                     tgt = from_abs_minutes(int(item.get("target_abs_minutes", 0)))
-                    prog = f"Due: {tgt.as_day_string()}, {tgt.as_time_string()}"
+                    prog = f"Due: Day {tgt.as_day_string()}, at {tgt.as_time_string()}"
                     stat = "Waiting..."
                 rows.append([item.get("name",""), "PROCESS", prog, y, stat, description])
             else:

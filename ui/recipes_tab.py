@@ -103,7 +103,7 @@ class RecipesTab(ctk.CTkFrame):
                     
                     if pd.notna(ing_name) and str(ing_name).strip():
                         amt = int(ing_amt) if pd.notna(ing_amt) else 1
-                        ingredients.append(f"{ing_name} (x{amt})")
+                        ingredients.append(f"{ing_name} (x{amt:.0f})")
                 
                 ing_str = ", ".join(ingredients)
                 text_output.append(f"- {name}: {ing_str}")
@@ -115,7 +115,7 @@ class RecipesTab(ctk.CTkFrame):
 
     def _create_recipe_card(self, row):
         card = ctk.CTkFrame(self.scroll_frame, fg_color=("gray85", "gray25"))
-        card.pack(fill="x", pady=5, padx=5)
+        card.pack(fill="x", pady=1, padx=1)
         
         # Left Side: Name and Value
         left_col = ctk.CTkFrame(card, fg_color="transparent")
@@ -142,11 +142,11 @@ class RecipesTab(ctk.CTkFrame):
         
         # Only show ingredient if it is not N/A
         if ingredient_1 != "N/A":
-            ctk.CTkLabel(left_col, text=f"{ingredient_1}: x{ingredient_1_amount}", font=("Arial", 12), text_color="gold", anchor="w").pack(fill="x")
+            ctk.CTkLabel(left_col, text=f"{ingredient_1}: x{ingredient_1_amount:.0f}", font=("Arial", 12), text_color="gold", anchor="w").pack(fill="x")
         if ingredient_2 != "N/A":
-            ctk.CTkLabel(left_col, text=f"{ingredient_2}: x{ingredient_2_amount}", font=("Arial", 12), text_color="gold", anchor="w").pack(fill="x")
+            ctk.CTkLabel(left_col, text=f"{ingredient_2}: x{ingredient_2_amount:.0f}", font=("Arial", 12), text_color="gold", anchor="w").pack(fill="x")
         if ingredient_3 != "N/A":
-            ctk.CTkLabel(left_col, text=f"{ingredient_3}: x{ingredient_3_amount}", font=("Arial", 12), text_color="gold", anchor="w").pack(fill="x")
+            ctk.CTkLabel(left_col, text=f"{ingredient_3}: x{ingredient_3_amount:.0f}", font=("Arial", 12), text_color="gold", anchor="w").pack(fill="x")
             
         ctk.CTkLabel(left_col, text=f"Value: {val}", font=("Arial", 12), text_color="gold", anchor="w").pack(fill="x")
 
