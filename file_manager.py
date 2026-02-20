@@ -225,8 +225,6 @@ class FileManager:
                 # Restore History
                 hist = data.get("Chat History", [])
                 app.conversation_history = "\n".join(hist) if isinstance(hist, list) else hist
-            
-                app.story_tab.print_text(f"System: Loaded '{save_name}'.", sender="System")
                 
                 # 6. Resume Game Logic
                 if app.is_creating:

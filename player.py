@@ -35,7 +35,12 @@ class Player:
 
     def update_world_state(self, turn, location, day, time):
         """Updates the tracking variables."""
-        if turn is not None: self.turn = turn
+        if turn is not None: 
+            try:
+                self.turn = int(turn)
+            except:
+                logging.error(f"Error converting turn to integer: {turn}")
+                self.turn = -1
         if location: self.location = location
         if day: self.day = day
         if time: self.time = time

@@ -93,10 +93,8 @@ class StoryTab(ctk.CTkFrame):
         self.chat_display.configure(state="normal")
         if sender == "Player":
             self.chat_display.insert("end", f"\n> {text}\n")
-        elif sender == "GM":
-            self.chat_display.insert("end", f"\n{text}\n")
         else:
-            self.chat_display.insert("end", f"\n[{text}]\n")
+            self.chat_display.insert("end", f"\n{text}\n")
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
 

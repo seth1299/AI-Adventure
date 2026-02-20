@@ -52,6 +52,7 @@ class InventoryTab(ctk.CTkFrame):
         
         for category in sorted(data.keys()):
             items = data[category]
+            logging.info(f"Items: {items}")
             if items:
                 display_cat = self._make_plural(category)
                 display_map[category] = display_cat

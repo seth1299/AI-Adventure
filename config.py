@@ -93,7 +93,7 @@ DEFAULT_RULES = (
      - EXAMPLE: [[ADD: Weapon | Iron Sword | A heavy blade with a chipped edge. | 1 | 5 Marks]]
    - To remove items, output this tag: [[REMOVE: Item Name | Amount]]
    - Inside of the 'Description' for 'Food'-type items, please include what Day and what Time of the day that Food will likely spoil / go bad by. Also, please note approximately how many more meals the Player will get out of it.
-   **Modifying Items:** If an item changes state (e.g. breaks, gets enchanted, or used up partially), use [[MODIFY_ITEM]].
+   **Modifying Items:** If an item changes state (e.g. breaks, gets enchanted, or used up partially), use [[MODIFY_ITEM]]. You can also use [[MODIFY_ITEM]] if only the amount of an item changes, for instance, if a Player has 4 ounces of salt and uses up 1 ounce, you can just use [[MODIFY_ITEM]] to change the amount of the player's current salt from 4 oz to 3 oz, instead of deleting and adding an entire item two separate times.
    - **Format:** [[MODIFY_ITEM: TargetName | NewName | NewDesc | NewAmount | NewValue]]
    - **Rule:** Use "SAME" or "SKIP" for fields you do NOT want to change.
    - **Example (Breaking an Axe):** [[MODIFY_ITEM: Iron Axe | Broken Iron Axe | The handle is snapped in two. | SAME | 0 Bits]]
@@ -107,6 +107,7 @@ DEFAULT_RULES = (
      - The System will automatically check the Date. If spoiled, it will tell you.
      - The System will automatically decrement the "Meals" counter.
      - Please remember to send [[CONSUME: name]] for every piece of food that the Player eats, it is very important.
+     - DO NOT USE [[REMOVE]] WHEN CONSUMING FOOD; THE PROGRAM WILL AUTOMATICALLY REMOVE THE FOOD FOR YOU, SO YOU DON'T NEED TO ALSO MANUALLY REMOVE IT.
 3. Update Game Status at the end of every turn using this tag:
    - [[STATUS: (Use the UPCOMING TURN number provided in context) | Current Location | Current In-Game Day | Current In-Game Time]]
    - Time must be in 12-hour format: "H:MM AM/PM" (example: "6:00 PM").
@@ -174,6 +175,8 @@ DEFAULT_RULES = (
    - **Example:** [[RECIPE: Banded Shield | Iron Ingot: 2, Wood: 2, Nails: 2 | 2 Crowns]]
    - You can list up to, but not more than, 3 ingredients, depending on how complex you think that recipe would be.
    - Do not use this tag if the player already knows the recipe.
+   - Please think logically about the amounts/sizes of the ingredients in the recipes. For instance, instead of saying "1x jar of honey", please specify "1 teaspoon of honey" or "1 ounce of honey", for example. Because logically, you wouldn't use an entire jar of jelly to make one singular jelly sandwich, for example.
+   - Please handle conversion of ounces/pounds/teaspoons/tablespoons logically before passing them to the [[RECIPE]] or any other tag.
 8. CRAFTING RULES:
     - If the player tries to craft an item, CHECK the [RECIPES] tab first to see if the Player knows a Recipe that sounds like it would be relevant to what the Player wants to attempt.
     - **Scenario A (Recipe Known):** If the recipe is in the Recipes Tab, verify they have the required ingredients in their [INVENTORY] tab.
