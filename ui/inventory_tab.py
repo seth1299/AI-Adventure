@@ -5,6 +5,7 @@ from tabulate import tabulate
 from time_utils import to_abs_minutes
 import logging
 from player import Player
+import re
 
 class InventoryTab(ctk.CTkFrame):
     """Displays Inventory dynamically based on Item Types."""
@@ -13,10 +14,49 @@ class InventoryTab(ctk.CTkFrame):
         self.data_path = ""
         
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(0, weight=1) 
+        self.grid_rowconfigure(0, weight=0)  # header
+        self.grid_rowconfigure(1, weight=1)  # textbox
         
-        self.display = ctk.CTkTextbox(self, font=("Consolas", 14), wrap="none", state="disabled")
-        self.display.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        # --- Header row (title + sort dropdown) ---
+        self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.header_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 0))
+        self.header_frame.grid_columnconfigure(0, weight=1)
+        
+        self.sep = ctk.CTkFrame(self, height=2, fg_color=("gray70", "gray30"))
+        self.sep.grid(row=0, column=0, sticky="ew", padx=10, pady=(45, 0))
+
+        ctk.CTkLabel(self.header_frame, text="Inventory", font=("Consolas", 18, "bold")).grid(
+            row=0, column=0, sticky="w"
+        )
+
+        self.sort_modes = [
+            "Name (A-Z)",
+            "Name (Z-A)",
+            "Value (High-Low)",
+            "Value (Low-High)",
+            "Amount (High-Low)",
+            "Amount (Low-High)",
+        ]
+        self.sort_mode = ctk.StringVar(value=self.sort_modes[0])
+
+        self.sort_menu = ctk.CTkOptionMenu(
+            self.header_frame,
+            values=self.sort_modes,
+            variable=self.sort_mode,
+            command=lambda _choice: self.refresh_display(),
+            width=200,
+        )
+        self.sort_menu.grid(row=0, column=1, sticky="e", padx=(10, 0))
+
+        # Text display (move this down a row)
+        self.display = ctk.CTkTextbox(
+            self,
+            font=("Consolas", 14),
+            wrap="none",
+            state="disabled",
+            border_width=1
+        )
+        self.display.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
 
     def set_base_path(self, folder_path):
         self.data_path = os.path.join(folder_path, "inventory.json")
@@ -44,6 +84,64 @@ class InventoryTab(ctk.CTkFrame):
     # --- Time Helper ---
     def _get_ticks(self, day, time_str):
         return int(to_abs_minutes(day, time_str))
+    
+    def _item_name(self, item) -> str:
+        if isinstance(item, dict):
+            return str(item.get("name", "")).strip()
+        if isinstance(item, list) and item:
+            return str(item[0]).strip()
+        return ""
+
+    def _item_amount(self, item) -> int:
+        # amount is usually stored as string; try to parse int safely
+        raw = ""
+        if isinstance(item, dict):
+            raw = str(item.get("amount", "0"))
+        elif isinstance(item, list) and len(item) > 2:
+            raw = str(item[2])
+        m = re.search(r"-?\d+", raw)
+        return int(m.group(0)) if m else 0
+
+    def _item_value_number(self, item) -> float:
+        """
+        Best-effort numeric parse:
+        - "10 Gold" -> 10
+        - "3.5" -> 3.5
+        - "N/A" or missing -> 0
+        NOTE: This does not convert currencies; it only reads the first number it finds.
+        """
+        raw = ""
+        if isinstance(item, dict):
+            raw = str(item.get("value", "0"))
+        elif isinstance(item, list) and len(item) > 3:
+            raw = str(item[3])
+
+        if not raw or raw.strip().upper() in ("N/A", "NA", "NONE"):
+            return 0.0
+
+        m = re.search(r"-?\d+(?:\.\d+)?", raw.replace(",", ""))
+        return float(m.group(0)) if m else 0.0
+
+    def _sorted_items_for_display(self, items):
+        mode = (self.sort_mode.get() or "").strip()
+
+        if mode == "Name (A-Z)":
+            return sorted(items, key=lambda it: self._item_name(it).lower())
+        if mode == "Name (Z-A)":
+            return sorted(items, key=lambda it: self._item_name(it).lower(), reverse=True)
+
+        if mode == "Value (High-Low)":
+            return sorted(items, key=lambda it: self._item_value_number(it), reverse=True)
+        if mode == "Value (Low-High)":
+            return sorted(items, key=lambda it: self._item_value_number(it))
+
+        if mode == "Amount (High-Low)":
+            return sorted(items, key=lambda it: self._item_amount(it), reverse=True)
+        if mode == "Amount (Low-High)":
+            return sorted(items, key=lambda it: self._item_amount(it))
+
+        # fallback
+        return items
 
     def refresh_display(self):
         data = self.load_data()
@@ -52,7 +150,7 @@ class InventoryTab(ctk.CTkFrame):
         display_map = {}
         
         for category in sorted(data.keys()):
-            items = data[category]
+            items = self._sorted_items_for_display(data[category])
             logging.info(f"Items: {items}")
             if items:
                 display_cat = self._make_plural(category)

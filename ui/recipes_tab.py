@@ -5,6 +5,7 @@ import os, shutil, sys
 import logging
 import json
 from rapidfuzz import process, fuzz
+import re
 
 class RecipesTab(ctk.CTkFrame):
     def __init__(self, parent):
@@ -220,32 +221,58 @@ class RecipesTab(ctk.CTkFrame):
         left_col = ctk.CTkFrame(card, fg_color="transparent")
         left_col.pack(side="left", padx=10, pady=5)
         
-        name = row.get("recipe_name", "Unknown")
+        name = str(row.get("recipe_name", "Unknown"))
+        name = name.strip()
         
         # Helper to get value or N/A
         def get_val(key):
             val = row.get(key)
             # Check for NaN (Pandas uses float('nan') for empty cells)
             return val if pd.notna(val) else "N/A"
+        
+        def fmt_amount(raw):
+            """Safely format ingredient amount (CSV may store it as str)."""
+            if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+                return "1"
+
+            s = str(raw).strip()
+            if not s or s.upper() in ("N/A", "NA", "NONE"):
+                return "1"
+
+            # Try direct numeric parse
+            try:
+                return str(int(float(s)))
+            except Exception:
+                pass
+
+            # Fallback: pull first number out of strings like "3.8 ounces"
+            match = re.search(r"-?\d+(?:\.\d+)?", s.replace(",", ""))
+            if match:
+                try:
+                    return str(int(float(match.group(0))))
+                except Exception:
+                    return match.group(0)
+
+            return s
 
         # Safe getters using the stripped keys
-        ingredient_1 = get_val("ingredient_1")
+        ingredient_1 = str(get_val("ingredient_1")).strip()
         ingredient_1_amount = get_val("ingredient_1_amount")
-        ingredient_2 = get_val("ingredient_2")
+        ingredient_2 = str(get_val("ingredient_2")).strip()
         ingredient_2_amount = get_val("ingredient_2_amount")
-        ingredient_3 = get_val("ingredient_3") 
+        ingredient_3 = str(get_val("ingredient_3")).strip()
         ingredient_3_amount = get_val("ingredient_3_amount")
-        val = get_val("value")
+        val = str(get_val("value")).strip()
         
         ctk.CTkLabel(left_col, text=name, font=("Arial", 16, "bold"), anchor="w").pack(fill="x")
         
         # Only show ingredient if it is not N/A
         if ingredient_1 != "N/A":
-            ctk.CTkLabel(left_col, text=f"{ingredient_1}: x{ingredient_1_amount:.0f}", font=("Arial", 12), text_color="gold", anchor="w").pack(fill="x")
+            ctk.CTkLabel(left_col, text=f"{ingredient_1}: x{fmt_amount(ingredient_1_amount)}", font=("Arial", 12), text_color="gold", anchor="w").pack(fill="x")
         if ingredient_2 != "N/A":
-            ctk.CTkLabel(left_col, text=f"{ingredient_2}: x{ingredient_2_amount:.0f}", font=("Arial", 12), text_color="gold", anchor="w").pack(fill="x")
+            ctk.CTkLabel(left_col, text=f"{ingredient_2}: x{fmt_amount(ingredient_2_amount)}", font=("Arial", 12), text_color="gold", anchor="w").pack(fill="x")
         if ingredient_3 != "N/A":
-            ctk.CTkLabel(left_col, text=f"{ingredient_3}: x{ingredient_3_amount:.0f}", font=("Arial", 12), text_color="gold", anchor="w").pack(fill="x")
+            ctk.CTkLabel(left_col, text=f"{ingredient_3}: x{fmt_amount(ingredient_3_amount)}", font=("Arial", 12), text_color="gold", anchor="w").pack(fill="x")
             
         ctk.CTkLabel(left_col, text=f"Value: {val}", font=("Arial", 12), text_color="gold", anchor="w").pack(fill="x")
 
