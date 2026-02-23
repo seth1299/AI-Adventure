@@ -246,6 +246,12 @@ class AIManager:
             for match in re.finditer(r"\[\[CONSUME:\s*(.*?)\]\]", ai_text):
                 f_name = match.group(1).strip()
                 res = self.app.notebook_widgets["Inventory"].consume_food(f_name, self.app.player.day, self.app.player.time)
+                for match in re.finditer(r"\[\[MODIFY_STAT:\s*(.*?)\s*\|\s*(.*?)\]\]", res):
+                    stat_name = match.group(1).strip()
+                    stat_val = match.group(2).strip()
+                    self.app.player.modify_stat(stat_name, stat_val)
+                    self.app._sync_player_state_to_ui()
+                    res = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", res).strip()
                 self.app.story_tab.print_text(res, sender="System")
 
             # Recursive Logic (Rolls)

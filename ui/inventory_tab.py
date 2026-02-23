@@ -4,6 +4,7 @@ import json
 from tabulate import tabulate
 from time_utils import to_abs_minutes
 import logging
+from player import Player
 
 class InventoryTab(ctk.CTkFrame):
     """Displays Inventory dynamically based on Item Types."""
@@ -75,6 +76,8 @@ class InventoryTab(ctk.CTkFrame):
                                 extra_info = f" [Meals: {meta['meals']}"
                                 if "spoil_day" in meta:
                                     extra_info += f", Spoils: Day {meta['spoil_day']} at {meta['spoil_time']}."
+                                if "nutrition_restored" in meta:
+                                    extra_info += f", Nutrition Value: {meta['nutrition_restored']}"
                                 extra_info += "]"
                                 desc += extra_info
                     
@@ -273,7 +276,7 @@ class InventoryTab(ctk.CTkFrame):
             data[category].append(new_item)
 
             self.save_data(data)
-            return f"(Added {name} [Meals: {meals}, Spoils: Day {spoil_day} at {spoil_time}])."
+            return f"(Added {name} [Meals: {meals}, Spoils: Day {spoil_day} at {spoil_time}, Nutrition Restored: {nutrition_restored}])."
 
         except Exception as e:
             return f"System Error adding food: {e}"
@@ -292,10 +295,11 @@ class InventoryTab(ctk.CTkFrame):
                         
                         # 1. Spoilage Check
                         spoil_ticks = self._get_ticks(meta.get("spoil_day", "Day 99"), meta.get("spoil_time", "Midnight"))
+                        nutrition_restored = meta.get("nutrition_restored", 15)
                         
                         if current_ticks >= spoil_ticks:
                             items.pop(i)
-                            return f"System: You cannot eat {name}. It smells rotten (Spoiled on day {meta.get('spoil_day')} at {meta.get('spoil_time')}. You decide it's best to get rid of it.)."
+                            return f"System: You cannot eat {name}. It smells rotten (Spoiled on day {meta.get('spoil_day')} at {meta.get('spoil_time')}. You decide it's best to get rid of it.)[[REMOVE: {name} | 1]]."
 
                         # 2. Consumption Logic
                         meta["meals"] -= 1
@@ -309,6 +313,10 @@ class InventoryTab(ctk.CTkFrame):
                             # Edited in place
                             msg = f"(Ate a meal of {name}. {remaining} meals remaining.)"
                         
+                        if nutrition_restored > 0:
+                            nutrition_restored = str(nutrition_restored)
+                            nutrition_restored = "+" + nutrition_restored
+                        msg += f"[[MODIFY_STAT: NUTRITION | {nutrition_restored}]]"
                         self.save_data(data)
                         return msg
                     
