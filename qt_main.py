@@ -5,7 +5,7 @@ import logging
 from PySide6.QtWidgets import QApplication
 from file_manager import FileManager
 from qt_ui.main_window import MainWindow
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt
 from player import Player
 from sound_manager import SoundManager
 from config import SAVES_DIR, SOUNDS_DIR
@@ -40,16 +40,41 @@ class _NullWidget:
     # Recipes-ish
     def add_recipe_from_tag(self, *_a, **_k): return "[System: Recipe tag ignored in Qt build]"
 
+class _UiDispatcher(QObject):
+    run_now = Signal(object)          # callable
+    run_later = Signal(int, object)   # ms, callable
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.run_now.connect(self._run_now, Qt.ConnectionType.QueuedConnection)
+        self.run_later.connect(self._run_later, Qt.ConnectionType.QueuedConnection)
+
+    @Slot(object)
+    def _run_now(self, func) -> None:
+        try:
+            func()
+        except Exception:
+            logging.exception("UI dispatch error (run_now)")
+
+    @Slot(int, object)
+    def _run_later(self, ms: int, func) -> None:
+        try:
+            QTimer.singleShot(int(ms), func)
+        except Exception:
+            logging.exception("UI dispatch error (run_later)")
+            
 class QtStoryTabAdapter:
-    def __init__(self, story_panel):
+    def __init__(self, story_panel, dispatcher: _UiDispatcher):
         self._panel = story_panel
+        self._ui = dispatcher
 
     def print_text(self, text: str, sender: str = "GM") -> None:
-        self._panel.print_text(text, sender=sender)
+        self._ui.run_now.emit(lambda: self._panel.print_text(text, sender=sender))
 
     def set_controls_state(self, enabled: bool, status_text: str | None = None) -> None:
-        self._panel.set_controls_state(enabled, status_text)
+        self._ui.run_now.emit(lambda: self._panel.set_controls_state(enabled, status_text))
+        
+
 
 
 class QtAppContext:
@@ -57,6 +82,7 @@ class QtAppContext:
 
     def __init__(self, win):
         self.win = win
+        self.ui = _UiDispatcher(win)
 
         self.is_creating = False
         self.current_adventure_path = None
@@ -68,7 +94,7 @@ class QtAppContext:
         self.sound_manager = SoundManager(SOUNDS_DIR)
 
         # API surface AIManager expects
-        self.story_tab = QtStoryTabAdapter(win.story_panel)
+        self.story_tab = QtStoryTabAdapter(win.story_panel, self.ui)
 
         null = _NullWidget()
         self.notebook_widgets = {
@@ -84,7 +110,7 @@ class QtAppContext:
         self._sync_player_state_to_ui()
 
     def after(self, ms: int, func) -> None:
-        QTimer.singleShot(int(ms), func)
+        self.ui.run_later.emit(int(ms), func)
 
     def load_rules(self) -> str:
         return FileManager.get_rules(self.current_adventure_path)

@@ -78,7 +78,7 @@ class StoryPanel(QWidget):
         input_row.setSpacing(8)
 
         self.txt_input = QLineEdit()
-        self.txt_input.setPlaceholderText("Type your action...")
+        self.txt_input.setPlaceholderText("What do you do next?")
         self.txt_input.returnPressed.connect(self._emit_send)
         input_row.addWidget(self.txt_input, stretch=1)
 
@@ -135,10 +135,12 @@ class StoryPanel(QWidget):
         self.btn_send.setEnabled(enabled)
         self.btn_menu.setEnabled(enabled)
 
-        if status_text is not None:
-            if enabled:
-                self.txt_input.setPlaceholderText("Type your action...")
-            else:
+        if enabled:
+            # Always restore normal placeholder when re-enabled
+            self.txt_input.setPlaceholderText("What do you do next?")
+        else:
+            # Only override placeholder when disabling if provided
+            if status_text is not None:
                 self.txt_input.setPlaceholderText(status_text)
 
     def print_text(self, text: str, *, sender: str = "GM") -> None:
