@@ -9,7 +9,7 @@ from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt
 from player import Player
 from sound_manager import SoundManager
 from config import SAVES_DIR, SOUNDS_DIR
-import random
+import random, re
 
 class _NullWidget:
     """Safe no-op widget used during the Qt migration."""
@@ -17,6 +17,12 @@ class _NullWidget:
         return ""
 
     def set_text(self, _text: str) -> None:
+        return
+    
+    def set_base_path(self, *_a, **_k) -> None:
+        return
+
+    def save_now(self, *_a, **_k) -> None:
         return
 
     # Inventory-ish
@@ -74,7 +80,24 @@ class QtStoryTabAdapter:
     def set_controls_state(self, enabled: bool, status_text: str | None = None) -> None:
         self._ui.run_now.emit(lambda: self._panel.set_controls_state(enabled, status_text))
         
+class QtMarkdownTabAdapter:
+    """Thread-safe adapter around MarkdownPanel-like widgets."""
 
+    def __init__(self, panel, dispatcher: _UiDispatcher):
+        self._panel = panel
+        self._ui = dispatcher
+
+    def get_text(self) -> str:
+        return self._panel.get_text()
+
+    def set_text(self, text: str) -> None:
+        self._ui.run_now.emit(lambda t=text: self._panel.set_text(t))
+
+    def set_base_path(self, base_path: str) -> None:
+        self._ui.run_now.emit(lambda p=base_path: self._panel.set_base_path(p))
+
+    def save_now(self) -> None:
+        self._ui.run_now.emit(self._panel.save_now)
 
 
 class QtAppContext:
@@ -97,14 +120,17 @@ class QtAppContext:
         self.story_tab = QtStoryTabAdapter(win.story_panel, self.ui)
 
         null = _NullWidget()
+        world = QtMarkdownTabAdapter(getattr(win, "world_panel", null), self.ui)
+        journal = QtMarkdownTabAdapter(getattr(win, "journal_panel", null), self.ui)
+
         self.notebook_widgets = {
             "Inventory": null,
             "Skills": null,
             "Processing": null,
             "Recipes": null,
             "Character": null,
-            "World": null,
-            "Journal": null,
+            "World": world,
+            "Journal": journal,
         }
 
         self._sync_player_state_to_ui()
@@ -116,9 +142,141 @@ class QtAppContext:
         return FileManager.get_rules(self.current_adventure_path)
 
     def save_game(self) -> None:
-        # TODO: wire up saving in the Qt build
-        return
+        if not self.current_adventure_path:
+            return
 
+        # Save Markdown tabs
+        try:
+            for name in ("World", "Journal"):
+                w = self.notebook_widgets.get(name)
+                #if hasattr(w, "save_now"):
+                    #w.save_now()
+        except Exception:
+            logging.exception("Qt save: markdown save failed")
+
+        # Save JSON state (history + status)
+        try:
+            history_list = [line for line in (self.conversation_history or "").split("\n") if line.strip()]
+            status_data = self.player.get_status_dict()
+            save_data = {
+                "Chat History": history_list,
+                "Status": status_data,
+                "is_creating": bool(self.is_creating),
+                "karmic_streak": int(getattr(self.player, "karmic_streak", 0) or 0),
+            }
+            history_path = os.path.join(self.current_adventure_path, "savegame.json")
+            FileManager.save_json_data(history_path, save_data)
+        except Exception:
+            logging.exception("Qt save: savegame.json write failed")
+    
+    def _resolve_save_path_for_recap(self) -> str | None:
+        """Pick a save folder to read savegame.json from.
+        - Prefer current_adventure_path if set.
+        - Otherwise, pick the most recently modified save folder containing savegame.json.
+        """
+        if self.current_adventure_path:
+            return self.current_adventure_path
+
+        try:
+            best_path: str | None = None
+            best_mtime = -1.0
+            for name in os.listdir(SAVES_DIR):
+                p = os.path.join(SAVES_DIR, name)
+                if not os.path.isdir(p):
+                    continue
+                sg = os.path.join(p, "savegame.json")
+                if not os.path.exists(sg):
+                    continue
+                mtime = os.path.getmtime(sg)
+                if mtime > best_mtime:
+                    best_mtime = mtime
+                    best_path = p
+            return best_path
+        except Exception:
+            logging.exception("Failed to resolve save path for recap")
+            return None
+        
+    def load_savegame_state(self, save_path: str) -> dict:
+        """Load savegame.json and hydrate Player + app flags, then sync status UI."""
+        self.current_adventure_path = save_path
+
+        sg_path = os.path.join(save_path, "savegame.json")
+        data = FileManager.load_json_data(sg_path) or {}
+
+        # Basic flags
+        self.is_creating = bool(data.get("is_creating", False))
+
+        # Player meta
+        try:
+            self.player.karmic_streak = int(data.get("karmic_streak", 0) or 0)
+        except Exception:
+            self.player.karmic_streak = 0
+
+        # Player status
+        status_data = data.get("Status") or {}
+        if isinstance(status_data, dict) and status_data:
+            self.player.load_from_dict(status_data)
+
+        # History (keep around for later panels)
+        hist = data.get("Chat History") or []
+        if isinstance(hist, list):
+            self.conversation_history = "\n".join([h for h in hist if isinstance(h, str)])
+        elif isinstance(hist, str):
+            self.conversation_history = hist
+        else:
+            self.conversation_history = ""
+            
+        try:
+            self.notebook_widgets["World"].set_base_path(save_path)
+            self.notebook_widgets["Journal"].set_base_path(save_path)
+        except Exception:
+            logging.exception("Failed to load markdown tabs")
+
+        self._sync_player_state_to_ui()
+        return data
+
+    def generate_recap(self) -> None:
+        """Load the most recent savegame.json, sync status bar, then print a recap."""
+        try:
+            save_path = self._resolve_save_path_for_recap()
+            if not save_path:
+                self.story_tab.print_text("No save found to recap from.", sender="System")
+                return
+
+            data = self.load_savegame_state(save_path)
+            history = data.get("Chat History") or []
+
+            last_gm: str | None = None
+            if isinstance(history, list):
+                for line in reversed(history):
+                    if isinstance(line, str) and line.strip().startswith("GM:"):
+                        last_gm = line.strip()[len("GM:"):].strip()
+                        break
+
+            if not last_gm:
+                self.story_tab.print_text("No GM message found in savegame.json.", sender="System")
+                return
+
+            self.story_tab.print_text(last_gm, sender="GM")
+        except Exception:
+            logging.exception("Generate recap failed")
+            self.story_tab.print_text("Recap failed (see logs).", sender="System")
+
+    def _format_recap_text(self, text):
+        if not text: return ""
+        import re
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        _index = 0
+        _text_to_return = ""
+        
+        for sentence in sentences:
+            if _index % 2 == 0 and _index != 0:
+                _text_to_return += "\n\n"
+            _text_to_return += sentence + " "
+            _index += 1
+            
+        return _text_to_return
+    
     def _get_skill_level(self, _skill_name: str) -> int:
         return 0
 
@@ -129,15 +287,21 @@ class QtAppContext:
         return
 
     def _sync_player_state_to_ui(self) -> None:
+        """Thread-safe push of Player status into the Qt status header."""
         s = self.player.get_status_dict()
-        self.win.story_panel.set_status(
-            turn=s.get("turn"),
-            location=s.get("location"),
-            day=f"Day {s.get('day')}",
-            time=s.get("time"),
-            nutrition=str(s.get("nutrition")),
-            stamina=str(s.get("stamina")),
-        )
+
+        def _apply():
+            self.win.story_panel.set_status(
+                turn=s.get("turn"),
+                location=s.get("location"),
+                day=f"Day {s.get('day')}",
+                time=s.get("time"),
+                nutrition=str(s.get("nutrition")),
+                stamina=str(s.get("stamina")),
+            )
+
+        # AIManager calls this from worker threads; dispatch to UI thread.
+        self.ui.run_now.emit(_apply)
 
 def main() -> int:
     FileManager.setup_initial_logging()
@@ -161,7 +325,7 @@ def main() -> int:
     win.app = app_ctx
     win.ai_manager = AIManager(app_ctx)
     win.show()
-
+    QTimer.singleShot(0, app_ctx.generate_recap)
     return app.exec()
 
 

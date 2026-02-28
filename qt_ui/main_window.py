@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QDockWidget,
     QWidget,
 )
-
+from .markdown_panel import MarkdownPanel
 from .story_panel import StoryPanel
 from .stub_panels import StubPanel
 from ai_manager import AIManager
@@ -45,8 +45,10 @@ class MainWindow(QMainWindow):
         self._add_dock("Processing", StubPanel("Processing (stub)"), area=Qt.DockWidgetArea.BottomDockWidgetArea)
         self._add_dock("Recipes", StubPanel("Recipes (stub)"), area=Qt.DockWidgetArea.BottomDockWidgetArea)
         self._add_dock("Character", StubPanel("Character (stub)"), area=Qt.DockWidgetArea.LeftDockWidgetArea)
-        self._add_dock("World", StubPanel("World (stub)"), area=Qt.DockWidgetArea.LeftDockWidgetArea)
-        self._add_dock("Journal", StubPanel("Journal (stub)"), area=Qt.DockWidgetArea.LeftDockWidgetArea)
+        self.world_panel = MarkdownPanel("World")
+        self.journal_panel = MarkdownPanel("Journal")
+        self._add_dock("World", self.world_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
+        self._add_dock("Journal", self.journal_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
 
         # Allow docks to tab together when dragged into same area
         self.setDockOptions(

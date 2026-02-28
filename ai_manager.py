@@ -21,13 +21,15 @@ class AIManager:
 
     def start_creation_wizard(self):
         """Sends the initial system prompt to start the interview."""
+        
         # Ensure summary path is clean
         if os.path.exists(self.app.creation_summary_path):
             try:
                 os.remove(self.app.creation_summary_path)
             except Exception as e:
                 logging.error(f"Error clearing creation summary: {e}")
-        
+                
+        self.app.player.update_world_state(1, "Character Creation", 1, "12:00 A.M.")
         prompt = "System: Begin the Step 1 of the Character Creation process."
         
         try:
