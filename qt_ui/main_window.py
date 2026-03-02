@@ -11,6 +11,12 @@ from .markdown_panel import MarkdownPanel
 from .story_panel import StoryPanel
 from .stub_panels import StubPanel
 from ai_manager import AIManager
+from PySide6.QtWidgets import QDialog
+from .main_menu_dialog import MainMenuDialog
+from config import SAVES_DIR
+from file_manager import FileManager
+import os
+import threading
 
 
 class MainWindow(QMainWindow):
@@ -96,5 +102,43 @@ class MainWindow(QMainWindow):
         self.ai_manager.handle_player_action(text)
 
     def _on_menu_requested(self) -> None:
-        # Placeholder for later (menu dialog / view swap)
-        self.story_panel.print_text("Menu clicked (not wired yet).", sender="System")
+        if self.app is None:
+            self.story_panel.print_text("Menu not available (app context missing).", sender="System")
+            return
+
+        try:
+            self.app.save_game()
+        except Exception:
+            pass
+
+        dlg = MainMenuDialog(self)
+        if dlg.exec() != QDialog.accepted or not dlg.selected_save:
+            return
+
+        save_name = dlg.selected_save
+        save_path = os.path.join(SAVES_DIR, save_name)
+        savegame_path = os.path.join(save_path, "savegame.json")
+
+        FileManager.update_logger_path(save_name)
+        self.setWindowTitle(f"AI RPG Adventure (Qt) - {save_name}")
+        self.story_panel.set_log_text("")
+
+        if os.path.exists(savegame_path):
+            self.app.load_savegame_state(save_path)
+            self.app.generate_recap()
+            return
+
+        # New game flow
+        self.app.current_adventure_path = save_path
+        self.app.is_creating = True
+        self.app.conversation_history = ""
+        try:
+            for w in self.app.notebook_widgets.values():
+                w.set_base_path(save_path)
+        except Exception:
+            pass
+
+        self.app._sync_player_state_to_ui()
+        self.story_panel.print_text("System: Initialization Sequence Started...", sender="System")
+        if self.ai_manager is not None:
+            threading.Thread(target=self.ai_manager.start_creation_wizard, daemon=True).start()

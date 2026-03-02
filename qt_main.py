@@ -10,6 +10,8 @@ from player import Player
 from sound_manager import SoundManager
 from config import SAVES_DIR, SOUNDS_DIR
 import random, re
+from qt_ui.main_menu_dialog import MainMenuDialog
+import threading
 
 class _NullWidget:
     """Safe no-op widget used during the Qt migration."""
@@ -236,8 +238,6 @@ class QtAppContext:
         try:
             for widget in self.notebook_widgets:
                 self.notebook_widgets[widget].set_base_path(save_path)
-            #self.notebook_widgets["World"].set_base_path(save_path)
-            #self.notebook_widgets["Journal"].set_base_path(save_path)
         except Exception:
             logging.exception("Failed to load markdown tabs")
 
@@ -330,11 +330,48 @@ def main() -> int:
     win = MainWindow()
     app_ctx = QtAppContext(win)
 
+        # ---- Main Menu first ----
+    menu = MainMenuDialog()
+    if menu.exec() != MainMenuDialog.accepted or not menu.selected_save:
+        return 0
+
+    save_name = menu.selected_save
+    save_path = os.path.join(SAVES_DIR, save_name)
+
+    win = MainWindow()
+    app_ctx = QtAppContext(win)
+
     from ai_manager import AIManager
     win.app = app_ctx
     win.ai_manager = AIManager(app_ctx)
+    win.setWindowTitle(f"AI RPG Adventure (Qt) - {save_name}")
     win.show()
-    QTimer.singleShot(0, app_ctx.generate_recap)
+
+    def _boot_selected_save() -> None:
+        FileManager.update_logger_path(save_name)
+
+        savegame_path = os.path.join(save_path, "savegame.json")
+        if os.path.exists(savegame_path):
+            app_ctx.load_savegame_state(save_path)
+            app_ctx.generate_recap()
+            return
+
+        # New game flow
+        app_ctx.current_adventure_path = save_path
+        app_ctx.is_creating = True
+        app_ctx.conversation_history = ""
+        try:
+            for w in app_ctx.notebook_widgets.values():
+                w.set_base_path(save_path)
+        except Exception:
+            logging.exception("Failed to set base path for panels")
+
+        app_ctx._sync_player_state_to_ui()
+        app_ctx.story_tab.print_text("System: Initialization Sequence Started...", sender="System")
+        if win.ai_manager != None:
+            threading.Thread(target=win.ai_manager.start_creation_wizard, daemon=True).start()
+    
+    QTimer.singleShot(0, _boot_selected_save)
     return app.exec()
 
 
