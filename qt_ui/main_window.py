@@ -17,6 +17,10 @@ from config import SAVES_DIR
 from file_manager import FileManager
 import os
 import threading
+from .inventory_panel import InventoryPanel
+from .skills_panel import SkillsPanel
+from .processing_panel import ProcessingPanel
+from .recipes_panel import RecipesPanel
 
 
 class MainWindow(QMainWindow):
@@ -53,10 +57,10 @@ class MainWindow(QMainWindow):
         #self._add_dock("Character", StubPanel("Character (stub)"), area=Qt.DockWidgetArea.LeftDockWidgetArea)
         self.world_panel = MarkdownPanel("World")
         self.journal_panel = MarkdownPanel("Journal")
-        self.inventory_panel = MarkdownPanel("Inventory")
-        self.skills_panel = MarkdownPanel("Skills")
-        self.processing_panel = MarkdownPanel("Processing")
-        self.recipes_panel = MarkdownPanel("Recipes")
+        self.inventory_panel = InventoryPanel()
+        self.skills_panel = SkillsPanel()
+        self.processing_panel = ProcessingPanel()
+        self.recipes_panel = RecipesPanel()
         self.character_panel = MarkdownPanel("Character")
         self._add_dock("World", self.world_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
         self._add_dock("Journal", self.journal_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
@@ -93,6 +97,16 @@ class MainWindow(QMainWindow):
 
     def get_dock(self, title: str) -> QDockWidget | None:
         return self._docks.get(title)
+    
+    def closeEvent(self, event):
+        """Ensure game state is saved when the window is closed."""
+        try:
+            if self.app is not None:
+                self.app.save_game()
+        except Exception:
+            pass
+
+        super().closeEvent(event)
     
     def _on_send_requested(self, text: str) -> None:
         if self.ai_manager is None:

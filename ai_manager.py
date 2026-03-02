@@ -287,6 +287,11 @@ class AIManager:
                             break
 
                     self.app.conversation_history += f"Player: {user_text}\nGM: {text_to_save}\n"
+                    # --- Auto-save after each completed turn (Qt + CTk) ---
+                    try:
+                        self.app.save_game()
+                    except Exception as e:
+                        logging.error(f"Auto-save failed: {e}")
 
         except Exception as e:
             logging.error(f"AI Error: {e}")

@@ -13,6 +13,8 @@ import random, re
 from qt_ui.main_menu_dialog import MainMenuDialog
 import threading
 from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt, QThread
+from queue import Queue
 
 class _NullWidget:
     """Safe no-op widget used during the Qt migration."""
@@ -58,6 +60,34 @@ class _UiDispatcher(QObject):
         self.run_now.connect(self._run_now, Qt.ConnectionType.QueuedConnection)
         self.run_later.connect(self._run_later, Qt.ConnectionType.QueuedConnection)
 
+    def is_ui_thread(self) -> bool:
+        app = QApplication.instance()
+        if app is None:
+            return True
+        return QThread.currentThread() == app.thread()
+
+    def call_blocking(self, func):
+        """
+        Run `func` on the UI thread and return its result.
+        If we're already on the UI thread, run immediately.
+        """
+        if self.is_ui_thread():
+            return func()
+
+        q: Queue = Queue(maxsize=1)
+
+        def _wrapper():
+            try:
+                q.put((True, func()))
+            except Exception as e:
+                q.put((False, e))
+
+        self.run_now.emit(_wrapper)
+        ok, payload = q.get()
+        if ok:
+            return payload
+        raise payload
+
     @Slot(object)
     def _run_now(self, func) -> None:
         try:
@@ -83,24 +113,43 @@ class QtStoryTabAdapter:
     def set_controls_state(self, enabled: bool, status_text: str | None = None) -> None:
         self._ui.run_now.emit(lambda: self._panel.set_controls_state(enabled, status_text))
         
-class QtMarkdownTabAdapter:
-    """Thread-safe adapter around MarkdownPanel-like widgets."""
+class QtPanelAdapter:
+    """
+    Thread-safe adapter around Qt panels.
+
+    - get_text() is safe from worker threads.
+    - set_text(), set_base_path(), save_now() are executed on UI thread.
+    - Any other method calls (inventory/skills/processing/recipes helpers)
+      are forwarded safely via __getattr__.
+    """
 
     def __init__(self, panel, dispatcher: _UiDispatcher):
         self._panel = panel
         self._ui = dispatcher
 
     def get_text(self) -> str:
-        return self._panel.get_text()
+        return str(self._ui.call_blocking(lambda: self._panel.get_text()))
 
     def set_text(self, text: str) -> None:
-        self._ui.run_now.emit(lambda t=text: self._panel.set_text(t))
+        self._ui.call_blocking(lambda t=text: self._panel.set_text(t))
 
     def set_base_path(self, base_path: str) -> None:
-        self._ui.run_now.emit(lambda p=base_path: self._panel.set_base_path(p))
+        self._ui.call_blocking(lambda p=base_path: self._panel.set_base_path(p))
 
     def save_now(self) -> None:
-        self._ui.run_now.emit(self._panel.save_now)
+        self._ui.call_blocking(self._panel.save_now)
+
+    def __getattr__(self, name):
+        """
+        Forward unknown attributes/methods to the underlying panel, safely.
+        If it's callable, we call it on the UI thread and return the result.
+        """
+        attr = getattr(self._panel, name)
+        if callable(attr):
+            def _wrapped(*args, **kwargs):
+                return self._ui.call_blocking(lambda: getattr(self._panel, name)(*args, **kwargs))
+            return _wrapped
+        return attr
 
 
 class QtAppContext:
@@ -123,13 +172,13 @@ class QtAppContext:
         self.story_tab = QtStoryTabAdapter(win.story_panel, self.ui)
 
         null = _NullWidget()
-        world = QtMarkdownTabAdapter(getattr(win, "world_panel", null), self.ui)
-        journal = QtMarkdownTabAdapter(getattr(win, "journal_panel", null), self.ui)
-        inventory = QtMarkdownTabAdapter(getattr(win, "inventory_panel", null), self.ui)
-        skills = QtMarkdownTabAdapter(getattr(win, "skills_panel", null), self.ui)
-        recipes = QtMarkdownTabAdapter(getattr(win, "recipes_panel", null), self.ui)
-        character = QtMarkdownTabAdapter(getattr(win, "character_panel", null), self.ui)
-        processing = QtMarkdownTabAdapter(getattr(win, "processing_panel", null), self.ui)
+        world = QtPanelAdapter(getattr(win, "world_panel", null), self.ui)
+        journal = QtPanelAdapter(getattr(win, "journal_panel", null), self.ui)
+        inventory = QtPanelAdapter(getattr(win, "inventory_panel", null), self.ui)
+        skills = QtPanelAdapter(getattr(win, "skills_panel", null), self.ui)
+        recipes = QtPanelAdapter(getattr(win, "recipes_panel", null), self.ui)
+        character = QtPanelAdapter(getattr(win, "character_panel", null), self.ui)
+        processing = QtPanelAdapter(getattr(win, "processing_panel", null), self.ui)
 
         self.notebook_widgets = {
             "Inventory": inventory,
@@ -287,11 +336,151 @@ class QtAppContext:
             
         return _text_to_return
     
-    def _get_skill_level(self, _skill_name: str) -> int:
+    def _skills_json_path(self) -> str | None:
+        """Return <save>/skills.json if we have a loaded save."""
+        if not self.current_adventure_path:
+            return None
+        return os.path.join(self.current_adventure_path, "skills.json")
+
+    def _load_skills_data(self) -> list[dict]:
+        path = self._skills_json_path()
+        if not path or not os.path.exists(path):
+            return []
+        data = FileManager.load_json_data(path)
+        return data if isinstance(data, list) else []
+
+    def _save_skills_data(self, data: list[dict]) -> None:
+        path = self._skills_json_path()
+        if not path:
+            return
+        try:
+            data.sort(key=lambda x: str((x or {}).get("Name", "")).lower())
+        except Exception:
+            pass
+        FileManager.save_json_data(path, data)
+
+    def _get_skill_level(self, skill_name: str) -> int:
+        clean = (skill_name or "").split("(")[0].strip().title()
+        try:
+            data = self._load_skills_data()
+            for item in data:
+                if str(item.get("Name", "")).lower() == clean.lower():
+                    return int(item.get("Level", 0) or 0)
+        except Exception as e:
+            logging.error(f"Get skill level error: {e}")
         return 0
 
-    def perform_skill_check(self, _skill_name: str) -> str:
-        return str(random.randint(1, 20))
+    def perform_skill_check(self, skill_name: str) -> int:
+        """Rolls 1d20 + skill level + nutrition/stamina modifiers, then updates skills.json."""
+        clean_name = (skill_name or "").split("(")[0].strip().title()
+
+        data = self._load_skills_data()
+        skill_entry = None
+        for item in data:
+            if str(item.get("Name", "")).lower() == clean_name.lower():
+                skill_entry = item
+                break
+
+        if not skill_entry:
+            skill_entry = {"Name": clean_name, "Level": 0, "XP": 0, "Threshold": 5}
+            data.append(skill_entry)
+            self.story_tab.print_text(f"Learned new skill: {clean_name}!", sender="System")
+
+        die_roll = random.randint(1, 20)
+
+        # Karma system (same logic as Tk build)
+        try:
+            new_roll, intervened = self.player.check_karma_intervention(die_roll)
+            die_roll = int(new_roll)
+            if not intervened:
+                self.player.update_karma(die_roll)
+        except Exception:
+            # If anything goes wrong, just keep the raw roll.
+            pass
+
+        # XP + level up
+        try:
+            skill_entry["XP"] = int(skill_entry.get("XP", 0) or 0) + 1
+        except Exception:
+            skill_entry["XP"] = 1
+
+        leveled_up = False
+        try:
+            xp = int(skill_entry.get("XP", 0) or 0)
+            th = int(skill_entry.get("Threshold", 5) or 5)
+        except Exception:
+            xp, th = 0, 5
+
+        if xp >= th:
+            try:
+                skill_entry["Level"] = int(skill_entry.get("Level", 0) or 0) + 1
+            except Exception:
+                skill_entry["Level"] = 1
+            skill_entry["XP"] = 0
+            try:
+                skill_entry["Threshold"] = int(skill_entry.get("Threshold", 5) or 5) + 2
+            except Exception:
+                skill_entry["Threshold"] = 7
+            leveled_up = True
+
+        self._save_skills_data(data)
+
+        # Modifiers
+        bonus_from_nutrition = 0
+        try:
+            if self.player.nutrition >= 85:
+                bonus_from_nutrition = 1
+            elif self.player.nutrition <= 40:
+                bonus_from_nutrition = -3
+        except Exception:
+            pass
+
+        bonus_from_stamina = 0
+        try:
+            if self.player.stamina >= 85:
+                bonus_from_stamina = 1
+            elif self.player.stamina <= 40:
+                bonus_from_stamina = -3
+        except Exception:
+            pass
+
+        try:
+            skill_bonus = int(skill_entry.get("Level", 0) or 0)
+        except Exception:
+            skill_bonus = 0
+
+        total = int(die_roll) + int(skill_bonus) + int(bonus_from_nutrition) + int(bonus_from_stamina)
+
+        # Message
+        bonus_from_skill_message = f"{skill_bonus} (from Skill level)"
+        bonus_from_nutrition_message = (
+            f" +{bonus_from_nutrition} (bonus from high nutrition)"
+            if bonus_from_nutrition > 0
+            else f" {bonus_from_nutrition} (penalty from low nutrition)"
+            if bonus_from_nutrition < 0
+            else ""
+        )
+        bonus_from_stamina_message = (
+            f" +{bonus_from_stamina} (bonus from high stamina)"
+            if bonus_from_stamina > 0
+            else f" {bonus_from_stamina} (penalty from low stamina)"
+            if bonus_from_stamina < 0
+            else ""
+        )
+
+        msg = (
+            f"Rolling {clean_name}: {die_roll} + ("
+            f"{bonus_from_skill_message}{bonus_from_nutrition_message}{bonus_from_stamina_message}"
+            f") = {total}"
+        )
+
+        if leveled_up:
+            msg += f"\nLEVEL UP! {clean_name} is now Level {skill_entry.get('Level', 0)}!"
+        else:
+            msg += f"\n{clean_name}: {skill_entry.get('XP', 0)} / {skill_entry.get('Threshold', 0)} XP towards next level up."
+
+        self.story_tab.print_text(msg, sender="System")
+        return total
 
     def _advance_time_hours(self, _hours: float) -> None:
         return
