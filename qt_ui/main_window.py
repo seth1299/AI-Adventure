@@ -40,15 +40,25 @@ class MainWindow(QMainWindow):
 
         # Docks (stubs for now)
         self._docks: dict[str, QDockWidget] = {}
-        self._add_dock("Inventory", StubPanel("Inventory (stub)"), area=Qt.DockWidgetArea.RightDockWidgetArea)
-        self._add_dock("Skills", StubPanel("Skills (stub)"), area=Qt.DockWidgetArea.RightDockWidgetArea)
-        self._add_dock("Processing", StubPanel("Processing (stub)"), area=Qt.DockWidgetArea.BottomDockWidgetArea)
-        self._add_dock("Recipes", StubPanel("Recipes (stub)"), area=Qt.DockWidgetArea.BottomDockWidgetArea)
-        self._add_dock("Character", StubPanel("Character (stub)"), area=Qt.DockWidgetArea.LeftDockWidgetArea)
+        #self._add_dock("Inventory", StubPanel("Inventory (stub)"), area=Qt.DockWidgetArea.RightDockWidgetArea)
+        #self._add_dock("Skills", StubPanel("Skills (stub)"), area=Qt.DockWidgetArea.RightDockWidgetArea)
+        #self._add_dock("Processing", StubPanel("Processing (stub)"), area=Qt.DockWidgetArea.BottomDockWidgetArea)
+        #self._add_dock("Recipes", StubPanel("Recipes (stub)"), area=Qt.DockWidgetArea.BottomDockWidgetArea)
+        #self._add_dock("Character", StubPanel("Character (stub)"), area=Qt.DockWidgetArea.LeftDockWidgetArea)
         self.world_panel = MarkdownPanel("World")
         self.journal_panel = MarkdownPanel("Journal")
+        self.inventory_panel = MarkdownPanel("Inventory")
+        self.skills_panel = MarkdownPanel("Skills")
+        self.processing_panel = MarkdownPanel("Processing")
+        self.recipes_panel = MarkdownPanel("Recipes")
+        self.character_panel = MarkdownPanel("Character")
         self._add_dock("World", self.world_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
         self._add_dock("Journal", self.journal_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
+        self._add_dock("Inventory", self.inventory_panel, area=Qt.DockWidgetArea.RightDockWidgetArea)
+        self._add_dock("Skills", self.skills_panel, area=Qt.DockWidgetArea.RightDockWidgetArea)
+        self._add_dock("Processing", self.processing_panel, area=Qt.DockWidgetArea.BottomDockWidgetArea)
+        self._add_dock("Recipes", self.recipes_panel, area=Qt.DockWidgetArea.BottomDockWidgetArea)
+        self._add_dock("Character", self.character_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
 
         # Allow docks to tab together when dragged into same area
         self.setDockOptions(

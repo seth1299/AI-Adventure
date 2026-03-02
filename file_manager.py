@@ -70,6 +70,7 @@ class FileManager:
         try:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
+                logging.info(f"Saved to {path}.")
         except Exception as e:
             logging.error(f"Error writing file {path}: {e}")
 

@@ -122,13 +122,18 @@ class QtAppContext:
         null = _NullWidget()
         world = QtMarkdownTabAdapter(getattr(win, "world_panel", null), self.ui)
         journal = QtMarkdownTabAdapter(getattr(win, "journal_panel", null), self.ui)
+        inventory = QtMarkdownTabAdapter(getattr(win, "inventory_panel", null), self.ui)
+        skills = QtMarkdownTabAdapter(getattr(win, "skills_panel", null), self.ui)
+        recipes = QtMarkdownTabAdapter(getattr(win, "recipes_panel", null), self.ui)
+        character = QtMarkdownTabAdapter(getattr(win, "character_panel", null), self.ui)
+        processing = QtMarkdownTabAdapter(getattr(win, "processing_panel", null), self.ui)
 
         self.notebook_widgets = {
-            "Inventory": null,
-            "Skills": null,
-            "Processing": null,
-            "Recipes": null,
-            "Character": null,
+            "Inventory": inventory,
+            "Skills": skills,
+            "Processing": processing,
+            "Recipes": recipes,
+            "Character": character,
             "World": world,
             "Journal": journal,
         }
@@ -143,14 +148,15 @@ class QtAppContext:
 
     def save_game(self) -> None:
         if not self.current_adventure_path:
+            logging.warning(f"Warning: No valid save path.")
             return
 
         # Save Markdown tabs
         try:
-            for name in ("World", "Journal"):
-                w = self.notebook_widgets.get(name)
-                #if hasattr(w, "save_now"):
-                    #w.save_now()
+            for widget in self.notebook_widgets:
+                w = self.notebook_widgets.get(widget)
+                if w != None and hasattr(w, "save_now"):
+                    w.save_now()
         except Exception:
             logging.exception("Qt save: markdown save failed")
 
@@ -165,6 +171,7 @@ class QtAppContext:
                 "karmic_streak": int(getattr(self.player, "karmic_streak", 0) or 0),
             }
             history_path = os.path.join(self.current_adventure_path, "savegame.json")
+            logging.info(f"Saved to {history_path}.")
             FileManager.save_json_data(history_path, save_data)
         except Exception:
             logging.exception("Qt save: savegame.json write failed")
@@ -227,8 +234,10 @@ class QtAppContext:
             self.conversation_history = ""
             
         try:
-            self.notebook_widgets["World"].set_base_path(save_path)
-            self.notebook_widgets["Journal"].set_base_path(save_path)
+            for widget in self.notebook_widgets:
+                self.notebook_widgets[widget].set_base_path(save_path)
+            #self.notebook_widgets["World"].set_base_path(save_path)
+            #self.notebook_widgets["Journal"].set_base_path(save_path)
         except Exception:
             logging.exception("Failed to load markdown tabs")
 
