@@ -86,7 +86,6 @@ class MainWindow(QMainWindow):
         dock.setFeatures(
             QDockWidget.DockWidgetFeature.DockWidgetMovable
             | QDockWidget.DockWidgetFeature.DockWidgetFloatable
-            | QDockWidget.DockWidgetFeature.DockWidgetClosable
         )
 
         self.addDockWidget(area, dock)
@@ -112,7 +111,7 @@ class MainWindow(QMainWindow):
             pass
 
         dlg = MainMenuDialog(self)
-        if dlg.exec() != QDialog.accepted or not dlg.selected_save:
+        if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.selected_save:
             return
 
         save_name = dlg.selected_save

@@ -12,6 +12,7 @@ from config import SAVES_DIR, SOUNDS_DIR
 import random, re
 from qt_ui.main_menu_dialog import MainMenuDialog
 import threading
+from PySide6.QtWidgets import QApplication, QDialog
 
 class _NullWidget:
     """Safe no-op widget used during the Qt migration."""
@@ -332,7 +333,7 @@ def main() -> int:
 
         # ---- Main Menu first ----
     menu = MainMenuDialog()
-    if menu.exec() != MainMenuDialog.accepted or not menu.selected_save:
+    if menu.exec() != QDialog.DialogCode.Accepted or not menu.selected_save:
         return 0
 
     save_name = menu.selected_save
