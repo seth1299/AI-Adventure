@@ -64,6 +64,7 @@ class MarkdownPanel(QWidget):
 
         # ---- Editor ----
         self.editor = QPlainTextEdit()
+        if self.name == "World": self.editor.setReadOnly(True)
         self.editor.setTabStopDistance(4 * self.editor.fontMetrics().horizontalAdvance(" "))
         self.editor.setFont(QFont("Consolas", 11))
         self.editor.textChanged.connect(self._on_text_changed)

@@ -137,7 +137,7 @@ class QtPanelAdapter:
         self._ui.call_blocking(lambda p=base_path: self._panel.set_base_path(p))
 
     def save_now(self) -> None:
-        self._ui.call_blocking(self._panel.save_now)
+        if self != None and hasattr(self._ui.call_blocking, "save_now"): self._ui.call_blocking(self._panel.save_now)
 
     def __getattr__(self, name):
         """
@@ -163,6 +163,8 @@ class QtAppContext:
         self.current_adventure_path = None
 
         self.creation_summary_path = os.path.join(SAVES_DIR, "creation_summary.txt")
+        self.secret_path = os.path.join(SAVES_DIR, "secret.txt")
+        self.world_path = os.path.join(SAVES_DIR, "world.md")
         self.conversation_history = ""
 
         self.player = Player()
@@ -174,12 +176,11 @@ class QtAppContext:
         null = _NullWidget()
         world = QtPanelAdapter(getattr(win, "world_panel", null), self.ui)
         journal = QtPanelAdapter(getattr(win, "journal_panel", null), self.ui)
-        inventory = QtPanelAdapter(getattr(win, "inventory_panel", null), self.ui)
         skills = QtPanelAdapter(getattr(win, "skills_panel", null), self.ui)
         recipes = QtPanelAdapter(getattr(win, "recipes_panel", null), self.ui)
         character = QtPanelAdapter(getattr(win, "character_panel", null), self.ui)
         processing = QtPanelAdapter(getattr(win, "processing_panel", null), self.ui)
-
+        inventory = QtPanelAdapter(getattr(win, "inventory_panel", null), self.ui)
         self.notebook_widgets = {
             "Inventory": inventory,
             "Skills": skills,
@@ -191,6 +192,8 @@ class QtAppContext:
         }
 
         self._sync_player_state_to_ui()
+        #self.sound_manager.stop_music()
+        #self.after(0, lambda s="Main_Menu_Or_Loading_Screen.mp3": self.sound_manager.play_sfx(s))
 
     def after(self, ms: int, func) -> None:
         self.ui.run_later.emit(int(ms), func)
@@ -305,18 +308,22 @@ class QtAppContext:
             data = self.load_savegame_state(save_path)
             history = data.get("Chat History") or []
 
-            last_gm: str | None = None
+            last_gm: str | None = ""
             if isinstance(history, list):
                 for line in reversed(history):
-                    if isinstance(line, str) and line.strip().startswith("GM:"):
-                        last_gm = line.strip()[len("GM:"):].strip()
-                        break
+                    if isinstance(line, str) and line.strip().startswith("GM:") and len(line.strip()) > 8:
+                        last_gm += line.strip()[len("GM:"):].strip() + "\n"
+                    elif isinstance(line, str) and line.strip().startswith("Player:") == False and len(line.strip()) > 8:
+                        last_gm += line.strip() + "\n"
+                    elif isinstance(line, str) and line.strip().startswith("Player"): break
 
             if not last_gm:
                 self.story_tab.print_text("No GM message found in savegame.json.", sender="System")
                 return
-
-            self.story_tab.print_text(last_gm, sender="GM")
+            
+            self.story_tab.print_text(last_gm[:-1:], sender="GM")
+            self.story_tab.print_text(f"\n\nWhat do you do now?")
+            
         except Exception:
             logging.exception("Generate recap failed")
             self.story_tab.print_text("Recap failed (see logs).", sender="System")
@@ -399,29 +406,30 @@ class QtAppContext:
             pass
 
         # XP + level up
-        try:
-            skill_entry["XP"] = int(skill_entry.get("XP", 0) or 0) + 1
-        except Exception:
-            skill_entry["XP"] = 1
-
-        leveled_up = False
-        try:
-            xp = int(skill_entry.get("XP", 0) or 0)
-            th = int(skill_entry.get("Threshold", 5) or 5)
-        except Exception:
-            xp, th = 0, 5
-
-        if xp >= th:
+        if skill_entry["Level"] < 5:
             try:
-                skill_entry["Level"] = int(skill_entry.get("Level", 0) or 0) + 1
+                skill_entry["XP"] = int(skill_entry.get("XP", 0) or 0) + 1
             except Exception:
-                skill_entry["Level"] = 1
-            skill_entry["XP"] = 0
+                skill_entry["XP"] = 1
+
+            leveled_up = False
             try:
-                skill_entry["Threshold"] = int(skill_entry.get("Threshold", 5) or 5) + 2
+                xp = int(skill_entry.get("XP", 0) or 0)
+                th = int(skill_entry.get("Threshold", 5) or 5)
             except Exception:
-                skill_entry["Threshold"] = 7
-            leveled_up = True
+                xp, th = 0, 5
+
+            if xp >= th:
+                try:
+                    skill_entry["Level"] = int(skill_entry.get("Level", 0) or 0) + 1
+                except Exception:
+                    skill_entry["Level"] = 1
+                skill_entry["XP"] = 0
+                try:
+                    skill_entry["Threshold"] = int(skill_entry.get("Threshold", 5) or 5) + 2
+                except Exception:
+                    skill_entry["Threshold"] = 7
+                leveled_up = True
 
         self._save_skills_data(data)
 
@@ -491,12 +499,12 @@ class QtAppContext:
 
         def _apply():
             self.win.story_panel.set_status(
-                turn=s.get("turn"),
-                location=s.get("location"),
-                day=f"Day {s.get('day')}",
-                time=s.get("time"),
-                nutrition=str(s.get("nutrition")),
-                stamina=str(s.get("stamina")),
+                turn=s.get("turn") or 1,
+                location=s.get("location") or "Character Creation",
+                day=f"{s.get('day')}" or "Day 1",
+                time=s.get("time") or "12:00 A.M.",
+                nutrition=str(s.get("nutrition") or 100),
+                stamina=str(s.get("stamina") or 100),
             )
 
         # AIManager calls this from worker threads; dispatch to UI thread.
@@ -541,10 +549,19 @@ def main() -> int:
         FileManager.update_logger_path(save_name)
 
         savegame_path = os.path.join(save_path, "savegame.json")
+        creation_summary_path = os.path.join(save_path, "creation_summary.txt")
+        secret_path = os.path.join(save_path, "secret.txt")
+        world_path = os.path.join(save_path, "world.md")
         if os.path.exists(savegame_path):
             app_ctx.load_savegame_state(save_path)
             app_ctx.generate_recap()
             return
+        if not os.path.exists(creation_summary_path): 
+            with open(creation_summary_path, "w", encoding="utf-8") as f: f.write("")
+        if not os.path.exists(secret_path): 
+            with open(secret_path, "w", encoding="utf-8") as f: f.write("")
+        if not os.path.exists(world_path): 
+            with open(world_path, "w", encoding="utf-8") as f: f.write("")
 
         # New game flow
         app_ctx.current_adventure_path = save_path

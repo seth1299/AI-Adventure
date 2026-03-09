@@ -271,11 +271,10 @@ class InventoryPanel(QWidget):
                     changes.append("Description updated")
                 if new_val:
                     changes.append("Value updated")
-                return f"(Updated {target}: {', '.join(changes)})"
+                return f""
             return f"System: Could not find item '{target}' to modify."
-        except Exception:
-            logging.exception("InventoryPanel.modify_item failed")
-            return f"Sorry, I had trouble modifying '{raw_args}'."
+        except Exception as e:
+            logging.exception(f"InventoryPanel.modify_item failed for arguments {raw_args}: {e}")
 
     def autonomous_add(self, raw_args: str):
         try:
@@ -435,7 +434,7 @@ class InventoryPanel(QWidget):
                         items.pop(i)
                         self.save_data(data)
                         return (
-                            f"System: You cannot eat {name}. It smells rotten "
+                            f"You cannot eat {name}. It smells rotten "
                             f"(Spoiled on {meta.get('spoil_day')} at {meta.get('spoil_time')}. "
                             f"You decide it's best to get rid of it.)[[REMOVE: {name} | 1]]."
                         )
