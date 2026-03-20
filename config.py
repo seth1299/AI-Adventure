@@ -8,7 +8,7 @@ load_dotenv(dotenv_path)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise RuntimeError("GEMINI_API_KEY not found. Make sure it exists in your .env or environment variables.")
-MODEL = "gemini-3-flash-preview"
+MODEL = "gemini-3.1-flash-lite-preview"
 SAVES_DIR = "saves"
 APP_NAME = "AI_RPG_ADVENTURE"
 
