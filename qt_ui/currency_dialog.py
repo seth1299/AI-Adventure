@@ -7,28 +7,33 @@ from PySide6.QtCore import Qt
 
 class CurrencyRow(QWidget):
     """A single row representing one currency type."""
-    def __init__(self, parent=None, name="", value=1):
+    def __init__(self, parent=None, name="", value=1, is_baseline=False):
         super().__init__(parent)
-        if self == None: 
-            return
+        self.is_baseline = is_baseline
         self.row_layout = QHBoxLayout(self)
         self.row_layout.setContentsMargins(0, 5, 0, 5)
 
         # Currency Name Input
         self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("e.g. Gold Piece")
+        self.name_input.setPlaceholderText("e.g. Copper Piece")
         self.name_input.setText(name)
         
-        # Currency Value Input (Using QSpinBox to enforce integers)
+        # Currency Value Input
         self.value_input = QSpinBox()
-        self.value_input.setRange(1, 1000000) # Prevents 0 or negative values
+        self.value_input.setRange(1, 1000000) 
         self.value_input.setValue(value)
         self.value_input.setSuffix(" Base Units")
         
         # Remove Button
         self.btn_remove = QPushButton("X")
         self.btn_remove.setFixedWidth(30)
-        # We will connect this click event in the main dialog
+
+        # --- NEW: Lock down the baseline row ---
+        if self.is_baseline:
+            self.value_input.setEnabled(False)      # Lock the value at 1
+            self.btn_remove.setEnabled(False)       # Disable the remove button
+            # Optional: Make it visually obvious it's the base unit
+            self.value_input.setToolTip("The Base Unit must always be worth 1.")
 
         self.row_layout.addWidget(QLabel("Name:"))
         self.row_layout.addWidget(self.name_input, stretch=2)
@@ -51,31 +56,25 @@ class CurrencyManagerDialog(QDialog):
         self.setMinimumWidth(400)
         self.setMinimumHeight(300)
 
-        # Main Layout
         self.main_layout = QVBoxLayout(self)
         
-        # Helper Text
         info_label = QLabel(
             "Define your currencies relative to your cheapest coin.\n"
-            "For example, if a Copper is your lowest, set its worth to 1.\n"
-            "If a Silver is worth 10 Coppers, set its worth to 10."
+            "For example, if a Copper is your lowest, type \"Copper\" into the \"1 base unit\" row.\n"
+            "If a Silver is worth 10 Coppers, type \"Silver\" followed by \"10 base units\"."
         )
         info_label.setWordWrap(True)
         self.main_layout.addWidget(info_label)
 
-        # Scrollable Area (In case they add a lot of currencies)
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_widget = QWidget()
         self.rows_layout = QVBoxLayout(self.scroll_widget)
         self.rows_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.scroll_area.setWidget(self.scroll_widget)
-        
         self.main_layout.addWidget(self.scroll_area)
 
-        # Buttons Layout
         self.btn_layout = QHBoxLayout()
-        
         self.btn_add = QPushButton("+ Add Currency")
         self.btn_add.clicked.connect(self.add_currency_row)
         
@@ -85,38 +84,45 @@ class CurrencyManagerDialog(QDialog):
         self.btn_layout.addWidget(self.btn_add)
         self.btn_layout.addStretch()
         self.btn_layout.addWidget(self.btn_save)
-        
         self.main_layout.addLayout(self.btn_layout)
 
         self.rows = []
 
-        # Load existing currencies or provide a default starting row
+        # Load existing currencies or provide default starting rows
         if existing_currencies:
+            has_baseline = False
             for cur in existing_currencies:
-                self.add_currency_row(cur.get("name"), cur.get("value"))
+                val = cur.get("value", 1)
+                
+                # The first currency with a value of 1 becomes our baseline
+                is_base = (val == 1) and not has_baseline
+                if is_base: has_baseline = True
+                
+                self.add_currency_row(cur.get("name", ""), val, is_baseline=is_base)
+                
+            # Fallback just in case they somehow loaded a file without a baseline
+            if not has_baseline:
+                self.add_currency_row("Base Coin", 1, is_baseline=True)
         else:
-            self.add_currency_row("Copper Piece", 1) # Default baseline
+            self.add_currency_row("Copper Piece", 1, is_baseline=True) # First one is locked
             self.add_currency_row("Silver Piece", 10)
 
-    def add_currency_row(self, name="", value=1):
+    def add_currency_row(self, name="", value=1, is_baseline=False):
         """Adds a new currency row to the UI."""
-        # Optional: Cap it at 9 if you still want to enforce a limit
         if len(self.rows) >= 9:
             QMessageBox.warning(self, "Limit Reached", "You can only have up to 9 currencies.")
             return
 
-        row = CurrencyRow(name=name, value=value)
+        row = CurrencyRow(name=name, value=value, is_baseline=is_baseline)
         self.rows_layout.addWidget(row)
         self.rows.append(row)
         
-        # Connect the remove button to delete this specific row
         row.btn_remove.clicked.connect(lambda: self.remove_currency_row(row))
 
     def remove_currency_row(self, row):
         """Removes a row from the UI and the tracking list."""
-        if len(self.rows) <= 1:
-            QMessageBox.warning(self, "Cannot Remove", "You must have at least one currency!")
-            return
+        if row.is_baseline:
+            return # Extra safeguard: Do not remove baseline rows!
             
         self.rows_layout.removeWidget(row)
         self.rows.remove(row)
@@ -127,10 +133,15 @@ class CurrencyManagerDialog(QDialog):
         self.final_currency_data = []
         for row in self.rows:
             data = row.get_data()
+            
+            # --- NEW: Prevent the baseline unit from having a blank name ---
+            if row.is_baseline and not data["name"]:
+                QMessageBox.warning(self, "Validation Error", "The Base Unit (Value 1) cannot have a blank name!")
+                return # Stops the save process and keeps the dialog open
+                
             if data["name"]:  # Only save rows that have a name typed in
                 self.final_currency_data.append(data)
                 
         # Sort them by value so they are mathematically ordered
         self.final_currency_data.sort(key=lambda x: x["value"])
-        
-        self.accept() # Built-in QDialog method to close with "Accepted" status
+        self.accept()
