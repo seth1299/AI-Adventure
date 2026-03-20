@@ -1,6 +1,6 @@
 # qt_ui/main_window.py
 from __future__ import annotations
-
+from qt_ui.currency_dialog import CurrencyManagerDialog
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -21,7 +21,7 @@ from .inventory_panel import InventoryPanel
 from .skills_panel import SkillsPanel
 from .processing_panel import ProcessingPanel
 from .recipes_panel import RecipesPanel
-from qt_ui.currency_dialog import CurrencyManagerDialog
+
 
 class MainWindow(QMainWindow):
     """
@@ -47,6 +47,7 @@ class MainWindow(QMainWindow):
 
         self.story_panel.send_requested.connect(self._on_send_requested)
         self.story_panel.menu_requested.connect(self._on_menu_requested)
+        self.story_panel.currency_requested.connect(self.open_currency_menu)
 
         # Docks (stubs for now)
         self._docks: dict[str, QDockWidget] = {}
@@ -158,17 +159,28 @@ class MainWindow(QMainWindow):
             
     from qt_ui.currency_dialog import CurrencyManagerDialog
 
-def open_currency_menu(self):
-    # Pass in any existing data if the player is editing their world
-    # existing_data = [{"name": "Gold", "value": 100}, ...] 
-    
-    dialog = CurrencyManagerDialog(self)
-    
-    # .exec() halts the main UI until the dialog is closed
-    if dialog.exec(): 
-        # The user clicked Save & Close
-        saved_currencies = dialog.final_currency_data
-        
-        # You can now save this to your `world.md`, `savegame.json`, 
-        # or a new `self.app.player.currencies` attribute!
-        print("Currencies Saved:", saved_currencies)
+    def open_currency_menu(self):
+        import logging
+        try:
+            # 1. Open the Dialog
+            dialog = CurrencyManagerDialog(self)
+            
+            # 2. Wait for the user to click Save & Close
+            if dialog.exec(): 
+                saved_currencies = dialog.final_currency_data
+                
+                # 3. Format the data into a nice string
+                msg = f"Currencies successfully updated ({len(saved_currencies)} total):\n"
+                for cur in saved_currencies:
+                    msg += f" • {cur['name']} (Worth: {cur['value']} base units)\n"
+                
+                # 4. Print it directly to the Game Log!
+                self.story_panel.print_text(msg, sender="System")
+                
+                # [Future Step]: We will eventually save this to self.app.player here!
+                
+        except Exception as e:
+            # If ANYTHING goes wrong, it will print in red/system text on the screen
+            error_msg = f"Error opening currency menu: {str(e)}"
+            logging.exception(error_msg)
+            self.story_panel.print_text(error_msg, sender="System Error")
