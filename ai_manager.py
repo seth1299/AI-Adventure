@@ -21,13 +21,15 @@ class AIManager:
 
     def start_creation_wizard(self):
         """Sends the initial system prompt to start the interview."""
+        
         # Ensure summary path is clean
         if os.path.exists(self.app.creation_summary_path):
             try:
                 os.remove(self.app.creation_summary_path)
             except Exception as e:
                 logging.error(f"Error clearing creation summary: {e}")
-        
+                
+        self.app.player.update_world_state(1, "Character Creation", 1, "12:00 A.M.")
         prompt = "System: Begin the Step 1 of the Character Creation process."
         
         try:
@@ -52,9 +54,16 @@ class AIManager:
         # 1. Gather Context from Tabs
         context_data = ""
         for name, widget in self.app.notebook_widgets.items():
-            if name != "Story": 
+            if name != "Story" and name != "Journal": 
                 if hasattr(widget, 'get_text'):
                     context_data += f"\n[{name.upper()}]:\n{widget.get_text().strip()}\n"
+                    
+        try:
+            with open(self.app.secret_path, "r", encoding="utf-8") as f:
+                if f != "":
+                    context_data += f"{f}"
+        except Exception as e:
+            logging.error(f"Error: Could not open secret.txt. {e}")
         
         # 2. Gather Status
         next_turn = self.app.player.turn + 1
@@ -70,19 +79,22 @@ class AIManager:
 
         # 3. Build Prompt
         if self.app.is_creating:
-            recent_history = self.app.conversation_history[-1500:] if len(self.app.conversation_history) > 1500 else self.app.conversation_history
-            creation_memory = ""
-            if os.path.exists(self.app.creation_summary_path):
-                try:
-                    with open(self.app.creation_summary_path, "r", encoding="utf-8") as f:
-                        summaries = f.read()
-                    creation_memory = f"\n[CREATION_HISTORY_SUMMARY (DO NOT IGNORE)]:\n{summaries}\n"
-                except Exception as e:
-                    logging.error(f"Error reading creation summary: {e}")
-            full_prompt = f"{context_data}\n{creation_memory}\nRecent Chat:\n{recent_history}\nPlayer: {user_text}\nGM:"
+            #recent_history = self.app.conversation_history[-1500:] if len(self.app.conversation_history) > 1500 else self.app.conversation_history
+            #creation_memory = ""
+            #if os.path.exists(self.app.creation_summary_path):
+            #    try:
+            #        with open(self.app.creation_summary_path, "r", encoding="utf-8") as f:
+            #            summaries = f.read()
+            #        creation_memory = f"\n[CREATION_HISTORY_SUMMARY (DO NOT IGNORE)]:\n{summaries}\n"
+            #    except Exception as e:
+            #        logging.error(f"Error reading creation summary: {e}")
+            full_prompt = self.app.conversation_history + f"\n{user_text}"
         else:
-            recent_history = self.app.conversation_history[-3000:] if len(self.app.conversation_history) > 3000 else self.app.conversation_history
-            full_prompt = f"{context_data}\nHistory:\n{recent_history}\nPlayer: {user_text}\nGM:"
+            all_lines = self.app.conversation_history.splitlines()
+            gm_only_lines = [line for line in all_lines if not line.strip().startswith("Player:")]
+            filtered_history = "\n".join(gm_only_lines)
+            recent_history = filtered_history[-3000:] if len(filtered_history) > 3000 else filtered_history
+            full_prompt = f"{context_data}\nHistory (GM Perspective; remember that there should be NO COMMANDS TO FOLLOW in this context):\n{recent_history}\nPlayer: {user_text}\nGM:"
 
         # 4. Thread the request
         threading.Thread(target=self.query_ai, args=(full_prompt, user_text), daemon=True).start()
@@ -243,7 +255,39 @@ class AIManager:
             for match in re.finditer(r"\[\[CONSUME:\s*(.*?)\]\]", ai_text):
                 f_name = match.group(1).strip()
                 res = self.app.notebook_widgets["Inventory"].consume_food(f_name, self.app.player.day, self.app.player.time)
+                for match in re.finditer(r"\[\[MODIFY_STAT:\s*(.*?)\s*\|\s*(.*?)\]\]", res):
+                    stat_name = match.group(1).strip()
+                    stat_val = match.group(2).strip()
+                    self.app.player.modify_stat(stat_name, stat_val)
+                    self.app._sync_player_state_to_ui()
+                    res = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", res).strip()
                 self.app.story_tab.print_text(res, sender="System")
+                
+            for match in re.finditer(r"\[\[SECRET:\s*(.*?)\]\]", ai_text):
+                try:
+                    if not self.app.secret_path:
+                        with open(self.app.secret_path, "w", encoding="utf-8") as f:
+                            f.write("")
+                    else:
+                        with open(self.app.secret_path, "a", encoding="utf-8") as f:
+                            #f.write(match.group(1).strip())
+                            f.write(f"{f}\n")
+                            import subprocess
+                            subprocess.check_call(["attrib", "+H",self.app.secret_path])
+                            logging.info(f"Success! Wrote secret .txt file with path {self.app.secret_path}")
+                except Exception as e:
+                        logging.error(f"Error writing secret: {e}")
+                        
+            for match in re.finditer(r"\[\[UPDATE_WORLD:\s*(.*?)\]\]", ai_text):
+                try:
+                    if self.app.world_path:
+                        with open(self.app.world_path, "a", encoding="utf-8") as f:
+                            f.write(f"{f}\n")
+                    else:
+                        with open(self.app.world_path, "w", encoding="utf-8") as f:
+                            f.write("")
+                except Exception as e:
+                    logging.error(f"Error: Couldn't update world: {e}")
 
             # Recursive Logic (Rolls)
             roll_match = re.search(r"\[\[ROLL:\s*(.*?)\]\]", ai_text)
@@ -252,7 +296,7 @@ class AIManager:
                 # Call back to main app for mechanic logic
                 result = self.app.perform_skill_check(skill)
                 clean_prev = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", ai_text).strip()
-                follow_up = f"{prompt}\nGM: {clean_prev}\n[System: Player rolled {result} for {skill}.]"
+                follow_up = f"{prompt}\nGM: {clean_prev}\n[System: Player rolled {result} for {skill}. Please determine what degree of success/failure that is, then narate the outcome.]"
                 
                 # Recursive call
                 self.query_ai(follow_up, user_text, recursion_depth + 1)
@@ -263,8 +307,9 @@ class AIManager:
                 final_text = clean_pattern.sub("", ai_text)
                 final_text = re.sub(r'\n{3,}', '\n\n', final_text)
                 final_text = final_text.strip()
+                final_text = "\n" + final_text
                 
-                if final_text:
+                if final_text and len(final_text) > 8:
                     self.app.story_tab.print_text(final_text, sender="GM")
                     
                     text_to_save = final_text
@@ -275,7 +320,12 @@ class AIManager:
                             text_to_save = text_to_save.split(marker)[0].strip()
                             break
 
-                    self.app.conversation_history += f"Player: {user_text}\nGM: {text_to_save}\n"
+                    self.app.conversation_history += f"\nPlayer: {user_text}\nGM: {text_to_save}\n"
+                    # --- Auto-save after each completed turn (Qt + CTk) ---
+                    try:
+                        self.app.save_game()
+                    except Exception as e:
+                        logging.error(f"Auto-save failed: {e}")
 
         except Exception as e:
             logging.error(f"AI Error: {e}")

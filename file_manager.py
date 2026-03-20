@@ -70,6 +70,7 @@ class FileManager:
         try:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
+                logging.info(f"Saved to {path}.")
         except Exception as e:
             logging.error(f"Error writing file {path}: {e}")
 
@@ -225,8 +226,6 @@ class FileManager:
                 # Restore History
                 hist = data.get("Chat History", [])
                 app.conversation_history = "\n".join(hist) if isinstance(hist, list) else hist
-            
-                app.story_tab.print_text(f"System: Loaded '{save_name}'.", sender="System")
                 
                 # 6. Resume Game Logic
                 if app.is_creating:

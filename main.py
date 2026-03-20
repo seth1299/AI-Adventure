@@ -1,4 +1,4 @@
-import os, random
+import os, random, re
 import customtkinter as ctk
 from dotenv import load_dotenv
 from sound_manager import SoundManager
@@ -131,7 +131,25 @@ class GameApp(ctk.CTk):
 
     def load_game(self, save_name):
         FileManager.load_game(self, save_name)
-
+        
+    def _format_recap_text(self, text):
+        if not text: return ""
+        
+        # 1. Split text into sentences (Lookbehind for punctuation [.!?] followed by whitespace)
+        # This keeps the punctuation attached to the sentence.
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        #logging.info(f"Sentences:\n{sentences}")
+        
+        _index = 0
+        _text_to_return = ""
+        for sentence in sentences:
+            if _index % 2 == 0 and _index != 0:
+                _text_to_return += "\n\n"
+            _text_to_return += sentence + " "
+            _index += 1
+        logging.info(f"Text to return: {_text_to_return}")
+        return _text_to_return
+    
     def generate_local_recap(self):
         try:
             self._attempt_local_music_restore()
@@ -146,8 +164,9 @@ class GameApp(ctk.CTk):
                     last_gm_msg = text_chunk
             
             if last_gm_msg:
+                last_gm_msg = self._format_recap_text(last_gm_msg)
                 self.story_tab.print_text(f"{last_gm_msg}", sender="GM")
-                self.story_tab.print_text("\nWhat do you do now?", sender="System")
+                self.story_tab.print_text("What do you do now?", sender="GM")
             else:
                 self.story_tab.print_text("System: No recent history found to recap.", sender="System")
         except Exception as e:
@@ -158,13 +177,17 @@ class GameApp(ctk.CTk):
             from rapidfuzz import process, fuzz
             location = self.player.location
             if not location or not VALID_SOUND_FILE_NAMES: return
+            logging.info(f"Location: {location}")
+            logging.info(f"Valid sound file names: {VALID_SOUND_FILE_NAMES}")
 
             match_tuple = process.extractOne(
                 location, 
                 VALID_SOUND_FILE_NAMES, 
                 scorer=fuzz.WRatio,
-                score_cutoff=55 
+                score_cutoff=20 
             )
+            
+            logging.info(f"Match Tuple for music restore: \n{match_tuple}")
             
             if match_tuple:
                 self.sound_manager.play_music(match_tuple[0])
@@ -223,7 +246,11 @@ class GameApp(ctk.CTk):
         skill_bonus = skill_entry["Level"]
         total = die_roll + skill_bonus + bonus_from_nutrition + bonus_from_stamina
         
-        msg = f"Rolling {clean_name}: {die_roll} + ({skill_bonus}) = {total}"
+        bonus_from_skill_message = f"{skill_bonus} (from Skill level)"
+        bonus_from_nutrition_message = f" +{bonus_from_nutrition} (bonus from high nutrition)" if bonus_from_nutrition > 0 else f"{bonus_from_nutrition} (penalty from low nutrition)" if bonus_from_nutrition < 0 else ""
+        bonus_from_stamina_message = f" +{bonus_from_stamina} (bonus from high stamina)" if bonus_from_stamina > 0 else f"{bonus_from_stamina} (penalty from low stamina)" if bonus_from_stamina < 0 else ""
+        
+        msg = f"Rolling {clean_name}: {die_roll} + ({bonus_from_skill_message}{bonus_from_nutrition_message}{bonus_from_stamina_message}) = {total}"
         if leveled_up:
             msg += f"\n**LEVEL UP!** {clean_name} is now Level {skill_entry['Level']}!"
         else:
