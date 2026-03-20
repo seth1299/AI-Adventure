@@ -261,6 +261,7 @@ class QtAppContext:
     def load_savegame_state(self, save_path: str) -> dict:
         """Load savegame.json and hydrate Player + app flags, then sync status UI."""
         self.current_adventure_path = save_path
+        self.player.set_save_path(save_path)
 
         sg_path = os.path.join(save_path, "savegame.json")
         data = FileManager.load_json_data(sg_path) or {}
@@ -342,151 +343,13 @@ class QtAppContext:
             _index += 1
             
         return _text_to_return
-    
-    def _skills_json_path(self) -> str | None:
-        """Return <save>/skills.json if we have a loaded save."""
-        if not self.current_adventure_path:
-            return None
-        return os.path.join(self.current_adventure_path, "skills.json")
-
-    def _load_skills_data(self) -> list[dict]:
-        path = self._skills_json_path()
-        if not path or not os.path.exists(path):
-            return []
-        data = FileManager.load_json_data(path)
-        return data if isinstance(data, list) else []
-
-    def _save_skills_data(self, data: list[dict]) -> None:
-        path = self._skills_json_path()
-        if not path:
-            return
-        try:
-            data.sort(key=lambda x: str((x or {}).get("Name", "")).lower())
-        except Exception:
-            pass
-        FileManager.save_json_data(path, data)
 
     def _get_skill_level(self, skill_name: str) -> int:
-        clean = (skill_name or "").split("(")[0].strip().title()
-        try:
-            data = self._load_skills_data()
-            for item in data:
-                if str(item.get("Name", "")).lower() == clean.lower():
-                    return int(item.get("Level", 0) or 0)
-        except Exception as e:
-            logging.error(f"Get skill level error: {e}")
-        return 0
+        return self.player.get_skill_level(skill_name)
 
     def perform_skill_check(self, skill_name: str) -> int:
-        """Rolls 1d20 + skill level + nutrition/stamina modifiers, then updates skills.json."""
-        clean_name = (skill_name or "").split("(")[0].strip().title()
-
-        data = self._load_skills_data()
-        skill_entry = None
-        for item in data:
-            if str(item.get("Name", "")).lower() == clean_name.lower():
-                skill_entry = item
-                break
-
-        if not skill_entry:
-            skill_entry = {"Name": clean_name, "Level": 0, "XP": 0, "Threshold": 5}
-            data.append(skill_entry)
-            self.story_tab.print_text(f"Learned new skill: {clean_name}!", sender="System")
-
-        die_roll = random.randint(1, 20)
-
-        # Karma system (same logic as Tk build)
-        try:
-            new_roll, intervened = self.player.check_karma_intervention(die_roll)
-            die_roll = int(new_roll)
-            if not intervened:
-                self.player.update_karma(die_roll)
-        except Exception:
-            # If anything goes wrong, just keep the raw roll.
-            pass
-
-        # XP + level up
-        if skill_entry["Level"] < 5:
-            try:
-                skill_entry["XP"] = int(skill_entry.get("XP", 0) or 0) + 1
-            except Exception:
-                skill_entry["XP"] = 1
-
-            leveled_up = False
-            try:
-                xp = int(skill_entry.get("XP", 0) or 0)
-                th = int(skill_entry.get("Threshold", 5) or 5)
-            except Exception:
-                xp, th = 0, 5
-
-            if xp >= th:
-                try:
-                    skill_entry["Level"] = int(skill_entry.get("Level", 0) or 0) + 1
-                except Exception:
-                    skill_entry["Level"] = 1
-                skill_entry["XP"] = 0
-                try:
-                    skill_entry["Threshold"] = int(skill_entry.get("Threshold", 5) or 5) + 2
-                except Exception:
-                    skill_entry["Threshold"] = 7
-                leveled_up = True
-
-        self._save_skills_data(data)
-
-        # Modifiers
-        bonus_from_nutrition = 0
-        try:
-            if self.player.nutrition >= 85:
-                bonus_from_nutrition = 1
-            elif self.player.nutrition <= 40:
-                bonus_from_nutrition = -3
-        except Exception:
-            pass
-
-        bonus_from_stamina = 0
-        try:
-            if self.player.stamina >= 85:
-                bonus_from_stamina = 1
-            elif self.player.stamina <= 40:
-                bonus_from_stamina = -3
-        except Exception:
-            pass
-
-        try:
-            skill_bonus = int(skill_entry.get("Level", 0) or 0)
-        except Exception:
-            skill_bonus = 0
-
-        total = int(die_roll) + int(skill_bonus) + int(bonus_from_nutrition) + int(bonus_from_stamina)
-
-        # Message
-        bonus_from_skill_message = f"{skill_bonus} (from Skill level)"
-        bonus_from_nutrition_message = (
-            f" +{bonus_from_nutrition} (bonus from high nutrition)"
-            if bonus_from_nutrition > 0
-            else f" {bonus_from_nutrition} (penalty from low nutrition)"
-            if bonus_from_nutrition < 0
-            else ""
-        )
-        bonus_from_stamina_message = (
-            f" +{bonus_from_stamina} (bonus from high stamina)"
-            if bonus_from_stamina > 0
-            else f" {bonus_from_stamina} (penalty from low stamina)"
-            if bonus_from_stamina < 0
-            else ""
-        )
-
-        msg = (
-            f"Rolling {clean_name}: {die_roll} + ("
-            f"{bonus_from_skill_message}{bonus_from_nutrition_message}{bonus_from_stamina_message}"
-            f") = {total}"
-        )
-
-        if leveled_up:
-            msg += f"\nLEVEL UP! {clean_name} is now Level {skill_entry.get('Level', 0)}!"
-        else:
-            msg += f"\n{clean_name}: {skill_entry.get('XP', 0)} / {skill_entry.get('Threshold', 0)} XP towards next level up."
-
+        # Calls the Player class, then routes the output message to the UI
+        total, msg = self.player.perform_skill_check(skill_name)
         self.story_tab.print_text(msg, sender="System")
         return total
 
@@ -547,6 +410,7 @@ def main() -> int:
 
     def _boot_selected_save() -> None:
         FileManager.update_logger_path(save_name)
+        app_ctx.player.set_save_path(save_path)
 
         savegame_path = os.path.join(save_path, "savegame.json")
         creation_summary_path = os.path.join(save_path, "creation_summary.txt")

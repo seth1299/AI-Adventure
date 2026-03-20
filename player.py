@@ -1,4 +1,5 @@
-import logging, random
+import logging, random, os
+from file_manager import FileManager
 
 class Player:
     def __init__(self):
@@ -6,6 +7,7 @@ class Player:
         self.nutrition = 100
         self.stamina = 100
         self.karmic_streak = 0
+        self.save_path = None
         
         # World State (often tied to the player in single-player RPGs)
         self.location = "Unknown"
@@ -109,3 +111,91 @@ class Player:
                 return new_roll, True
                 
         return die_roll, False
+    
+    def set_save_path(self, path):
+        """Called by the main app when a game is loaded or created."""
+        self.save_path = path
+
+    def _skills_json_path(self):
+        if not self.save_path: return None
+        return os.path.join(self.save_path, "skills.json")
+
+    def load_skills_data(self):
+        path = self._skills_json_path()
+        if not path or not os.path.exists(path): return []
+        data = FileManager.load_json_data(path)
+        return data if isinstance(data, list) else []
+
+    def save_skills_data(self, data):
+        path = self._skills_json_path()
+        if not path: return
+        try:
+            data.sort(key=lambda x: str((x or {}).get("Name", "")).lower())
+        except Exception: pass
+        FileManager.save_json_data(path, data)
+
+    def get_skill_level(self, skill_name):
+        clean = (skill_name or "").split("(")[0].strip().title()
+        for item in self.load_skills_data():
+            if str(item.get("Name", "")).lower() == clean.lower():
+                return int(item.get("Level", 0) or 0)
+        return 0
+
+    def perform_skill_check(self, skill_name):
+        """
+        Handles rolling, leveling up, and stat modifiers internally.
+        Returns a tuple: (total_roll, result_message_string)
+        """
+        clean_name = (skill_name or "").split("(")[0].strip().title()
+        data = self.load_skills_data()
+        
+        skill_entry = next((item for item in data if str(item.get("Name", "")).lower() == clean_name.lower()), None)
+        
+        msg_lines = []
+        if not skill_entry:
+            skill_entry = {"Name": clean_name, "Level": 0, "XP": 0, "Threshold": 5}
+            data.append(skill_entry)
+            msg_lines.append(f"Learned new skill: {clean_name}!")
+
+        die_roll = random.randint(1, 20)
+        try:
+            new_roll, intervened = self.check_karma_intervention(die_roll)
+            die_roll = int(new_roll)
+            if not intervened:
+                self.update_karma(die_roll)
+        except Exception:
+            pass
+
+        # Handle XP & Leveling
+        leveled_up = False
+        if skill_entry["Level"] < 5:
+            skill_entry["XP"] = int(skill_entry.get("XP", 0) or 0) + 1
+            xp = skill_entry["XP"]
+            th = int(skill_entry.get("Threshold", 5) or 5)
+
+            if xp >= th:
+                skill_entry["Level"] = int(skill_entry.get("Level", 0) or 0) + 1
+                skill_entry["XP"] = 0
+                skill_entry["Threshold"] = th + 2
+                leveled_up = True
+
+        self.save_skills_data(data)
+
+        # Modifiers rely entirely on native class attributes now!
+        bonus_from_nutrition = 1 if self.nutrition >= 85 else (-3 if self.nutrition <= 40 else 0)
+        bonus_from_stamina = 1 if self.stamina >= 85 else (-3 if self.stamina <= 40 else 0)
+        skill_bonus = int(skill_entry.get("Level", 0) or 0)
+
+        total = die_roll + skill_bonus + bonus_from_nutrition + bonus_from_stamina
+
+        nut_msg = f" +{bonus_from_nutrition} (high nutrition)" if bonus_from_nutrition > 0 else (f" {bonus_from_nutrition} (low nutrition)" if bonus_from_nutrition < 0 else "")
+        sta_msg = f" +{bonus_from_stamina} (high stamina)" if bonus_from_stamina > 0 else (f" {bonus_from_stamina} (low stamina)" if bonus_from_stamina < 0 else "")
+        
+        msg_lines.append(f"Rolling {clean_name}: {die_roll} + ({skill_bonus} (Skill){nut_msg}{sta_msg}) = {total}")
+        
+        if leveled_up:
+            msg_lines.append(f"LEVEL UP! {clean_name} is now Level {skill_entry['Level']}!")
+        else:
+            msg_lines.append(f"{clean_name}: {skill_entry.get('XP', 0)} / {skill_entry.get('Threshold', 0)} XP towards next level up.")
+
+        return total, "\n".join(msg_lines)
