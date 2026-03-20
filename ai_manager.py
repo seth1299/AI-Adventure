@@ -119,7 +119,7 @@ class AIManager:
             if not ai_text: raise ValueError("Empty response")
             
             # --- TAG PARSING ---
-            
+            tag_parser = TagParser(self.app)
             # Creation Specific Tags
             if self.app.is_creating:
                 summary_match = re.search(r"\[\[STEP_SUMMARY:\s*(.*?)\]\]", ai_text, re.DOTALL)
@@ -158,136 +158,9 @@ class AIManager:
                     ai_text = ai_text.replace("[[START_GAME]]", "")
                     clean_creation_text = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", ai_text, flags=re.DOTALL).strip()
                     self.app.conversation_history += f"GM: {clean_creation_text}\n"
-
-            # Standard Game Tags
-            for match in re.finditer(r"\[\[ADD:\s*(.*?)\]\]", ai_text):
-                res = self.app.notebook_widgets["Inventory"].autonomous_add(match.group(1))
-                self.app.story_tab.print_text(res, sender="GM")
-
-            for match in re.finditer(r"\[\[REMOVE:\s*(.*?)\]\]", ai_text):
-                res = self.app.notebook_widgets["Inventory"].autonomous_remove(match.group(1))
-                self.app.story_tab.print_text(res, sender="GM")
-                
-            for match in re.finditer(r"\[\[MODIFY_ITEM:\s*(.*?)\]\]", ai_text, re.DOTALL):
-                res = self.app.notebook_widgets["Inventory"].modify_item(match.group(1).strip())
-                if res: self.app.story_tab.print_text(res, sender="System")
-
-            for match in re.finditer(r"\[\[MODIFY_STAT:\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text):
-                stat_name = match.group(1).strip()
-                stat_val = match.group(2).strip()
-                self.app.player.modify_stat(stat_name, stat_val)
-                self.app._sync_player_state_to_ui()
                     
-            music_match = re.search(r"\[\[MUSIC:\s*(.*?)\]\]", ai_text)
-            if music_match:
-                track = music_match.group(1).strip()
-                self.app.after(0, lambda: self.app.sound_manager.play_music(track))
-
-            for match in re.finditer(r"\[\[SOUND:\s*(.*?)\]\]", ai_text):
-                sfx = match.group(1).strip()
-                self.app.after(0, lambda s=sfx: self.app.sound_manager.play_sfx(s))
-
-            status_match = re.search(r"\[\[STATUS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text)
-            if status_match:
-                self.app.player.update_world_state(
-                    turn=status_match.group(1).strip(),
-                    location=status_match.group(2).strip(),
-                    day=status_match.group(3).strip(),
-                    time=status_match.group(4).strip()
-                )
-                self.app._sync_player_state_to_ui()
-
-                if not self.app.is_creating and "Processing" in self.app.notebook_widgets:
-                    finished_items = self.app.notebook_widgets["Processing"].check_active_tasks(self.app.player.day, self.app.player.time)
-                    if finished_items:
-                        sys_msg = f"System: Process completed - {', '.join(finished_items)}"
-                        self.app.story_tab.print_text(sys_msg, sender="System")
-                        self.app.conversation_history += f"\n{sys_msg}\n"
-                        
-            for match in re.finditer(r"\[\[RECIPE:\s*(.*?)\]\]", ai_text):
-                res = self.app.notebook_widgets["Recipes"].add_recipe_from_tag(match.group(1))
-                self.app.story_tab.print_text(res, sender="System")
-                        
-            for match in re.finditer(r"\[\[START_PROCESS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\]\]", ai_text):
-                p_name = match.group(1).strip()
-                p_desc = match.group(2).strip()
-                p_slots = match.group(3).strip()
-                p_yield = match.group(4).strip()
-                res = self.app.notebook_widgets["Processing"].add_timed_process(p_name, p_desc, p_slots, self.app.player.day, self.app.player.time, p_yield)
-                self.app.story_tab.print_text(res, sender="System")
-                
-            for match in re.finditer(r"\[\[REMOVE_PROCESS:\s*(.*?)\]\]", ai_text):
-                res = self.app.notebook_widgets["Processing"].remove_process(match.group(1).strip())
-                if res: self.app.story_tab.print_text(res, sender="System")
-                
-            for match in re.finditer(r"\[\[START_PROJECT:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text):
-                p_name = match.group(1).strip()
-                p_desc = match.group(2).strip()
-                work_required = match.group(3).strip()
-                skill_name = match.group(4).strip()
-                p_yield = match.group(5).strip()
-                lvl = self.app._get_skill_level(skill_name)
-                res = self.app.notebook_widgets["Processing"].add_project(p_name, p_desc, work_required, skill_name, lvl, p_yield)
-                if res: self.app.story_tab.print_text(res, sender="System")
-
-            for match in re.finditer(r"\[\[WORK:\s*(.*?)\s*\|\s*([\d.]+)\]\]", ai_text):
-                project_name = match.group(1).strip()
-                hours_worked = float(match.group(2).strip())
-                req_skill = self.app.notebook_widgets["Processing"].get_required_skill(project_name) or ""
-                lvl = self.app._get_skill_level(req_skill) if req_skill else 0
-                res = self.app.notebook_widgets["Processing"].apply_work_hours(project_name, hours_worked, lvl)
-                
-                # Update time locally via Main App helper
-                self.app._advance_time_hours(hours_worked)
-
-                completed = self.app.notebook_widgets["Processing"].check_active_tasks(self.app.player.day, self.app.player.time)
-                if completed:
-                    sys_msg = f"System: Process completed - {', '.join(completed)}"
-                    self.app.story_tab.print_text(sys_msg, sender="System")
-                    self.app.conversation_history += f"\n{sys_msg}\n"
-
-                if res: self.app.story_tab.print_text(res, sender="System")
-                
-            for match in re.finditer(r"\[\[ADD_FOOD:\s*(.*?)\]\]", ai_text):
-                res = self.app.notebook_widgets["Inventory"].add_food(match.group(1))
-                self.app.story_tab.print_text(res, sender="GM")
-                
-            for match in re.finditer(r"\[\[CONSUME:\s*(.*?)\]\]", ai_text):
-                f_name = match.group(1).strip()
-                res = self.app.notebook_widgets["Inventory"].consume_food(f_name, self.app.player.day, self.app.player.time)
-                for match in re.finditer(r"\[\[MODIFY_STAT:\s*(.*?)\s*\|\s*(.*?)\]\]", res):
-                    stat_name = match.group(1).strip()
-                    stat_val = match.group(2).strip()
-                    self.app.player.modify_stat(stat_name, stat_val)
-                    self.app._sync_player_state_to_ui()
-                    res = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", res).strip()
-                self.app.story_tab.print_text(res, sender="System")
-                
-            for match in re.finditer(r"\[\[SECRET:\s*(.*?)\]\]", ai_text):
-                try:
-                    if not self.app.secret_path:
-                        with open(self.app.secret_path, "w", encoding="utf-8") as f:
-                            f.write("")
-                    else:
-                        with open(self.app.secret_path, "a", encoding="utf-8") as f:
-                            #f.write(match.group(1).strip())
-                            f.write(f"{f}\n")
-                            import subprocess
-                            subprocess.check_call(["attrib", "+H",self.app.secret_path])
-                            logging.info(f"Success! Wrote secret .txt file with path {self.app.secret_path}")
-                except Exception as e:
-                        logging.error(f"Error writing secret: {e}")
-                        
-            for match in re.finditer(r"\[\[UPDATE_WORLD:\s*(.*?)\]\]", ai_text):
-                try:
-                    if self.app.world_path:
-                        with open(self.app.world_path, "a", encoding="utf-8") as f:
-                            f.write(f"{f}\n")
-                    else:
-                        with open(self.app.world_path, "w", encoding="utf-8") as f:
-                            f.write("")
-                except Exception as e:
-                    logging.error(f"Error: Couldn't update world: {e}")
+            else:
+                tag_parser.process_standard_tags(ai_text)    
 
             # Recursive Logic (Rolls)
             roll_match = re.search(r"\[\[ROLL:\s*(.*?)\]\]", ai_text)
@@ -331,3 +204,134 @@ class AIManager:
             logging.error(f"AI Error: {e}")
         finally:
             self.app.after(0, lambda: self.app.story_tab.set_controls_state(True))
+            
+class TagParser:
+    def __init__(self, app):
+        self.app = app
+
+    def process_standard_tags(self, ai_text):
+        """Processes typical gameplay tags and returns the cleaned text."""
+        # Inventory
+        for match in re.finditer(r"\[\[ADD:\s*(.*?)\]\]", ai_text):
+            res = self.app.notebook_widgets["Inventory"].autonomous_add(match.group(1))
+            self.app.story_tab.print_text(res, sender="GM")
+
+        for match in re.finditer(r"\[\[REMOVE:\s*(.*?)\]\]", ai_text):
+            res = self.app.notebook_widgets["Inventory"].autonomous_remove(match.group(1))
+            self.app.story_tab.print_text(res, sender="GM")
+            
+        for match in re.finditer(r"\[\[MODIFY_STAT:\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text):
+            stat_name, stat_val = match.group(1).strip(), match.group(2).strip()
+            self.app.player.modify_stat(stat_name, stat_val)
+            self.app._sync_player_state_to_ui()
+            
+        music_match = re.search(r"\[\[MUSIC:\s*(.*?)\]\]", ai_text)
+        if music_match:
+            track = music_match.group(1).strip()
+            self.app.after(0, lambda: self.app.sound_manager.play_music(track))
+
+        for match in re.finditer(r"\[\[SOUND:\s*(.*?)\]\]", ai_text):
+            sfx = match.group(1).strip()
+            self.app.after(0, lambda s=sfx: self.app.sound_manager.play_sfx(s))
+
+        status_match = re.search(r"\[\[STATUS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text)
+        if status_match:
+            self.app.player.update_world_state(
+                turn=status_match.group(1).strip(),
+                location=status_match.group(2).strip(),
+                day=status_match.group(3).strip(),
+                time=status_match.group(4).strip()
+            )
+            self.app._sync_player_state_to_ui()
+
+            if not self.app.is_creating and "Processing" in self.app.notebook_widgets:
+                finished_items = self.app.notebook_widgets["Processing"].check_active_tasks(self.app.player.day, self.app.player.time)
+                if finished_items:
+                    sys_msg = f"System: Process completed - {', '.join(finished_items)}"
+                    self.app.story_tab.print_text(sys_msg, sender="System")
+                    self.app.conversation_history += f"\n{sys_msg}\n"
+                    
+        for match in re.finditer(r"\[\[RECIPE:\s*(.*?)\]\]", ai_text):
+            res = self.app.notebook_widgets["Recipes"].add_recipe_from_tag(match.group(1))
+            self.app.story_tab.print_text(res, sender="System")
+                    
+        for match in re.finditer(r"\[\[START_PROCESS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\]\]", ai_text):
+            p_name = match.group(1).strip()
+            p_desc = match.group(2).strip()
+            p_slots = match.group(3).strip()
+            p_yield = match.group(4).strip()
+            res = self.app.notebook_widgets["Processing"].add_timed_process(p_name, p_desc, p_slots, self.app.player.day, self.app.player.time, p_yield)
+            self.app.story_tab.print_text(res, sender="System")
+            
+        for match in re.finditer(r"\[\[REMOVE_PROCESS:\s*(.*?)\]\]", ai_text):
+            res = self.app.notebook_widgets["Processing"].remove_process(match.group(1).strip())
+            if res: self.app.story_tab.print_text(res, sender="System")
+            
+        for match in re.finditer(r"\[\[START_PROJECT:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text):
+            p_name = match.group(1).strip()
+            p_desc = match.group(2).strip()
+            work_required = match.group(3).strip()
+            skill_name = match.group(4).strip()
+            p_yield = match.group(5).strip()
+            lvl = self.app._get_skill_level(skill_name)
+            res = self.app.notebook_widgets["Processing"].add_project(p_name, p_desc, work_required, skill_name, lvl, p_yield)
+            if res: self.app.story_tab.print_text(res, sender="System")
+
+        for match in re.finditer(r"\[\[WORK:\s*(.*?)\s*\|\s*([\d.]+)\]\]", ai_text):
+            project_name = match.group(1).strip()
+            hours_worked = float(match.group(2).strip())
+            req_skill = self.app.notebook_widgets["Processing"].get_required_skill(project_name) or ""
+            lvl = self.app._get_skill_level(req_skill) if req_skill else 0
+            res = self.app.notebook_widgets["Processing"].apply_work_hours(project_name, hours_worked, lvl)
+            
+            # Update time locally via Main App helper
+            self.app._advance_time_hours(hours_worked)
+
+            completed = self.app.notebook_widgets["Processing"].check_active_tasks(self.app.player.day, self.app.player.time)
+            if completed:
+                sys_msg = f"System: Process completed - {', '.join(completed)}"
+                self.app.story_tab.print_text(sys_msg, sender="System")
+                self.app.conversation_history += f"\n{sys_msg}\n"
+
+            if res: self.app.story_tab.print_text(res, sender="System")
+            
+        for match in re.finditer(r"\[\[ADD_FOOD:\s*(.*?)\]\]", ai_text):
+            res = self.app.notebook_widgets["Inventory"].add_food(match.group(1))
+            self.app.story_tab.print_text(res, sender="GM")
+            
+        for match in re.finditer(r"\[\[CONSUME:\s*(.*?)\]\]", ai_text):
+            f_name = match.group(1).strip()
+            res = self.app.notebook_widgets["Inventory"].consume_food(f_name, self.app.player.day, self.app.player.time)
+            for match in re.finditer(r"\[\[MODIFY_STAT:\s*(.*?)\s*\|\s*(.*?)\]\]", res):
+                stat_name = match.group(1).strip()
+                stat_val = match.group(2).strip()
+                self.app.player.modify_stat(stat_name, stat_val)
+                self.app._sync_player_state_to_ui()
+                res = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", res).strip()
+            self.app.story_tab.print_text(res, sender="System")
+            
+        for match in re.finditer(r"\[\[SECRET:\s*(.*?)\]\]", ai_text):
+            try:
+                if not self.app.secret_path:
+                    with open(self.app.secret_path, "w", encoding="utf-8") as f:
+                        f.write("")
+                else:
+                    with open(self.app.secret_path, "a", encoding="utf-8") as f:
+                        #f.write(match.group(1).strip())
+                        f.write(f"{f}\n")
+                        import subprocess
+                        subprocess.check_call(["attrib", "+H",self.app.secret_path])
+                        logging.info(f"Success! Wrote secret .txt file with path {self.app.secret_path}")
+            except Exception as e:
+                    logging.error(f"Error writing secret: {e}")
+                    
+        for match in re.finditer(r"\[\[UPDATE_WORLD:\s*(.*?)\]\]", ai_text):
+            try:
+                if self.app.world_path:
+                    with open(self.app.world_path, "a", encoding="utf-8") as f:
+                        f.write(f"{f}\n")
+                else:
+                    with open(self.app.world_path, "w", encoding="utf-8") as f:
+                        f.write("")
+            except Exception as e:
+                logging.error(f"Error: Couldn't update world: {e}")
