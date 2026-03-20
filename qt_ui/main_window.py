@@ -21,7 +21,7 @@ from .inventory_panel import InventoryPanel
 from .skills_panel import SkillsPanel
 from .processing_panel import ProcessingPanel
 from .recipes_panel import RecipesPanel
-
+from qt_ui.currency_dialog import CurrencyManagerDialog
 
 class MainWindow(QMainWindow):
     """
@@ -155,3 +155,20 @@ class MainWindow(QMainWindow):
         self.story_panel.print_text("System: Initialization Sequence Started...", sender="System")
         if self.ai_manager is not None:
             threading.Thread(target=self.ai_manager.start_creation_wizard, daemon=True).start()
+            
+    from qt_ui.currency_dialog import CurrencyManagerDialog
+
+def open_currency_menu(self):
+    # Pass in any existing data if the player is editing their world
+    # existing_data = [{"name": "Gold", "value": 100}, ...] 
+    
+    dialog = CurrencyManagerDialog(self)
+    
+    # .exec() halts the main UI until the dialog is closed
+    if dialog.exec(): 
+        # The user clicked Save & Close
+        saved_currencies = dialog.final_currency_data
+        
+        # You can now save this to your `world.md`, `savegame.json`, 
+        # or a new `self.app.player.currencies` attribute!
+        print("Currencies Saved:", saved_currencies)
