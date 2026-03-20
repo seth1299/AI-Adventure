@@ -28,6 +28,7 @@ class StoryPanel(QWidget):
 
     send_requested = Signal(str)
     menu_requested = Signal()
+    currency_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -53,6 +54,11 @@ class StoryPanel(QWidget):
         self.btn_menu.setFixedWidth(80)
         self.btn_menu.clicked.connect(self.menu_requested.emit)
         header.addWidget(self.btn_menu, alignment=Qt.AlignmentFlag.AlignLeft)
+        
+        self.btn_currency = QPushButton("Currencies")
+        self.btn_currency.setFixedWidth(80)
+        self.btn_currency.clicked.connect(self.currency_requested.emit)
+        header.addWidget(self.btn_currency, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self.lbl_status = QLabel(self._format_status_text())
         self.lbl_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
