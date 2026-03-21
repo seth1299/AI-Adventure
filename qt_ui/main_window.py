@@ -21,6 +21,7 @@ from .inventory_panel import InventoryPanel
 from .skills_panel import SkillsPanel
 from .processing_panel import ProcessingPanel
 from .recipes_panel import RecipesPanel
+import logging
 
 
 class MainWindow(QMainWindow):
@@ -160,27 +161,33 @@ class MainWindow(QMainWindow):
     from qt_ui.currency_dialog import CurrencyManagerDialog
 
     def open_currency_menu(self):
-        import logging
         try:
-            # 1. Open the Dialog
-            dialog = CurrencyManagerDialog(self)
+            if self.app == None: return
+            # Pass existing currencies into the dialog so they can be edited!
+            dialog = CurrencyManagerDialog(self, existing_currencies=self.app.player.world_currencies)
             
-            # 2. Wait for the user to click Save & Close
             if dialog.exec(): 
                 saved_currencies = dialog.final_currency_data
                 
-                # 3. Format the data into a nice string
+                # 1. Update the player class
+                self.app.player.world_currencies = saved_currencies
+                
+                # 2. Force an immediate save to lock in the new economy
+                self.app.save_game()
+                
                 msg = f"Currencies successfully updated ({len(saved_currencies)} total):\n"
                 for cur in saved_currencies:
                     msg += f" • {cur['name']} (Worth: {cur['value']} base units)\n"
                 
-                # 4. Print it directly to the Game Log!
                 self.story_panel.print_text(msg, sender="System")
                 
-                # [Future Step]: We will eventually save this to self.app.player here!
+                # 3. Refresh the inventory UI to use the new math
+                if hasattr(self.inventory_panel, "refresh_ui"):
+                    pass
+                    #self.inventory_panel.refresh_ui()
+                    # TODO: Implement Inventory Panel Refresh UI
                 
         except Exception as e:
-            # If ANYTHING goes wrong, it will print in red/system text on the screen
             error_msg = f"Error opening currency menu: {str(e)}"
             logging.exception(error_msg)
             self.story_panel.print_text(error_msg, sender="System Error")

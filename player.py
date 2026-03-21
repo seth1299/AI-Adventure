@@ -8,6 +8,8 @@ class Player:
         self.stamina = 100
         self.karmic_streak = 0
         self.save_path = None
+        self.base_currency = 0
+        self.world_currencies = [{"name": "Copper Piece", "value": 1}, {"name": "Silver Piece", "value": 10}]
         
         # World State (often tied to the player in single-player RPGs)
         self.location = "Unknown"
@@ -23,6 +25,7 @@ class Player:
         self.turn = int(data.get("turn", 1))
         self.day = data.get("day", "1")
         self.time = data.get("time", "Start")
+        self.base_currency = int(data.get("base_currency", 0))
 
     def get_status_dict(self):
         """Returns the dictionary format required for the UI and saving."""
@@ -32,7 +35,8 @@ class Player:
             "location": self.location,
             "turn": str(self.turn),
             "day": str(self.day),
-            "time": self.time
+            "time": self.time,
+            "base_currency": self.base_currency
         }
 
     def update_world_state(self, turn, location, day, time):
@@ -80,6 +84,45 @@ class Player:
             self.stamina = new_val
         else:
             self.nutrition = new_val
+            
+    def get_formatted_currency(self, amount: int = 0) -> str:
+        """Converts an integer (base currency) into a readable string like '3 Gold, 7 Silver'."""
+        if amount is None: amount = self.base_currency
+        if amount == 0: return "0 (None)"
+
+        is_negative = amount < 0
+        remaining = abs(amount)
+        parts = []
+
+        # Sort currencies from highest value to lowest
+        sorted_currencies = sorted(self.world_currencies, key=lambda x: int(x.get("value", 1)), reverse=True)
+
+        for cur in sorted_currencies:
+            val = int(cur.get("value", 1))
+            if remaining >= val:
+                count = remaining // val
+                remaining %= val
+                parts.append(f"{count} {cur.get('name', 'Unit')}")
+
+        result_str = ", ".join(parts)
+        return f"-{result_str}" if is_negative else result_str
+
+    def change_currency(self, amount: int):
+        """Adds or subtracts currency. Returns a tuple (Success_Bool, Message_String)"""
+        if amount < 0 and (self.base_currency + amount) < 0:
+            # Player is too poor to buy the item!
+            cost_str = self.get_formatted_currency(abs(amount))
+            wallet_str = self.get_formatted_currency(self.base_currency)
+            return False, f"Failed: Not enough funds. You need {cost_str} but only have {wallet_str}."
+        
+        # Perform transaction
+        self.base_currency += amount
+        action = "gained" if amount > 0 else "spent"
+        
+        formatted_amount = self.get_formatted_currency(abs(amount))
+        formatted_total = self.get_formatted_currency(self.base_currency)
+        
+        return True, f"Currency {action}: {formatted_amount}. (Total wealth: {formatted_total})"
             
     def update_karma(self, die_roll):
         """Updates karmic streak based on the roll."""
