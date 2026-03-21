@@ -120,6 +120,7 @@ class AIManager:
             
             # --- TAG PARSING ---
             tag_parser = TagParser(self.app)
+            ai_text = tag_parser.process_inline_tags(ai_text)
             # Creation Specific Tags
             if self.app.is_creating:
                 summary_match = re.search(r"\[\[STEP_SUMMARY:\s*(.*?)\]\]", ai_text, re.DOTALL)
@@ -344,7 +345,25 @@ class TagParser:
                 self.app.story_tab.print_text(msg, sender="System")
                 
                 # We will trigger the UI update in the next step!
-                if hasattr(self.app.notebook_widgets["Inventory"], "refresh_ui"):
-                    self.app.notebook_widgets["Inventory"].refresh_ui()
+                if hasattr(self.app.notebook_widgets["Inventory"], "refresh_display"):
+                    self.app.notebook_widgets["Inventory"].refresh_display()
             except ValueError:
                 self.app.story_tab.print_text(f"System Error: Invalid currency amount '{amount_str}'", sender="System")
+                
+    def process_inline_tags(self, ai_text):
+        """Processes tags that need to be replaced with actual text before displaying."""
+        
+        def replace_currency(match):
+            try:
+                # Extract the integer from the regex match
+                amount = int(match.group(1).strip())
+                # Ask the player class to format it nicely!
+                return self.app.player.get_formatted_currency(amount)
+            except ValueError:
+                # If the AI hallucinates a non-integer, just leave the tag as-is
+                return match.group(0) 
+                
+        # Find all instances of [[DISPLAY_CURRENCY: X]] and swap them
+        modified_text = re.sub(r"\[\[DISPLAY_CURRENCY:\s*(-?\d+)\]\]", replace_currency, ai_text)
+        
+        return modified_text

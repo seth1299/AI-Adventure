@@ -59,7 +59,7 @@ class MainWindow(QMainWindow):
         #self._add_dock("Character", StubPanel("Character (stub)"), area=Qt.DockWidgetArea.LeftDockWidgetArea)
         self.world_panel = MarkdownPanel("World")
         self.journal_panel = MarkdownPanel("Journal")
-        self.inventory_panel = InventoryPanel()
+        self.inventory_panel = InventoryPanel(app_context=self.app)
         self.skills_panel = SkillsPanel()
         self.processing_panel = ProcessingPanel()
         self.recipes_panel = RecipesPanel()

@@ -96,10 +96,11 @@ DEFAULT_RULES = (
    - Skill Checks are not limited to only the Skills that the Player currently has; the Player can learn any Skill they want to attempt to attempt.
    - If the Player is learning a brand-new Skill, please output this tag: [[SKILL: SkillName | 1]], where SkillName is the name of the Skill, and "1" is the level it will start at (almost always 1).
 2. INVENTORY MANAGEMENT:
-   - Use this generic tag for ALL non-Food items. 
-   - **Format:** [[ADD: Item Type | Item Name | Description | Amount | Value]]
-   - Please remember that the Value is per each item; and please have a tangible amount for how much each item is worth. Use the proper Currency that exists in the game for the Value. Remember to factor in costs that contribute to the overall Value, such as the Container for an item, the Labor involved in making the item, and the Skill level of the creator for the final Value of an item (this includes items created by NPCs).
-   - Remember that if the Currency in the world has multiple denominations, that you should generally output the smaller number of the larger denomination, rather than many small denominations. E.G. instead of saying that something is worth 20 $1 bills, you could say that it is worth 1 $20 bill. And so forth, for any denominations that can be converted.
+   - **Format for adding items (use this generic tag for ALL non-Food and non-Wealth items):** [[ADD: Item Type | Item Name | Description | Amount | Value]]
+   - Please remember that the Value is per each item; and please have a tangible amount for how much each item is worth. For the overall value of an item, please remember to factor in costs, such as the Container for an item, the Labor involved in making the item, and the Skill level required to make the item (this includes items created by NPCs).
+   - If you want to display to the player how much something costs or is worth WITHOUT the Player buying anything, use this tag: [[DISPLAY_CURRENCY: X]], where X is an integer that is the number of "base units" that something is worth. How much that is will depend on a lot of things, but do your best to think of a reasonable amount.
+   - If the Player wants to buy an item, then please output the tag [[CHANGE_CURRENCY: X]], where X is the amount of currency that the Player is using. Ideally, you will only be using this tag when you have already looked in the Player's Inventory and determined that they have enough wealth in the first place. If the Player successfully buys an item, then use the appropriate ADD or ADD_FOOD tag as necessary, depending on what the Player bought.
+   - You don't specifically need to know each piece of currency that exists in the game; you just need to come up with reasonable "base values" for items, though you do need to be able to know how valuable 1 unit of the "base unit" is for the currency (generally speaking, unless specifically mentioned by the Player, the lowest denomination of a currency is equivalent to a couple of US Dollars)
    - **Important:** The "Item Type" will become the Section Header in the inventory (e.g. "Weapons", "Potions", "Ingredients"). Be specific, but also try to remain general as well. For example, make a "Potions" category and a "Consumables" category, but keep Potions under the "Potions" category, and other consumables such as bandages under the "Consumables" category.
    - **SPECIFICITY RULE:** Be precise about quantities and descriptions of items. Use units of measurement for items that make sense, such as "3 ounces" of paprika, for instance.
      - EXAMPLE: [[ADD: Material | Crimson Dye Vial | Deep red pigment extracted from beetles. | 3 ounces | 3 Bits]]
@@ -120,7 +121,7 @@ DEFAULT_RULES = (
      - The System will automatically check the Date. If spoiled, it will tell you.
      - The System will automatically decrement the "Meals" counter.
      - Please remember to send [[CONSUME: name]] for every piece of food that the Player eats, it is very important.
-     - DO NOT USE [[REMOVE]] WHEN CONSUMING FOOD; THE PROGRAM WILL AUTOMATICALLY REMOVE THE FOOD FOR YOU, SO YOU DON'T NEED TO ALSO MANUALLY REMOVE IT.
+     - DO NOT USE [[REMOVE]] WHEN CONSUMING FOOD; THE PROGRAM WILL AUTOMATICALLY REMOVE THE FOOD FOR YOU AFTER YOU SEND [[CONSUME: name]], SO YOU DON'T NEED TO ALSO MANUALLY REMOVE IT.
 3. Update Game Status at the end of every turn using this tag:
    - [[STATUS: (Use the UPCOMING TURN number provided in context) | Current Location | Current In-Game Day | Current In-Game Time]]
    - Time must be in 12-hour format: "H:MM AM/PM" (example: "6:00 PM").
