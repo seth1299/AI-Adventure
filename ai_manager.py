@@ -335,3 +335,16 @@ class TagParser:
                         f.write("")
             except Exception as e:
                 logging.error(f"Error: Couldn't update world: {e}")
+                
+        for match in re.finditer(r"\[\[CHANGE_CURRENCY:\s*(-?\d+)\]\]", ai_text):
+            amount_str = match.group(1).strip()
+            try:
+                amount = int(amount_str)
+                success, msg = self.app.player.change_currency(amount)
+                self.app.story_tab.print_text(msg, sender="System")
+                
+                # We will trigger the UI update in the next step!
+                if hasattr(self.app.notebook_widgets["Inventory"], "refresh_ui"):
+                    self.app.notebook_widgets["Inventory"].refresh_ui()
+            except ValueError:
+                self.app.story_tab.print_text(f"System Error: Invalid currency amount '{amount_str}'", sender="System")

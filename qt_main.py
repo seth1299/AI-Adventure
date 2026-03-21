@@ -224,6 +224,7 @@ class QtAppContext:
                 "Status": status_data,
                 "is_creating": bool(self.is_creating),
                 "karmic_streak": int(getattr(self.player, "karmic_streak", 0) or 0),
+                "Currencies": getattr(self.player, "world_currencies", [])
             }
             history_path = os.path.join(self.current_adventure_path, "savegame.json")
             logging.info(f"Saved to {history_path}.")
@@ -274,6 +275,13 @@ class QtAppContext:
             self.player.karmic_streak = int(data.get("karmic_streak", 0) or 0)
         except Exception:
             self.player.karmic_streak = 0
+            
+        currencies = data.get("Currencies")
+        if currencies:
+            self.player.world_currencies = currencies
+        else:
+            # Default fallback if missing
+            self.player.world_currencies = [{"name": "Copper Piece", "value": 1}, {"name": "Silver Piece", "value": 10}]
 
         # Player status
         status_data = data.get("Status") or {}
