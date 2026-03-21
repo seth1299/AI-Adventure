@@ -31,9 +31,10 @@ class InventoryPanel(QWidget):
     - Methods used by AIManager tags: autonomous_add/remove, add_food, consume_food, modify_item
     """
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, app_context=None) -> None:
         super().__init__(parent)
         self.data_path: str = ""
+        self.app = app_context
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -128,6 +129,12 @@ class InventoryPanel(QWidget):
             self.display.setPlainText("INVENTORY\n\n(Empty)")
             self._set_state("")
             return
+        
+        wealth_str = "0 (None)"
+        if self.app and hasattr(self.app, 'player'):
+            wealth_str = self.app.player.get_formatted_currency()
+            
+        parts: list[str] = ["INVENTORY\n", f"Wealth: {wealth_str}\n"]
 
         headers = ["Name", "Description", "Amount", "Value (each)"]
         parts: list[str] = ["INVENTORY\n"]
