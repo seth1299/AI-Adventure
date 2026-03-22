@@ -165,7 +165,11 @@ After outputting the tags, summarize the first starting turn, describe the surro
             # --- TAG PARSING ---
             tag_parser = TagParser(self.app)
             ai_text = tag_parser.process_inline_tags(ai_text)
-            # Creation Specific Tags
+            
+            # 1. PROCESS STANDARD TAGS ALWAYS (Inventory, Music, Status, etc.)
+            tag_parser.process_standard_tags(ai_text, is_startup=is_startup)    
+
+            # 2. Creation Specific Tags
             if is_startup:
                 summary_match = re.search(r"\[\[STEP_SUMMARY:\s*(.*?)\]\]", ai_text, re.DOTALL)
                 if summary_match:
@@ -192,20 +196,22 @@ After outputting the tags, summarize the first starting turn, describe the surro
                     self.app.notebook_widgets["Skills"].force_learn_skill(s_name, s_lvl)
 
                 if "[[START_GAME]]" in ai_text:
-                    self.app.is_creating = False
                     self.app.story_tab.print_text("\n[System: Creation Complete. Saving Data...]\n", sender="System")
                     if os.path.exists(self.app.creation_summary_path):
                         try:
                             os.remove(self.app.creation_summary_path)
                         except Exception as e:
                             logging.error(f"Error deleting creation summary: {e}")
+                            
+                    # Because standard tags processed first, inventory is populated when we save!
                     self.app.save_game()
+                    
                     ai_text = ai_text.replace("[[START_GAME]]", "")
                     clean_creation_text = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", ai_text, flags=re.DOTALL).strip()
                     self.app.conversation_history += f"GM: {clean_creation_text}\n"
-                    
-            else:
-                tag_parser.process_standard_tags(ai_text)    
+
+            # 3. Recursive Logic (Rolls)
+            roll_match = re.search(r"\[\[ROLL:\s*(.*?)\]\]", ai_text)
 
             # Recursive Logic (Rolls)
             roll_match = re.search(r"\[\[ROLL:\s*(.*?)\]\]", ai_text)
@@ -254,7 +260,7 @@ class TagParser:
     def __init__(self, app):
         self.app = app
 
-    def process_standard_tags(self, ai_text):
+    def process_standard_tags(self, ai_text, is_startup=False):
         """Processes typical gameplay tags and returns the cleaned text."""
         # Inventory
         for match in re.finditer(r"\[\[ADD:\s*(.*?)\]\]", ai_text):
@@ -289,7 +295,7 @@ class TagParser:
             )
             self.app._sync_player_state_to_ui()
 
-            if not self.app.is_creating and "Processing" in self.app.notebook_widgets:
+            if not is_startup and "Processing" in self.app.notebook_widgets:
                 finished_items = self.app.notebook_widgets["Processing"].check_active_tasks(self.app.player.day, self.app.player.time)
                 if finished_items:
                     sys_msg = f"System: Process completed - {', '.join(finished_items)}"
