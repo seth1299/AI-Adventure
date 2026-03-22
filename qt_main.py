@@ -374,8 +374,7 @@ class QtAppContext:
                 location=s.get("location") or "Character Creation",
                 day=f"{s.get('day')}" or "Day 1",
                 time=s.get("time") or "12:00 A.M.",
-                nutrition=str(s.get("nutrition") or 100),
-                stamina=str(s.get("stamina") or 100),
+                dynamic_stats=s.get("tracked_stats", [])
             )
 
         # AIManager calls this from worker threads; dispatch to UI thread.

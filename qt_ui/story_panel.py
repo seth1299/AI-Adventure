@@ -29,6 +29,7 @@ class StoryPanel(QWidget):
     send_requested = Signal(str)
     menu_requested = Signal()
     currency_requested = Signal()
+    stats_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -38,8 +39,7 @@ class StoryPanel(QWidget):
             "location": "Unknown",
             "day": "Day 1",
             "time": "Morning",
-            "nutrition": "100",
-            "stamina": "100",
+            "dynamic_stats": []
         }
 
         root = QVBoxLayout(self)
@@ -103,29 +103,12 @@ class StoryPanel(QWidget):
         self.txt_log.append(text)
         self._scroll_to_bottom()
 
-    def set_status(
-        self,
-        *,
-        turn: str | None = None,
-        location: str | None = None,
-        day: str | None = None,
-        time: str | None = None,
-        nutrition: str | None = None,
-        stamina: str | None = None,
-    ) -> None:
-        if turn is not None:
-            self._status_cache["turn"] = str(turn)
-        if location is not None:
-            self._status_cache["location"] = str(location)
-        if day is not None:
-            self._status_cache["day"] = str(day)
-        if time is not None:
-            self._status_cache["time"] = str(time)
-        if nutrition is not None:
-            self._status_cache["nutrition"] = str(nutrition)
-        if stamina is not None:
-            self._status_cache["stamina"] = str(stamina)
-
+    def set_status(self, *, turn=None, location=None, day=None, time=None, dynamic_stats=None):
+        if turn is not None: self._status_cache["turn"] = str(turn)
+        if location is not None: self._status_cache["location"] = str(location)
+        if day is not None: self._status_cache["day"] = str(day)
+        if time is not None: self._status_cache["time"] = str(time)
+        if dynamic_stats is not None: self._status_cache["dynamic_stats"] = dynamic_stats # <--- Cache list
         self.lbl_status.setText(self._format_status_text())
 
     def get_log_text(self) -> str:
@@ -167,11 +150,15 @@ class StoryPanel(QWidget):
 
     def _format_status_text(self) -> str:
         s = self._status_cache
-        # Keep it simple for now; we can match your CTk layout later.
-        return (
-            f"Turn: {s['turn']} | Location: {s['location']} | "
-            f"{s['day']} | {s['time']} | Nutrition: {s['nutrition']} | Stamina: {s['stamina']}"
-        )
+        base_str = f"Turn: {s['turn']} | Location: {s['location']} | {s['day']} | {s['time']}"
+        
+        # Build the dynamic UI row!
+        stats_str = ""
+        for st in s.get("dynamic_stats", []):
+            if st.get("enabled", True): # Only show if enabled
+                stats_str += f" | {st['name']}: {st['value']}"
+                
+        return base_str + stats_str
 
     def _scroll_to_bottom(self) -> None:
         cursor = self.txt_log.textCursor()

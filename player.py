@@ -8,6 +8,10 @@ class Player:
         self.stamina = 100
         self.karmic_streak = 0
         self.save_path = None
+        self.tracked_stats = [
+            {"name": "Nutrition", "value": 100, "enabled": True},
+            {"name": "Stamina", "value": 100, "enabled": True}
+        ]
         self.base_currency = 0
         self.world_currencies = [{"name": "Copper Piece", "value": 1}, {"name": "Silver Piece", "value": 10}]
         
@@ -30,13 +34,12 @@ class Player:
     def get_status_dict(self):
         """Returns the dictionary format required for the UI and saving."""
         return {
-            "nutrition": self.nutrition,
-            "stamina": self.stamina,
             "location": self.location,
             "turn": str(self.turn),
             "day": str(self.day),
             "time": self.time,
-            "base_currency": self.base_currency
+            "base_currency": self.base_currency,
+            "tracked_stats": self.tracked_stats
         }
 
     def update_world_state(self, turn, location, day, time):
@@ -55,35 +58,25 @@ class Player:
         """
         Handles logic for [[MODIFY_STAT: Stamina | -10]] or [[MODIFY_STAT: Nutrition | SET 50]]
         """
-        stat = stat_name.strip().lower()
+        stat = stat_name.strip()
         raw = raw_value.strip()
 
-        if stat not in ("stamina", "nutrition"):
-            logging.error(f"Player: Unknown stat '{stat_name}'.")
-            return
+        # Find the stat, or dynamically create it if the AI invents one!
+        target_stat = next((s for s in self.tracked_stats if s["name"].lower() == stat.lower()), None)
+        if not target_stat:
+            target_stat = {"name": stat.title(), "value": 100, "enabled": True}
+            self.tracked_stats.append(target_stat)
 
-        current_val = self.stamina if stat == "stamina" else self.nutrition
-        new_val = current_val
-
+        new_val = target_stat["value"]
         try:
             if raw.upper().startswith("SET "):
-                # Absolute Set
                 new_val = int(raw.split(None, 1)[1].strip())
             else:
-                # Relative Delta
-                delta = int(raw)
-                new_val += delta
-        except Exception as e:
-            logging.error(f"Player: Bad stat value '{raw_value}': {e}")
+                new_val += int(raw)
+        except Exception:
             return
 
-        # Clamp between 0 and 100
-        new_val = max(0, min(100, new_val))
-
-        if stat == "stamina":
-            self.stamina = new_val
-        else:
-            self.nutrition = new_val
+        target_stat["value"] = new_val
             
     def get_formatted_currency(self, amount: int = 0) -> str:
         """Converts an integer (base currency) into a readable string like '3 Gold, 7 Silver'."""
@@ -223,18 +216,11 @@ class Player:
                 leveled_up = True
 
         self.save_skills_data(data)
-
-        # Modifiers rely entirely on native class attributes now!
-        bonus_from_nutrition = 1 if self.nutrition >= 85 else (-3 if self.nutrition <= 40 else 0)
-        bonus_from_stamina = 1 if self.stamina >= 85 else (-3 if self.stamina <= 40 else 0)
         skill_bonus = int(skill_entry.get("Level", 0) or 0)
 
-        total = die_roll + skill_bonus + bonus_from_nutrition + bonus_from_stamina
-
-        nut_msg = f" +{bonus_from_nutrition} (high nutrition)" if bonus_from_nutrition > 0 else (f" {bonus_from_nutrition} (low nutrition)" if bonus_from_nutrition < 0 else "")
-        sta_msg = f" +{bonus_from_stamina} (high stamina)" if bonus_from_stamina > 0 else (f" {bonus_from_stamina} (low stamina)" if bonus_from_stamina < 0 else "")
+        total = die_roll + skill_bonus
         
-        msg_lines.append(f"Rolling {clean_name}: {die_roll} + ({skill_bonus} (Skill){nut_msg}{sta_msg}) = {total}")
+        msg_lines.append(f"Rolling {clean_name}: {die_roll} + ({skill_bonus} (Skill) = {total}")
         
         if leveled_up:
             msg_lines.append(f"LEVEL UP! {clean_name} is now Level {skill_entry['Level']}!")

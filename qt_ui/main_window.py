@@ -1,6 +1,7 @@
 # qt_ui/main_window.py
 from __future__ import annotations
 from qt_ui.currency_dialog import CurrencyManagerDialog
+from qt_ui.stats_dialog import StatsManagerDialog
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -49,14 +50,10 @@ class MainWindow(QMainWindow):
         self.story_panel.send_requested.connect(self._on_send_requested)
         self.story_panel.menu_requested.connect(self._on_menu_requested)
         self.story_panel.currency_requested.connect(self.open_currency_menu)
+        self.story_panel.stats_requested.connect(self.open_stats_menu)
 
         # Docks (stubs for now)
         self._docks: dict[str, QDockWidget] = {}
-        #self._add_dock("Inventory", StubPanel("Inventory (stub)"), area=Qt.DockWidgetArea.RightDockWidgetArea)
-        #self._add_dock("Skills", StubPanel("Skills (stub)"), area=Qt.DockWidgetArea.RightDockWidgetArea)
-        #self._add_dock("Processing", StubPanel("Processing (stub)"), area=Qt.DockWidgetArea.BottomDockWidgetArea)
-        #self._add_dock("Recipes", StubPanel("Recipes (stub)"), area=Qt.DockWidgetArea.BottomDockWidgetArea)
-        #self._add_dock("Character", StubPanel("Character (stub)"), area=Qt.DockWidgetArea.LeftDockWidgetArea)
         self.world_panel = MarkdownPanel("World")
         self.journal_panel = MarkdownPanel("Journal")
         self.inventory_panel = InventoryPanel(app_context=self.app)
@@ -189,5 +186,30 @@ class MainWindow(QMainWindow):
                 
         except Exception as e:
             error_msg = f"Error opening currency menu: {str(e)}"
+            logging.exception(error_msg)
+            self.story_panel.print_text(error_msg, sender="System Error")
+            
+    def open_stats_menu(self):
+        import logging
+        if self.app == None: return
+        try:
+            dialog = StatsManagerDialog(self, existing_stats=self.app.player.tracked_stats)
+            if dialog.exec(): 
+                saved_stats = dialog.final_stats_data
+                
+                # Update player and save
+                self.app.player.tracked_stats = saved_stats
+                self.app.save_game()
+                self.app._sync_player_state_to_ui()
+                
+                # Feedback loop
+                msg = f"Tracked Stats successfully updated:\n"
+                for st in saved_stats:
+                    status = "Enabled" if st['enabled'] else "Disabled"
+                    msg += f" • {st['name']} ({status}): {st['value']}\n"
+                
+                self.story_panel.print_text(msg, sender="System")
+        except Exception as e:
+            error_msg = f"Error opening stats menu: {str(e)}"
             logging.exception(error_msg)
             self.story_panel.print_text(error_msg, sender="System Error")

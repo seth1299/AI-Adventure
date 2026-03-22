@@ -67,12 +67,17 @@ class AIManager:
         
         # 2. Gather Status
         next_turn = self.app.player.turn + 1
+        stats_str = ""
+        for st in self.app.player.tracked_stats:
+            if st.get("enabled", True):
+                stats_str += f"{st['name']}: {st['value']}\n"
         status_context = (
             f"\n[CURRENT STATUS]\n"
             f"Location: {self.app.player.location}\n"
             f"Day: {self.app.player.day}\n"
             f"Time: {self.app.player.time}\n"
             f"Current Turn: {self.app.player.turn}\n"
+            f"{stats_str}"  # <--- Inject it here!
             f"UPCOMING TURN: {next_turn} (You MUST use this number in the [[STATUS]] tag)"
         )
         context_data += status_context
