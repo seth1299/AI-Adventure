@@ -139,7 +139,6 @@ class MainWindow(QMainWindow):
 
         # New game flow
         self.app.current_adventure_path = save_path
-        self.app.is_creating = True
         self.app.conversation_history = ""
         try:
             for w in self.app.notebook_widgets.values():
@@ -147,10 +146,28 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        self.app._sync_player_state_to_ui()
-        self.story_panel.print_text("System: Initialization Sequence Started...", sender="System")
-        if self.ai_manager is not None:
-            threading.Thread(target=self.ai_manager.start_new_game_from_wizard, daemon=True).start()
+        # --- LAUNCH THE WIZARD POPUP ---
+        from qt_ui.creation_wizard import CreationWizard
+        wizard = CreationWizard(self)
+        
+        if wizard.exec() == QDialog.DialogCode.Accepted:
+            wizard_data = wizard.get_wizard_data()
+            
+            # Assign Currencies and Stats to Player
+            self.app.player.world_currencies = wizard_data["currencies"]
+            self.app.player.tracked_stats = wizard_data["stats"]
+            
+            self.app._sync_player_state_to_ui()
+            self.story_panel.print_text("System: Compiling universe parameters...", sender="System")
+            
+            if self.ai_manager is not None:
+                threading.Thread(
+                    target=self.ai_manager.start_new_game_from_wizard, 
+                    args=(wizard_data,), 
+                    daemon=True
+                ).start()
+        else:
+            self.story_panel.print_text("System: New game creation cancelled.", sender="System")
             
     from qt_ui.currency_dialog import CurrencyManagerDialog
 
