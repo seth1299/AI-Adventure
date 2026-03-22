@@ -125,7 +125,6 @@ class QtAppContext:
         self.win = win
         self.ui = _UiDispatcher(win)
 
-        self.is_creating = False
         self.current_adventure_path = None
 
         self.creation_summary_path = os.path.join(SAVES_DIR, "creation_summary.txt")
@@ -178,7 +177,6 @@ class QtAppContext:
             save_data = {
                 "Chat History": history_list,
                 "Status": status_data,
-                "is_creating": bool(self.is_creating),
                 "karmic_streak": int(getattr(self.player, "karmic_streak", 0) or 0),
                 "Currencies": getattr(self.player, "world_currencies", [])
             }
@@ -222,9 +220,6 @@ class QtAppContext:
 
         sg_path = os.path.join(save_path, "savegame.json")
         data = FileManager.load_json_data(sg_path) or {}
-
-        # Basic flags
-        self.is_creating = bool(data.get("is_creating", False))
 
         # Player meta
         try:
@@ -355,6 +350,7 @@ def main() -> int:
     FileManager.setup_initial_logging()
 
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
     app.setApplicationName("AI RPG Adventure")
 
     # Optional icon (if you already have game_icon.ico in your bundled resources)
@@ -402,9 +398,7 @@ def main() -> int:
         if not os.path.exists(world_path): 
             with open(world_path, "w", encoding="utf-8") as f: f.write("")
 
-        # New game flow
         app_ctx.current_adventure_path = save_path
-        app_ctx.is_creating = True
         app_ctx.conversation_history = ""
         try:
             for w in app_ctx.notebook_widgets.values():
@@ -412,10 +406,18 @@ def main() -> int:
         except Exception:
             logging.exception("Failed to set base path for panels")
 
-        app_ctx._sync_player_state_to_ui()
-        app_ctx.story_tab.print_text("System: Initialization Sequence Started...", sender="System")
-        if win.ai_manager != None:
-            threading.Thread(target=win.ai_manager.start_creation_wizard, daemon=True).start()
+        from qt_ui.creation_wizard import CreationWizard
+        wizard = CreationWizard(win)
+        if wizard.exec() == QDialog.DialogCode.Accepted:
+            wizard_data = wizard.get_wizard_data()
+            app_ctx._sync_player_state_to_ui()
+            app_ctx.story_tab.print_text("System: Compiling universe parameters...", sender="System")
+            
+            if win.ai_manager != None:
+                threading.Thread(target=win.ai_manager.start_new_game_from_wizard, args=(wizard_data,), daemon=True).start()
+        else:
+            # If the user closes the wizard without finishing, exit or return to menu
+            sys.exit(0)
     
     QTimer.singleShot(0, _boot_selected_save)
     return app.exec()

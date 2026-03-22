@@ -150,7 +150,7 @@ class MainWindow(QMainWindow):
         self.app._sync_player_state_to_ui()
         self.story_panel.print_text("System: Initialization Sequence Started...", sender="System")
         if self.ai_manager is not None:
-            threading.Thread(target=self.ai_manager.start_creation_wizard, daemon=True).start()
+            threading.Thread(target=self.ai_manager.start_new_game_from_wizard, daemon=True).start()
             
     from qt_ui.currency_dialog import CurrencyManagerDialog
 
