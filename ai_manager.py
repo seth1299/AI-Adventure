@@ -39,7 +39,15 @@ class AIManager:
         # If the player left EVERY skill blank:
         if not skills_text:
             skills_text = "(No skills specified. AI, please invent 16 starting skills fitting the world following this exact level distribution: one Lvl 5, two Lvl 4, three Lvl 3, four Lvl 2, six Lvl 1.)"
-
+            
+        currencies_text = ", ".join([f"{c['name']} (Worth {c['value']} base units)" for c in data['currencies']])
+        
+        stats_text = ""
+        for st in data['stats']:
+            if st['enabled']:
+                stats_text += f"- {st['name']}: Starts at {st['value']} (Rules: {st['desc']})\n"
+        if not stats_text: stats_text = "(No tracked stats specified)"
+        
         # Format focus
         focus_text = ', '.join(data['focus']) if data['focus'] else "Not specified (AI, pick a balanced focus)"
 
@@ -53,6 +61,12 @@ Genre/Tone: {data['world']['genre'] or 'Not specified'}
 Tech Level: {data['world']['tech'] or 'Not specified'}
 Species/Races: {data['world']['species'] or 'Not specified'}
 Game Focus: {focus_text}
+
+World Economy (Currencies):
+{currencies_text}
+
+Tracked Player Stats:
+{stats_text}
 
 Character Bio:
 Name: {data['character']['name'] or 'Not specified'}
@@ -74,6 +88,7 @@ Output the following SPECIAL TAGS to set up the game files based on this data.
 [[SKILL: Name | Level]] (Output one for EACH skill. If none were provided, output the 16 invented skills here).
 [[ADD_FOOD: Type | Name | Desc | Amount | Value | Meals | SpoilDay | SpoilTime]] (Add logical starting food for the Player Character. Repeat this tag for EACH FOOD ITEM that the Player will start out with.)
 [[ADD: Type | Name | Description | Amount | Value]] (Add logical starting equipment/wealth. Repeat this tag for EACH NON-FOOD and NON-CURRENCY item that the Player will start out with.)
+[[CHANGE_CURRENCY: X]] (Determine how wealthy the Player Character should be, and give them starting wealth accordingly by passing a positive Integer value as "X".)
 [[STATUS: 1 | {data['starting_location'] or 'Unknown (Invent a starting location name)'} | 1 | 7:00 A.M.]]
 [[MUSIC: FILENAME_PLACEHOLDER.mp3]]
 [[START_GAME]]

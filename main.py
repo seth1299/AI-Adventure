@@ -410,8 +410,9 @@ def main() -> int:
         wizard = CreationWizard(win)
         if wizard.exec() == QDialog.DialogCode.Accepted:
             wizard_data = wizard.get_wizard_data()
+            app_ctx.player.world_currencies = wizard_data["currencies"]
+            app_ctx.player.tracked_stats = wizard_data["stats"]
             app_ctx._sync_player_state_to_ui()
-            app_ctx.story_tab.print_text("System: Compiling universe parameters...", sender="System")
             
             if win.ai_manager != None:
                 threading.Thread(target=win.ai_manager.start_new_game_from_wizard, args=(wizard_data,), daemon=True).start()
