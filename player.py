@@ -9,8 +9,8 @@ class Player:
         self.karmic_streak = 0
         self.save_path = None
         self.tracked_stats = [
-            {"name": "Nutrition", "value": 100, "enabled": True},
-            {"name": "Stamina", "value": 100, "enabled": True}
+            {"name": "Nutrition", "value": 100, "enabled": True, "desc": "Represents how well-fed the character is. Max 100."},
+            {"name": "Stamina", "value": 100, "enabled": True, "desc": "Represents physical energy. Depletes from actions. Max 100."}
         ]
         self.base_currency = 0
         self.world_currencies = [{"name": "Copper Piece", "value": 1}, {"name": "Silver Piece", "value": 10}]
@@ -64,7 +64,7 @@ class Player:
         # Find the stat, or dynamically create it if the AI invents one!
         target_stat = next((s for s in self.tracked_stats if s["name"].lower() == stat.lower()), None)
         if not target_stat:
-            target_stat = {"name": stat.title(), "value": 100, "enabled": True}
+            target_stat = {"name": stat.title(), "value": 100, "enabled": True, "desc": "A dynamically tracked status."}
             self.tracked_stats.append(target_stat)
 
         new_val = target_stat["value"]
