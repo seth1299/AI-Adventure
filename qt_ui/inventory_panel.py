@@ -125,20 +125,43 @@ class InventoryPanel(QWidget):
             return
 
         data = self.load_data()
-        if not data:
+        
+        base_currency = 0
+        if self.app and hasattr(self.app, 'player'):
+            base_currency = self.app.player.base_currency
+
+        if not data and base_currency == 0:
             self.display.setPlainText("INVENTORY\n\n(Empty)")
             self._set_state("")
             return
-        
-        wealth_str = "0 (None)"
-        if self.app and hasattr(self.app, 'player'):
-            wealth_str = self.app.player.get_formatted_currency()
-            
-        parts: list[str] = ["INVENTORY\n", f"Wealth: {wealth_str}\n"]
 
         headers = ["Name", "Description", "Amount", "Value (each)"]
         parts: list[str] = ["INVENTORY\n"]
 
+        # --- NEW: DYNAMIC CURRENCY TABLE ---
+        if base_currency != 0 and self.app and hasattr(self.app, 'player'):
+            remaining = abs(base_currency)
+            sorted_currencies = sorted(self.app.player.world_currencies, key=lambda x: int(x.get("value", 1)), reverse=True)
+            
+            currency_rows = []
+            for cur in sorted_currencies:
+                val = int(cur.get("value", 1))
+                if remaining >= val:
+                    count = remaining // val
+                    remaining %= val
+                    name = cur.get("name", "Unknown Coin")
+                    
+                    # If the player is somehow in debt, display it as a negative amount
+                    amt_str = str(-count) if base_currency < 0 else str(count)
+                    
+                    currency_rows.append([name, "Legal Tender", amt_str, f"{val} base units"])
+            
+            if currency_rows:
+                parts.append("\nWealth / Currencies\n")
+                parts.append(tabulate(currency_rows, headers, tablefmt="simple_grid"))
+                parts.append("\n")
+
+        # --- REGULAR ITEMS ---
         for category in sorted(data.keys(), key=lambda s: str(s).lower()):
             items = data.get(category) or []
             if not isinstance(items, list) or not items:

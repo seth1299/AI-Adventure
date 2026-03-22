@@ -113,6 +113,10 @@ DEFAULT_RULES = (
    - The Player has the option of creating different Statuses that they want to exist in the game.
    - The Player will write a description for each Status for what they want it to do and how it should be tracked; please logically analyze that and modify and keep track of the stats accordingly.
    - For example, if the Player wants a "Nutrition" stat, then presumably it would decrease pretty much every turn that the Player is not eating, and would make the Player hungry when it gets low.
+   - **CRITICAL:** When a tracked stat changes due to events, time passing, or player actions, you MUST use the MODIFY_STAT tag to update it to its exact new numeric value.
+   - **Format:** [[MODIFY_STAT: Stat Name | New Value]]
+   - **Example:** [[MODIFY_STAT: Health | 85]] or [[MODIFY_STAT: Nutrition | 90]]
+   - Do NOT attempt to add these dynamic stats into the standard [[STATUS]] tag. Keep the [[STATUS]] tag strictly for Turn, Location, Day, and Time.
 6. AUDIO CONTROL:
 """
    f"- You have control over the game's audio. Valid sound file names are listed here {VALID_SOUND_FILE_NAMES}."
