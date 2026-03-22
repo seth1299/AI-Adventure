@@ -29,45 +29,57 @@ class AIManager:
                 
         self.app.player.update_world_state(1, data['starting_location'] or "Unknown", 1, "7:00 A.M.")
         
+        # Format skills, handling blank descriptions
         skills_text = ""
         for s in data['skills']:
-            skills_text += f"- Level {s['level']}: {s['name']} ({s['desc']})\n"
+            name = s['name'] or 'AI, please invent a name for this skill'
+            desc = s['desc'] or 'AI, please invent a description for this skill'
+            skills_text += f"- Level {s['level']}: {name} ({desc})\n"
+            
+        # If the player left EVERY skill blank:
+        if not skills_text:
+            skills_text = "(No skills specified. AI, please invent 16 starting skills fitting the world following this exact level distribution: one Lvl 5, two Lvl 4, three Lvl 3, four Lvl 2, six Lvl 1.)"
 
-            prompt = f"""
-        System: Initialize a new RPG adventure using the following parameters:
+        # Format focus
+        focus_text = ', '.join(data['focus']) if data['focus'] else "Not specified (AI, pick a balanced focus)"
 
-        World Setting: {data['world']['setting']}
-        Genre/Tone: {data['world']['genre']}
-        Tech Level: {data['world']['tech']}
-        Species/Races: {data['world']['species']}
-        Game Focus: {', '.join(data['focus'])}
+        # The prompt is now safely un-indented!
+        prompt = f"""
+System: Initialize a new RPG adventure using the following parameters.
+CRITICAL INSTRUCTION: If any parameter says "Not specified", you must creatively invent a fitting, unique value for it based on the rest of the context.
 
-        Character Bio:
-        Name: {data['character']['name']}
-        Age: {data['character']['age']}
-        Gender/Pronouns: {data['character']['gender']} / {data['character']['pronouns']}
-        Orientation: {data['character']['orientation']}
-        Background: {data['character']['background']}
+World Setting: {data['world']['setting'] or 'Not specified'}
+Genre/Tone: {data['world']['genre'] or 'Not specified'}
+Tech Level: {data['world']['tech'] or 'Not specified'}
+Species/Races: {data['world']['species'] or 'Not specified'}
+Game Focus: {focus_text}
 
-        Starting Skills:
-        {skills_text}
+Character Bio:
+Name: {data['character']['name'] or 'Not specified'}
+Age: {data['character']['age'] or 'Not specified'}
+Gender/Pronouns: {data['character']['gender'] or 'Not specified'} / {data['character']['pronouns'] or 'Not specified'}
+Orientation: {data['character']['orientation'] or 'Not specified'}
+Background: {data['character']['background'] or 'Not specified'}
 
-        Starting Location: {data['starting_location']}
-        Final Comments/Rules: {data['final_comments']}
+Starting Skills:
+{skills_text}
 
-        INSTRUCTIONS:
-        Output the following SPECIAL TAGS to set up the game files based on this data.
-        [[WORLD_INFO: Write a summary of the game focus, world setting, tone, currency, and tech level here. Include anything the Player specified.]]
-        [[CHARACTER_INFO: Write the full character biography, appearance, and details here.]]
-        [[SKILL: Name | Level]] (Output one for EACH skill listed above).
-        [[ADD_FOOD: Type | Name | Desc | Amount | Value | Meals | SpoilDay | SpoilTime]] (Add logical starting food)
-        [[ADD: Type | Name | Description | Amount | Value]] (Add logical starting equipment/wealth)
-        [[STATUS: 1 | {data['starting_location'] or 'Unknown'} | 1 | 7:00 A.M.]]
-        [[MUSIC: FILENAME_PLACEHOLDER.mp3]]
-        [[START_GAME]]
+Starting Location: {data['starting_location'] or 'Not specified'}
+Final Comments/Rules: {data['final_comments'] or 'None'}
 
-        After outputting the tags, summarize the first starting turn, describe the surroundings vividly, and finish by asking "What do you do now?" and suggesting a few possible actions.
-        """
+INSTRUCTIONS:
+Output the following SPECIAL TAGS to set up the game files based on this data.
+[[WORLD_INFO: Write a summary of the game focus, world setting, tone, currency, and tech level here. Include anything the Player specified.]]
+[[CHARACTER_INFO: Write the full character biography, appearance, and details here.]]
+[[SKILL: Name | Level]] (Output one for EACH skill. If none were provided, output the 16 invented skills here).
+[[ADD_FOOD: Type | Name | Desc | Amount | Value | Meals | SpoilDay | SpoilTime]] (Add logical starting food for the Player Character. Repeat this tag for EACH FOOD ITEM that the Player will start out with.)
+[[ADD: Type | Name | Description | Amount | Value]] (Add logical starting equipment/wealth. Repeat this tag for EACH NON-FOOD and NON-CURRENCY item that the Player will start out with.)
+[[STATUS: 1 | {data['starting_location'] or 'Unknown (Invent a starting location name)'} | 1 | 7:00 A.M.]]
+[[MUSIC: FILENAME_PLACEHOLDER.mp3]]
+[[START_GAME]]
+
+After outputting the tags, summarize the first starting turn, describe the surroundings vividly, and finish by asking "What do you do now?" and suggesting a few possible actions.
+"""
         # Call query_ai and pass our new temporary is_startup flag
         self.query_ai(prompt, "System: Generate Start", is_startup=True)
 
