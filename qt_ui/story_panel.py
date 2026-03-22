@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QSizePolicy,
     QFrame,
+    QMenu
 )
 
 
@@ -30,6 +31,7 @@ class StoryPanel(QWidget):
     menu_requested = Signal()
     currency_requested = Signal()
     stats_requested = Signal()
+    help_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -52,18 +54,31 @@ class StoryPanel(QWidget):
 
         self.btn_menu = QPushButton("Menu")
         self.btn_menu.setFixedWidth(80)
+        
+        self.main_menu = QMenu(self)
+        
+        # 1. Save/Load Action
+        action_save = self.main_menu.addAction("Save / Load Game")
+        action_save.triggered.connect(self.menu_requested.emit)
+
+        # 2. Currency Action
+        action_currencies = self.main_menu.addAction("Manage Currencies")
+        action_currencies.triggered.connect(self.currency_requested.emit)
+
+        # 3. Stats Action
+        action_stats = self.main_menu.addAction("Manage Tracked Stats")
+        action_stats.triggered.connect(self.stats_requested.emit)
+        
+        #4. Help Menu
+        self.main_menu.addSeparator() # Adds a nice visual line before Help
+        action_help = self.main_menu.addAction("Help")
+        action_help.triggered.connect(self.help_requested.emit)
+
+        # Attach the Dropdown to the Button
+        self.btn_menu.setMenu(self.main_menu)
+        
         self.btn_menu.clicked.connect(self.menu_requested.emit)
         header.addWidget(self.btn_menu, alignment=Qt.AlignmentFlag.AlignLeft)
-        
-        self.btn_currency = QPushButton("Currencies")
-        self.btn_currency.setFixedWidth(80)
-        self.btn_currency.clicked.connect(self.currency_requested.emit)
-        header.addWidget(self.btn_currency, alignment=Qt.AlignmentFlag.AlignLeft)
-        
-        self.btn_stats = QPushButton("Stats")
-        self.btn_stats.setFixedWidth(80)
-        self.btn_stats.clicked.connect(self.stats_requested.emit)
-        header.addWidget(self.btn_stats, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self.lbl_status = QLabel(self._format_status_text())
         self.lbl_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)

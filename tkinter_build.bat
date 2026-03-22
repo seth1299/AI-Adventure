@@ -1,1 +1,0 @@
-pyinstaller --noconfirm --noconsole --onefile --clean --add-data "sounds;sounds" --add-data "recipes.csv;." --add-data "game_icon.ico;." --icon=game_icon.ico --name "Text Adventure" main.py

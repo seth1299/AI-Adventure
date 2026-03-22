@@ -1,271 +1,457 @@
-import os, random, re
-import customtkinter as ctk
-from dotenv import load_dotenv
-from sound_manager import SoundManager
+# qt_main.py
+import sys
+import os
 import logging
-import shutil
-
-# Import Config and UI
-from config import SAVES_DIR, SOUNDS_DIR, BASE_SOUNDS_DIR, VALID_SOUND_FILE_NAMES
-# [CHANGED] Simplified imports
-from ui import MainMenu, GameView
-
-# Managers
+from PySide6.QtWidgets import QApplication
 from file_manager import FileManager
+from qt_ui.main_window import MainWindow
+from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt
 from player import Player
-from ai_manager import AIManager
+from sound_manager import SoundManager
+from config import SAVES_DIR, SOUNDS_DIR
+import random, re
+from qt_ui.main_menu_dialog import MainMenuDialog
+import threading
+from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt, QThread
+from queue import Queue
 
-load_dotenv()
-FileManager.setup_initial_logging()
+class _NullWidget:
+    """Safe no-op widget used during the Qt migration."""
+    def get_text(self) -> str:
+        return ""
 
-class GameApp(ctk.CTk):
+    def set_text(self, _text: str) -> None:
+        return
     
-    def __init__(self):
-        super().__init__()
-        self.is_creating = False
-        self.game_loaded_successfully = False
-        self.title("AI RPG Adventure")
-        self.geometry("1000x700")
-        
-        self.sound_manager = SoundManager(SOUNDS_DIR)
-        self.player = Player()
-        self.ai_manager = AIManager(self)
-        
-        ctk.set_appearance_mode("Dark")
-        
-        icon_path = FileManager.resource_path("game_icon.ico")
-        if os.path.exists(icon_path):
+    def set_base_path(self, *_a, **_k) -> None:
+        return
+
+    def save_now(self, *_a, **_k) -> None:
+        return
+
+    # Inventory-ish
+    def autonomous_add(self, *_a, **_k): return "[System: Inventory tag ignored in Qt build]"
+    def autonomous_remove(self, *_a, **_k): return "[System: Inventory tag ignored in Qt build]"
+    def modify_item(self, *_a, **_k): return "[System: Inventory tag ignored in Qt build]"
+    def add_food(self, *_a, **_k): return "[System: Food tag ignored in Qt build]"
+    def consume_food(self, *_a, **_k): return "[System: Consume tag ignored in Qt build]"
+
+    # Skills-ish
+    def force_learn_skill(self, *_a, **_k): return
+
+    # Processing-ish
+    def check_active_tasks(self, *_a, **_k): return []
+    def add_timed_process(self, *_a, **_k): return "[System: Processing tag ignored in Qt build]"
+    def remove_process(self, *_a, **_k): return "[System: Processing tag ignored in Qt build]"
+    def add_project(self, *_a, **_k): return "[System: Project tag ignored in Qt build]"
+    def get_required_skill(self, *_a, **_k): return ""
+    def apply_work_hours(self, *_a, **_k): return "[System: Work tag ignored in Qt build]"
+
+    # Recipes-ish
+    def add_recipe_from_tag(self, *_a, **_k): return "[System: Recipe tag ignored in Qt build]"
+
+class _UiDispatcher(QObject):
+    run_now = Signal(object)          # callable
+    run_later = Signal(int, object)   # ms, callable
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.run_now.connect(self._run_now, Qt.ConnectionType.QueuedConnection)
+        self.run_later.connect(self._run_later, Qt.ConnectionType.QueuedConnection)
+
+    def is_ui_thread(self) -> bool:
+        app = QApplication.instance()
+        if app is None:
+            return True
+        return QThread.currentThread() == app.thread()
+
+    def call_blocking(self, func):
+        """
+        Run `func` on the UI thread and return its result.
+        If we're already on the UI thread, run immediately.
+        """
+        if self.is_ui_thread():
+            return func()
+
+        q: Queue = Queue(maxsize=1)
+
+        def _wrapper():
             try:
-                self.iconbitmap(icon_path)
+                q.put((True, func()))
             except Exception as e:
-                logging.error(f"Icon error: {e}")
+                q.put((False, e))
 
-        self.current_adventure_path = None
-        self.creation_summary_path = os.path.join(SAVES_DIR, "creation_summary.txt")
-        self.conversation_history = ""
-        
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+        self.run_now.emit(_wrapper)
+        ok, payload = q.get()
+        if ok:
+            return payload
+        raise payload
 
-        # --- VIEW 1: Main Menu ---
-        self.main_menu = MainMenu(self, on_load_callback=self.load_game)
-        self.main_menu.grid(row=0, column=0, sticky="nsew")
-
-        # --- VIEW 2: Game View (Tabs) ---
-        # [CHANGED] Replaced manual tab construction with GameView
-        self.game_view = GameView(self, 
-                                  send_callback=self.ai_manager.handle_player_action,
-                                  menu_callback=self.return_to_menu)
-        # Note: We do not grid it yet; load_game handles that.
-
-        # Ensure sounds are present
-        for sound in VALID_SOUND_FILE_NAMES:
-            current_path = os.path.join(BASE_SOUNDS_DIR, sound)
-            destination_path = os.path.join(SOUNDS_DIR, sound)
-            if not os.path.exists(destination_path):
-                 shutil.copyfile(current_path, destination_path)
-
-        self.protocol("WM_DELETE_WINDOW", self.on_close)
-        
-    # --- COMPATIBILITY PROPERTIES ---
-    # These allow AIManager and FileManager to access widgets 
-    # without needing to rewrite those files.
-    
-    @property
-    def notebook_widgets(self):
-        """Facade for accessing widgets inside GameView."""
-        return self.game_view.widgets
-
-    @property
-    def story_tab(self):
-        """Facade for accessing the StoryTab."""
-        return self.game_view.widgets["Story"]
-
-    @property
-    def tab_view(self):
-        """Facade for FileManager to toggle visibility."""
-        return self.game_view
-
-    # --- GAME LOGIC ---
-
-    def _get_skill_level(self, skill_name: str) -> int:
-        clean = (skill_name or "").split('(')[0].strip().title()
+    @Slot(object)
+    def _run_now(self, func) -> None:
         try:
-            skills_tab = self.notebook_widgets["Skills"]
-            data = skills_tab.load_data()
-            for item in data:
-                if item.get("Name", "").lower() == clean.lower():
-                    return int(item.get("Level", 0) or 0)
-        except Exception as e:
-            logging.error("Get skill level error: {e}")
-        return 0
+            func()
+        except Exception:
+            logging.exception("UI dispatch error (run_now)")
 
-    def _advance_time_hours(self, hours: float):
-        from time_utils import add_hours 
-        gt = add_hours(str(self.player.day), self.player.time, hours)
-        self.player.day = gt.as_day_string()
-        self.player.time = gt.as_time_string()
-        self._sync_player_state_to_ui()
+    @Slot(int, object)
+    def _run_later(self, ms: int, func) -> None:
+        try:
+            QTimer.singleShot(int(ms), func)
+        except Exception:
+            logging.exception("UI dispatch error (run_later)")
+            
+class QtStoryTabAdapter:
+    def __init__(self, story_panel, dispatcher: _UiDispatcher):
+        self._panel = story_panel
+        self._ui = dispatcher
 
-    def _sync_player_state_to_ui(self):
-        """Push player state to the StoryTab UI."""
-        self.after(0, lambda: self.story_tab.update_status(
-            self.player.turn,
-            self.player.location,
-            self.player.day,
-            self.player.time,
-            nutrition=self.player.nutrition,
-            stamina=self.player.stamina
-        ))
+    def print_text(self, text: str, sender: str = "GM") -> None:
+        self._ui.run_now.emit(lambda: self._panel.print_text(text, sender=sender))
 
-    def return_to_menu(self):
-        self.save_game()
-        self.current_adventure_path = None
+    def set_controls_state(self, enabled: bool, status_text: str | None = None) -> None:
+        self._ui.run_now.emit(lambda: self._panel.set_controls_state(enabled, status_text))
+        
+class QtPanelAdapter:
+    """
+    Thread-safe adapter around Qt panels.
+
+    - get_text() is safe from worker threads.
+    - set_text(), set_base_path(), save_now() are executed on UI thread.
+    - Any other method calls (inventory/skills/processing/recipes helpers)
+      are forwarded safely via __getattr__.
+    """
+
+    def __init__(self, panel, dispatcher: _UiDispatcher):
+        self._panel = panel
+        self._ui = dispatcher
+
+    def get_text(self) -> str:
+        return str(self._ui.call_blocking(lambda: self._panel.get_text()))
+
+    def set_text(self, text: str) -> None:
+        self._ui.call_blocking(lambda t=text: self._panel.set_text(t))
+
+    def set_base_path(self, base_path: str) -> None:
+        self._ui.call_blocking(lambda p=base_path: self._panel.set_base_path(p))
+
+    def save_now(self) -> None:
+        if self != None and hasattr(self._ui.call_blocking, "save_now"): self._ui.call_blocking(self._panel.save_now)
+
+    def __getattr__(self, name):
+        """
+        Forward unknown attributes/methods to the underlying panel, safely.
+        If it's callable, we call it on the UI thread and return the result.
+        """
+        attr = getattr(self._panel, name)
+        if callable(attr):
+            def _wrapped(*args, **kwargs):
+                return self._ui.call_blocking(lambda: getattr(self._panel, name)(*args, **kwargs))
+            return _wrapped
+        return attr
+
+
+class QtAppContext:
+    """Minimal adapter to let the existing AIManager run under Qt."""
+
+    def __init__(self, win):
+        self.win = win
+        self.ui = _UiDispatcher(win)
+
         self.is_creating = False
-        FileManager.update_logger_path(None)
-        
-        self.game_view.grid_forget()
-        self.title("AI RPG Adventure")
-        self.main_menu.refresh_list()
-        self.main_menu.grid(row=0, column=0, sticky="nsew")
+        self.current_adventure_path = None
 
-    def load_game(self, save_name):
-        FileManager.load_game(self, save_name)
+        self.creation_summary_path = os.path.join(SAVES_DIR, "creation_summary.txt")
+        self.secret_path = os.path.join(SAVES_DIR, "secret.txt")
+        self.world_path = os.path.join(SAVES_DIR, "world.md")
+        self.conversation_history = ""
+
+        self.player = Player()
+        self.sound_manager = SoundManager(SOUNDS_DIR)
+
+        # API surface AIManager expects
+        self.story_tab = QtStoryTabAdapter(win.story_panel, self.ui)
+
+        null = _NullWidget()
+        world = QtPanelAdapter(getattr(win, "world_panel", null), self.ui)
+        journal = QtPanelAdapter(getattr(win, "journal_panel", null), self.ui)
+        skills = QtPanelAdapter(getattr(win, "skills_panel", null), self.ui)
+        recipes = QtPanelAdapter(getattr(win, "recipes_panel", null), self.ui)
+        character = QtPanelAdapter(getattr(win, "character_panel", null), self.ui)
+        processing = QtPanelAdapter(getattr(win, "processing_panel", null), self.ui)
+        inventory = QtPanelAdapter(getattr(win, "inventory_panel", null), self.ui)
+        self.notebook_widgets = {
+            "Inventory": inventory,
+            "Skills": skills,
+            "Processing": processing,
+            "Recipes": recipes,
+            "Character": character,
+            "World": world,
+            "Journal": journal,
+        }
+
+        self._sync_player_state_to_ui()
+        #self.sound_manager.stop_music()
+        #self.after(0, lambda s="Main_Menu_Or_Loading_Screen.mp3": self.sound_manager.play_sfx(s))
+
+    def after(self, ms: int, func) -> None:
+        self.ui.run_later.emit(int(ms), func)
+
+    def load_rules(self) -> str:
+        return FileManager.get_rules(self.current_adventure_path)
+
+    def save_game(self) -> None:
+        if not self.current_adventure_path:
+            logging.warning(f"Warning: No valid save path.")
+            return
+
+        # Save Markdown tabs
+        try:
+            for widget in self.notebook_widgets:
+                w = self.notebook_widgets.get(widget)
+                if w != None and hasattr(w, "save_now"):
+                    w.save_now()
+        except Exception:
+            logging.exception("Qt save: markdown save failed")
+
+        # Save JSON state (history + status)
+        try:
+            history_list = [line for line in (self.conversation_history or "").split("\n") if line.strip()]
+            status_data = self.player.get_status_dict()
+            save_data = {
+                "Chat History": history_list,
+                "Status": status_data,
+                "is_creating": bool(self.is_creating),
+                "karmic_streak": int(getattr(self.player, "karmic_streak", 0) or 0),
+                "Currencies": getattr(self.player, "world_currencies", [])
+            }
+            history_path = os.path.join(self.current_adventure_path, "savegame.json")
+            logging.info(f"Saved to {history_path}.")
+            FileManager.save_json_data(history_path, save_data)
+        except Exception:
+            logging.exception("Qt save: savegame.json write failed")
+    
+    def _resolve_save_path_for_recap(self) -> str | None:
+        """Pick a save folder to read savegame.json from.
+        - Prefer current_adventure_path if set.
+        - Otherwise, pick the most recently modified save folder containing savegame.json.
+        """
+        if self.current_adventure_path:
+            return self.current_adventure_path
+
+        try:
+            best_path: str | None = None
+            best_mtime = -1.0
+            for name in os.listdir(SAVES_DIR):
+                p = os.path.join(SAVES_DIR, name)
+                if not os.path.isdir(p):
+                    continue
+                sg = os.path.join(p, "savegame.json")
+                if not os.path.exists(sg):
+                    continue
+                mtime = os.path.getmtime(sg)
+                if mtime > best_mtime:
+                    best_mtime = mtime
+                    best_path = p
+            return best_path
+        except Exception:
+            logging.exception("Failed to resolve save path for recap")
+            return None
         
+    def load_savegame_state(self, save_path: str) -> dict:
+        """Load savegame.json and hydrate Player + app flags, then sync status UI."""
+        self.current_adventure_path = save_path
+        self.player.set_save_path(save_path)
+
+        sg_path = os.path.join(save_path, "savegame.json")
+        data = FileManager.load_json_data(sg_path) or {}
+
+        # Basic flags
+        self.is_creating = bool(data.get("is_creating", False))
+
+        # Player meta
+        try:
+            self.player.karmic_streak = int(data.get("karmic_streak", 0) or 0)
+        except Exception:
+            self.player.karmic_streak = 0
+            
+        currencies = data.get("Currencies")
+        if currencies:
+            self.player.world_currencies = currencies
+        else:
+            # Default fallback if missing
+            self.player.world_currencies = [{"name": "Copper Piece", "value": 1}, {"name": "Silver Piece", "value": 10}]
+
+        # Player status
+        status_data = data.get("Status") or {}
+        if isinstance(status_data, dict) and status_data:
+            self.player.load_from_dict(status_data)
+
+        # History (keep around for later panels)
+        hist = data.get("Chat History") or []
+        if isinstance(hist, list):
+            self.conversation_history = "\n".join([h for h in hist if isinstance(h, str)])
+        elif isinstance(hist, str):
+            self.conversation_history = hist
+        else:
+            self.conversation_history = ""
+            
+        try:
+            for widget in self.notebook_widgets:
+                self.notebook_widgets[widget].set_base_path(save_path)
+        except Exception:
+            logging.exception("Failed to load markdown tabs")
+
+        self._sync_player_state_to_ui()
+        return data
+
+    def generate_recap(self) -> None:
+        """Load the most recent savegame.json, sync status bar, then print a recap."""
+        try:
+            save_path = self._resolve_save_path_for_recap()
+            if not save_path:
+                self.story_tab.print_text("No save found to recap from.", sender="System")
+                return
+
+            data = self.load_savegame_state(save_path)
+            history = data.get("Chat History") or []
+
+            last_gm: str | None = ""
+            if isinstance(history, list):
+                for line in reversed(history):
+                    if isinstance(line, str) and line.strip().startswith("GM:") and len(line.strip()) > 8:
+                        last_gm += line.strip()[len("GM:"):].strip() + "\n"
+                    elif isinstance(line, str) and line.strip().startswith("Player:") == False and len(line.strip()) > 8:
+                        last_gm += line.strip() + "\n"
+                    elif isinstance(line, str) and line.strip().startswith("Player"): break
+
+            if not last_gm:
+                self.story_tab.print_text("No GM message found in savegame.json.", sender="System")
+                return
+            
+            self.story_tab.print_text(last_gm[:-1:], sender="GM")
+            self.story_tab.print_text(f"\n\nWhat do you do now?")
+            
+        except Exception:
+            logging.exception("Generate recap failed")
+            self.story_tab.print_text("Recap failed (see logs).", sender="System")
+
     def _format_recap_text(self, text):
         if not text: return ""
-        
-        # 1. Split text into sentences (Lookbehind for punctuation [.!?] followed by whitespace)
-        # This keeps the punctuation attached to the sentence.
+        import re
         sentences = re.split(r'(?<=[.!?])\s+', text)
-        #logging.info(f"Sentences:\n{sentences}")
-        
         _index = 0
         _text_to_return = ""
+        
         for sentence in sentences:
             if _index % 2 == 0 and _index != 0:
                 _text_to_return += "\n\n"
             _text_to_return += sentence + " "
             _index += 1
-        logging.info(f"Text to return: {_text_to_return}")
+            
         return _text_to_return
-    
-    def generate_local_recap(self):
-        try:
-            self._attempt_local_music_restore()
-            last_gm_msg = None
-            if self.conversation_history:
-                last_gm_index = self.conversation_history.rfind("GM:")
-                if last_gm_index != -1:
-                    text_chunk = self.conversation_history[last_gm_index:]
-                    text_chunk = text_chunk.replace("GM:", "", 1).strip()
-                    if "Player:" in text_chunk:
-                         text_chunk = text_chunk.split("Player:")[0].strip()
-                    last_gm_msg = text_chunk
-            
-            if last_gm_msg:
-                last_gm_msg = self._format_recap_text(last_gm_msg)
-                self.story_tab.print_text(f"{last_gm_msg}", sender="GM")
-                self.story_tab.print_text("What do you do now?", sender="GM")
-            else:
-                self.story_tab.print_text("System: No recent history found to recap.", sender="System")
-        except Exception as e:
-            logging.error(f"Local Recap Error: {e}")
 
-    def _attempt_local_music_restore(self):
-        try:
-            from rapidfuzz import process, fuzz
-            location = self.player.location
-            if not location or not VALID_SOUND_FILE_NAMES: return
-            logging.info(f"Location: {location}")
-            logging.info(f"Valid sound file names: {VALID_SOUND_FILE_NAMES}")
+    def _get_skill_level(self, skill_name: str) -> int:
+        return self.player.get_skill_level(skill_name)
 
-            match_tuple = process.extractOne(
-                location, 
-                VALID_SOUND_FILE_NAMES, 
-                scorer=fuzz.WRatio,
-                score_cutoff=20 
-            )
-            
-            logging.info(f"Match Tuple for music restore: \n{match_tuple}")
-            
-            if match_tuple:
-                self.sound_manager.play_music(match_tuple[0])
-            else:
-                self.sound_manager.play_music("main_menu.mp3")
-        except ImportError:
-            pass 
-        except Exception as e:
-            logging.error(f"Music restore error: {e}")
-
-    def load_rules(self):
-        return FileManager.get_rules(self.current_adventure_path)
-
-    def perform_skill_check(self, skill_name):
-        clean_name = skill_name.split('(')[0].strip().title()
-        skills_tab = self.notebook_widgets["Skills"]
-        data = skills_tab.load_data()
-        
-        skill_entry = None
-        for item in data:
-            if item["Name"].lower() == clean_name.lower():
-                skill_entry = item
-                break
-        
-        if not skill_entry:
-            skill_entry = {"Name": clean_name, "Level": 0, "XP": 0, "Threshold": 5}
-            data.append(skill_entry)
-            self.story_tab.print_text(f"Learned new skill: {clean_name}!", sender="System")
-            
-        die_roll = random.randint(1, 20)
-        
-        new_roll, intervened = self.player.check_karma_intervention(die_roll)
-        die_roll = new_roll
-        
-        if not intervened:
-            self.player.update_karma(die_roll)
-
-        skill_entry["XP"] += 1
-        leveled_up = False
-        if skill_entry["XP"] >= skill_entry["Threshold"]:
-            skill_entry["Level"] += 1
-            skill_entry["XP"] = 0
-            skill_entry["Threshold"] += 2
-            leveled_up = True
-            
-        skills_tab.save_data(data)
-        
-        bonus_from_nutrition = 0
-        if self.player.nutrition >= 85: bonus_from_nutrition = 1
-        elif self.player.nutrition <= 40: bonus_from_nutrition = -3 
-        
-        bonus_from_stamina = 0
-        if self.player.stamina >= 85: bonus_from_stamina = 1
-        elif self.player.stamina <= 40: bonus_from_stamina = -3
-
-        skill_bonus = skill_entry["Level"]
-        total = die_roll + skill_bonus + bonus_from_nutrition + bonus_from_stamina
-        
-        bonus_from_skill_message = f"{skill_bonus} (from Skill level)"
-        bonus_from_nutrition_message = f" +{bonus_from_nutrition} (bonus from high nutrition)" if bonus_from_nutrition > 0 else f"{bonus_from_nutrition} (penalty from low nutrition)" if bonus_from_nutrition < 0 else ""
-        bonus_from_stamina_message = f" +{bonus_from_stamina} (bonus from high stamina)" if bonus_from_stamina > 0 else f"{bonus_from_stamina} (penalty from low stamina)" if bonus_from_stamina < 0 else ""
-        
-        msg = f"Rolling {clean_name}: {die_roll} + ({bonus_from_skill_message}{bonus_from_nutrition_message}{bonus_from_stamina_message}) = {total}"
-        if leveled_up:
-            msg += f"\n**LEVEL UP!** {clean_name} is now Level {skill_entry['Level']}!"
-        else:
-            msg += f"\n{clean_name}: {skill_entry['XP']} / {skill_entry['Threshold']} XP towards next level up."
-
+    def perform_skill_check(self, skill_name: str) -> int:
+        # Calls the Player class, then routes the output message to the UI
+        total, msg = self.player.perform_skill_check(skill_name)
         self.story_tab.print_text(msg, sender="System")
         return total
 
-    def save_game(self):
-        FileManager.save_game(self)
+    def _advance_time_hours(self, _hours: float) -> None:
+        return
 
-    def on_close(self):
-        self.save_game()
-        self.destroy()
+    def _sync_player_state_to_ui(self) -> None:
+        """Thread-safe push of Player status into the Qt status header."""
+        s = self.player.get_status_dict()
+
+        def _apply():
+            self.win.story_panel.set_status(
+                turn=s.get("turn") or 1,
+                location=s.get("location") or "Character Creation",
+                day=f"{s.get('day')}" or "Day 1",
+                time=s.get("time") or "12:00 A.M.",
+                dynamic_stats=s.get("tracked_stats", [])
+            )
+
+        # AIManager calls this from worker threads; dispatch to UI thread.
+        self.ui.run_now.emit(_apply)
+
+def main() -> int:
+    FileManager.setup_initial_logging()
+
+    app = QApplication(sys.argv)
+    app.setApplicationName("AI RPG Adventure")
+
+    # Optional icon (if you already have game_icon.ico in your bundled resources)
+    try:
+        from PySide6.QtGui import QIcon
+        icon_path = FileManager.resource_path("game_icon.ico")
+        if os.path.exists(icon_path):
+            app.setWindowIcon(QIcon(icon_path))
+    except Exception as e:
+        logging.error(f"Qt icon error: {e}")
+
+    win = MainWindow()
+    app_ctx = QtAppContext(win)
+
+        # ---- Main Menu first ----
+    menu = MainMenuDialog()
+    if menu.exec() != QDialog.DialogCode.Accepted or not menu.selected_save:
+        return 0
+
+    save_name = menu.selected_save
+    save_path = os.path.join(SAVES_DIR, save_name)
+
+    win = MainWindow()
+    app_ctx = QtAppContext(win)
+
+    from ai_manager import AIManager
+    win.app = app_ctx
+    win.ai_manager = AIManager(app_ctx)
+    win.setWindowTitle(f"AI RPG Adventure (Qt) - {save_name}")
+    win.show()
+
+    def _boot_selected_save() -> None:
+        FileManager.update_logger_path(save_name)
+        app_ctx.player.set_save_path(save_path)
+
+        savegame_path = os.path.join(save_path, "savegame.json")
+        creation_summary_path = os.path.join(save_path, "creation_summary.txt")
+        secret_path = os.path.join(save_path, "secret.txt")
+        world_path = os.path.join(save_path, "world.md")
+        if os.path.exists(savegame_path):
+            app_ctx.load_savegame_state(save_path)
+            app_ctx.generate_recap()
+            return
+        if not os.path.exists(creation_summary_path): 
+            with open(creation_summary_path, "w", encoding="utf-8") as f: f.write("")
+        if not os.path.exists(secret_path): 
+            with open(secret_path, "w", encoding="utf-8") as f: f.write("")
+        if not os.path.exists(world_path): 
+            with open(world_path, "w", encoding="utf-8") as f: f.write("")
+
+        # New game flow
+        app_ctx.current_adventure_path = save_path
+        app_ctx.is_creating = True
+        app_ctx.conversation_history = ""
+        try:
+            for w in app_ctx.notebook_widgets.values():
+                w.set_base_path(save_path)
+        except Exception:
+            logging.exception("Failed to set base path for panels")
+
+        app_ctx._sync_player_state_to_ui()
+        app_ctx.story_tab.print_text("System: Initialization Sequence Started...", sender="System")
+        if win.ai_manager != None:
+            threading.Thread(target=win.ai_manager.start_creation_wizard, daemon=True).start()
+    
+    QTimer.singleShot(0, _boot_selected_save)
+    return app.exec()
+
 
 if __name__ == "__main__":
-    app = GameApp()
-    app.mainloop()
+    raise SystemExit(main())
