@@ -179,10 +179,9 @@ class MainWindow(QMainWindow):
                 self.story_panel.print_text(msg, sender="System")
                 
                 # 3. Refresh the inventory UI to use the new math
-                if hasattr(self.inventory_panel, "refresh_ui"):
+                if hasattr(self.inventory_panel, "refresh_display"):
+                    self.inventory_panel.refresh_display()
                     pass
-                    #self.inventory_panel.refresh_ui()
-                    # TODO: Implement Inventory Panel Refresh UI
                 
         except Exception as e:
             error_msg = f"Error opening currency menu: {str(e)}"
