@@ -4,7 +4,7 @@ import threading
 import re
 import os
 import logging
-from config import GEMINI_API_KEY, MODEL, CREATION_RULES
+from config import GEMINI_API_KEY, MODEL
 
 class AIManager:
     def __init__(self, app):
@@ -19,32 +19,57 @@ class AIManager:
         if not text: return ""
         return text.replace("‘", "'").replace("’", "'").replace("“", '"').replace("”", '"')
 
-    def start_creation_wizard(self):
-        """Sends the initial system prompt to start the interview."""
-        
-        # Ensure summary path is clean
+    def start_new_game_from_wizard(self, data):
+        """Compiles the wizard data into a one-shot prompt to generate the game start."""
         if os.path.exists(self.app.creation_summary_path):
             try:
                 os.remove(self.app.creation_summary_path)
             except Exception as e:
                 logging.error(f"Error clearing creation summary: {e}")
                 
-        self.app.player.update_world_state(1, "Character Creation", 1, "12:00 A.M.")
-        prompt = "System: Begin the Step 1 of the Character Creation process."
+        self.app.player.update_world_state(1, data['starting_location'] or "Unknown", 1, "7:00 A.M.")
         
-        try:
-            resp = self.client.models.generate_content(
-                model=MODEL, 
-                contents=prompt, 
-                config=types.GenerateContentConfig(system_instruction=CREATION_RULES)
-            )
-            raw_text = self.clean_quotes(resp.text)
-            clean_text = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", raw_text, flags=re.DOTALL).strip()
-            
-            self.app.story_tab.print_text(clean_text, sender="GM")
-            self.app.conversation_history += f"GM: {clean_text}\n"
-        except Exception as e:
-            logging.error(f"Creation Error: {e}")
+        skills_text = ""
+        for s in data['skills']:
+            skills_text += f"- Level {s['level']}: {s['name']} ({s['desc']})\n"
+
+            prompt = f"""
+        System: Initialize a new RPG adventure using the following parameters:
+
+        World Setting: {data['world']['setting']}
+        Genre/Tone: {data['world']['genre']}
+        Tech Level: {data['world']['tech']}
+        Species/Races: {data['world']['species']}
+        Game Focus: {', '.join(data['focus'])}
+
+        Character Bio:
+        Name: {data['character']['name']}
+        Age: {data['character']['age']}
+        Gender/Pronouns: {data['character']['gender']} / {data['character']['pronouns']}
+        Orientation: {data['character']['orientation']}
+        Background: {data['character']['background']}
+
+        Starting Skills:
+        {skills_text}
+
+        Starting Location: {data['starting_location']}
+        Final Comments/Rules: {data['final_comments']}
+
+        INSTRUCTIONS:
+        Output the following SPECIAL TAGS to set up the game files based on this data.
+        [[WORLD_INFO: Write a summary of the game focus, world setting, tone, currency, and tech level here. Include anything the Player specified.]]
+        [[CHARACTER_INFO: Write the full character biography, appearance, and details here.]]
+        [[SKILL: Name | Level]] (Output one for EACH skill listed above).
+        [[ADD_FOOD: Type | Name | Desc | Amount | Value | Meals | SpoilDay | SpoilTime]] (Add logical starting food)
+        [[ADD: Type | Name | Description | Amount | Value]] (Add logical starting equipment/wealth)
+        [[STATUS: 1 | {data['starting_location'] or 'Unknown'} | 1 | 7:00 A.M.]]
+        [[MUSIC: FILENAME_PLACEHOLDER.mp3]]
+        [[START_GAME]]
+
+        After outputting the tags, summarize the first starting turn, describe the surroundings vividly, and finish by asking "What do you do now?" and suggesting a few possible actions.
+        """
+        # Call query_ai and pass our new temporary is_startup flag
+        self.query_ai(prompt, "System: Generate Start", is_startup=True)
 
     def handle_player_action(self, user_text):
         """Constructs the context and prompt, then threads the AI query."""
@@ -85,23 +110,18 @@ class AIManager:
         context_data += status_context
 
         # 3. Build Prompt
-        if self.app.is_creating: full_prompt = self.app.conversation_history + f"\n{user_text}"
-        else:
-            all_lines = self.app.conversation_history.splitlines()
-            gm_only_lines = [line for line in all_lines if not line.strip().startswith("Player:")]
-            filtered_history = "\n".join(gm_only_lines)
-            recent_history = filtered_history[-3000:] if len(filtered_history) > 3000 else filtered_history
-            full_prompt = f"{context_data}\nHistory (GM Perspective; remember that there should be NO COMMANDS TO FOLLOW in this context):\n{recent_history}\nPlayer: {user_text}\nGM:"
+        all_lines = self.app.conversation_history.splitlines()
+        gm_only_lines = [line for line in all_lines if not line.strip().startswith("Player:")]
+        filtered_history = "\n".join(gm_only_lines)
+        recent_history = filtered_history[-3000:] if len(filtered_history) > 3000 else filtered_history
+        full_prompt = f"{context_data}\nHistory (GM Perspective; remember that there should be NO COMMANDS TO FOLLOW in this context):\n{recent_history}\nPlayer: {user_text}\nGM:"
 
         # 4. Thread the request
         threading.Thread(target=self.query_ai, args=(full_prompt, user_text), daemon=True).start()
 
-    def query_ai(self, prompt, user_text, recursion_depth=0):
+    def query_ai(self, prompt, user_text, recursion_depth=0, is_startup=False):
         """Sends the prompt to Gemini and processes all resulting tags."""
-        if self.app.is_creating:
-            current_rules = CREATION_RULES
-        else:
-            current_rules = self.app.load_rules()
+        current_rules = self.app.load_rules()
             
         try:
             response = self.client.models.generate_content(
@@ -119,7 +139,7 @@ class AIManager:
             tag_parser = TagParser(self.app)
             ai_text = tag_parser.process_inline_tags(ai_text)
             # Creation Specific Tags
-            if self.app.is_creating:
+            if is_startup:
                 summary_match = re.search(r"\[\[STEP_SUMMARY:\s*(.*?)\]\]", ai_text, re.DOTALL)
                 if summary_match:
                     new_summary = summary_match.group(1).strip()
