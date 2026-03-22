@@ -1,1 +1,0 @@
-py qt_main.py

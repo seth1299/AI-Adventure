@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
 )
 from .markdown_panel import MarkdownPanel
 from .story_panel import StoryPanel
-from .stub_panels import StubPanel
 from ai_manager import AIManager
 from PySide6.QtWidgets import QDialog
 from .main_menu_dialog import MainMenuDialog
@@ -23,6 +22,7 @@ from .skills_panel import SkillsPanel
 from .processing_panel import ProcessingPanel
 from .recipes_panel import RecipesPanel
 import logging
+from qt_ui.help_dialog import HelpDialog
 
 
 class MainWindow(QMainWindow):
@@ -51,6 +51,7 @@ class MainWindow(QMainWindow):
         self.story_panel.menu_requested.connect(self._on_menu_requested)
         self.story_panel.currency_requested.connect(self.open_currency_menu)
         self.story_panel.stats_requested.connect(self.open_stats_menu)
+        self.story_panel.help_requested.connect(self.open_help_menu)
 
         # Docks (stubs for now)
         self._docks: dict[str, QDockWidget] = {}
@@ -188,8 +189,19 @@ class MainWindow(QMainWindow):
             logging.exception(error_msg)
             self.story_panel.print_text(error_msg, sender="System Error")
             
-    def open_stats_menu(self):
+    def open_help_menu(self):
         import logging
+        try:
+            # We don't need to pass data, just open it!
+            dialog = HelpDialog(self)
+            dialog.exec()
+        except Exception as e:
+            error_msg = f"Error opening help menu: {str(e)}"
+            logging.exception(error_msg)
+            self.story_panel.print_text(error_msg, sender="System Error")
+            
+            
+    def open_stats_menu(self):
         if self.app == None: return
         try:
             dialog = StatsManagerDialog(self, existing_stats=self.app.player.tracked_stats)
