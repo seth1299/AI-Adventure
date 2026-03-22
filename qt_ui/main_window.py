@@ -78,10 +78,6 @@ class MainWindow(QMainWindow):
             | QMainWindow.DockOption.GroupedDragging
         )
 
-        # You can connect StoryPanel signals here later:
-        # self.story_panel.send_requested.connect(self._on_send_requested)
-        # self.story_panel.menu_requested.connect(self._on_menu_requested)
-
     def _add_dock(self, title: str, widget: QWidget, area: Qt.DockWidgetArea) -> None:
         dock = QDockWidget(title, self)
         dock.setWidget(widget)

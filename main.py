@@ -15,41 +15,7 @@ import threading
 from PySide6.QtWidgets import QApplication, QDialog
 from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt, QThread
 from queue import Queue
-
-class _NullWidget:
-    """Safe no-op widget used during the Qt migration."""
-    def get_text(self) -> str:
-        return ""
-
-    def set_text(self, _text: str) -> None:
-        return
-    
-    def set_base_path(self, *_a, **_k) -> None:
-        return
-
-    def save_now(self, *_a, **_k) -> None:
-        return
-
-    # Inventory-ish
-    def autonomous_add(self, *_a, **_k): return "[System: Inventory tag ignored in Qt build]"
-    def autonomous_remove(self, *_a, **_k): return "[System: Inventory tag ignored in Qt build]"
-    def modify_item(self, *_a, **_k): return "[System: Inventory tag ignored in Qt build]"
-    def add_food(self, *_a, **_k): return "[System: Food tag ignored in Qt build]"
-    def consume_food(self, *_a, **_k): return "[System: Consume tag ignored in Qt build]"
-
-    # Skills-ish
-    def force_learn_skill(self, *_a, **_k): return
-
-    # Processing-ish
-    def check_active_tasks(self, *_a, **_k): return []
-    def add_timed_process(self, *_a, **_k): return "[System: Processing tag ignored in Qt build]"
-    def remove_process(self, *_a, **_k): return "[System: Processing tag ignored in Qt build]"
-    def add_project(self, *_a, **_k): return "[System: Project tag ignored in Qt build]"
-    def get_required_skill(self, *_a, **_k): return ""
-    def apply_work_hours(self, *_a, **_k): return "[System: Work tag ignored in Qt build]"
-
-    # Recipes-ish
-    def add_recipe_from_tag(self, *_a, **_k): return "[System: Recipe tag ignored in Qt build]"
+import time_utils
 
 class _UiDispatcher(QObject):
     run_now = Signal(object)          # callable
@@ -173,27 +139,17 @@ class QtAppContext:
         # API surface AIManager expects
         self.story_tab = QtStoryTabAdapter(win.story_panel, self.ui)
 
-        null = _NullWidget()
-        world = QtPanelAdapter(getattr(win, "world_panel", null), self.ui)
-        journal = QtPanelAdapter(getattr(win, "journal_panel", null), self.ui)
-        skills = QtPanelAdapter(getattr(win, "skills_panel", null), self.ui)
-        recipes = QtPanelAdapter(getattr(win, "recipes_panel", null), self.ui)
-        character = QtPanelAdapter(getattr(win, "character_panel", null), self.ui)
-        processing = QtPanelAdapter(getattr(win, "processing_panel", null), self.ui)
-        inventory = QtPanelAdapter(getattr(win, "inventory_panel", null), self.ui)
         self.notebook_widgets = {
-            "Inventory": inventory,
-            "Skills": skills,
-            "Processing": processing,
-            "Recipes": recipes,
-            "Character": character,
-            "World": world,
-            "Journal": journal,
-        }
+                "Inventory": QtPanelAdapter(win.inventory_panel, self.ui),
+                "Skills": QtPanelAdapter(win.skills_panel, self.ui),
+                "Processing": QtPanelAdapter(win.processing_panel, self.ui),
+                "Recipes": QtPanelAdapter(win.recipes_panel, self.ui),
+                "Character": QtPanelAdapter(win.character_panel, self.ui),
+                "World": QtPanelAdapter(win.world_panel, self.ui),
+                "Journal": QtPanelAdapter(win.journal_panel, self.ui),
+            }
 
         self._sync_player_state_to_ui()
-        #self.sound_manager.stop_music()
-        #self.after(0, lambda s="Main_Menu_Or_Loading_Screen.mp3": self.sound_manager.play_sfx(s))
 
     def after(self, ms: int, func) -> None:
         self.ui.run_later.emit(int(ms), func)
@@ -362,7 +318,22 @@ class QtAppContext:
         return total
 
     def _advance_time_hours(self, _hours: float) -> None:
-        return
+        try:
+            # 1. Calculate the new time using your existing utility function
+            new_game_time = time_utils.add_hours(self.player.day, self.player.time, _hours)
+            
+            # 2. Update the player's internal state
+            self.player.day = new_game_time.as_day_string()
+            self.player.time = new_game_time.as_time_string()
+            
+            # 3. Force the UI status bar to update so the player sees the change immediately
+            self._sync_player_state_to_ui()
+            
+            # 4. Save the game to lock in the time skip
+            self.save_game()
+            
+        except Exception as e:
+            logging.error(f"Error advancing time: {e}")
 
     def _sync_player_state_to_ui(self) -> None:
         """Thread-safe push of Player status into the Qt status header."""
@@ -395,10 +366,7 @@ def main() -> int:
     except Exception as e:
         logging.error(f"Qt icon error: {e}")
 
-    win = MainWindow()
-    app_ctx = QtAppContext(win)
-
-        # ---- Main Menu first ----
+    # ---- Main Menu first ----
     menu = MainMenuDialog()
     if menu.exec() != QDialog.DialogCode.Accepted or not menu.selected_save:
         return 0
