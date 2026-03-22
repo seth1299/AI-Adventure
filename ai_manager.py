@@ -70,7 +70,9 @@ class AIManager:
         stats_str = ""
         for st in self.app.player.tracked_stats:
             if st.get("enabled", True):
-                stats_str += f"{st['name']}: {st['value']}\n"
+                # Grab the description if it exists, otherwise leave it blank
+                desc_text = f" (Rules: {st.get('desc')})" if st.get('desc') else ""
+                stats_str += f"{st['name']}: {st['value']}{desc_text}\n"
         status_context = (
             f"\n[CURRENT STATUS]\n"
             f"Location: {self.app.player.location}\n"
@@ -83,17 +85,7 @@ class AIManager:
         context_data += status_context
 
         # 3. Build Prompt
-        if self.app.is_creating:
-            #recent_history = self.app.conversation_history[-1500:] if len(self.app.conversation_history) > 1500 else self.app.conversation_history
-            #creation_memory = ""
-            #if os.path.exists(self.app.creation_summary_path):
-            #    try:
-            #        with open(self.app.creation_summary_path, "r", encoding="utf-8") as f:
-            #            summaries = f.read()
-            #        creation_memory = f"\n[CREATION_HISTORY_SUMMARY (DO NOT IGNORE)]:\n{summaries}\n"
-            #    except Exception as e:
-            #        logging.error(f"Error reading creation summary: {e}")
-            full_prompt = self.app.conversation_history + f"\n{user_text}"
+        if self.app.is_creating: full_prompt = self.app.conversation_history + f"\n{user_text}"
         else:
             all_lines = self.app.conversation_history.splitlines()
             gm_only_lines = [line for line in all_lines if not line.strip().startswith("Player:")]
