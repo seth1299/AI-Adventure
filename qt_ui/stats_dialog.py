@@ -82,7 +82,7 @@ class StatsManagerDialog(QDialog):
 
         self.btn_layout = QHBoxLayout()
         self.btn_add = QPushButton("+ Add Stat")
-        self.btn_add.clicked.connect(self.add_stat_row)
+        self.btn_add.clicked.connect(lambda: self.add_stat_row())
         
         self.btn_save = QPushButton("Save && Close")
         self.btn_save.clicked.connect(self.save_and_close)
@@ -94,9 +94,8 @@ class StatsManagerDialog(QDialog):
 
         self.rows = []
 
-        if existing_stats:
+        if existing_stats is not None:
             for stat in existing_stats:
-                # --- NEW: Pass the description into the row ---
                 self.add_stat_row(
                     stat.get("name", ""), 
                     stat.get("value", 100), 
@@ -104,7 +103,6 @@ class StatsManagerDialog(QDialog):
                     stat.get("desc", "")
                 )
         else:
-            # --- NEW: Default descriptions for a new game ---
             self.add_stat_row("Nutrition", 100, True, "Represents how well-fed the character is. Max 100.")
             self.add_stat_row("Stamina", 100, True, "Represents physical energy. Depletes from actions. Max 100.")
 

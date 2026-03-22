@@ -59,6 +59,11 @@ class StoryPanel(QWidget):
         self.btn_currency.setFixedWidth(80)
         self.btn_currency.clicked.connect(self.currency_requested.emit)
         header.addWidget(self.btn_currency, alignment=Qt.AlignmentFlag.AlignLeft)
+        
+        self.btn_stats = QPushButton("Stats")
+        self.btn_stats.setFixedWidth(80)
+        self.btn_stats.clicked.connect(self.stats_requested.emit)
+        header.addWidget(self.btn_stats, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self.lbl_status = QLabel(self._format_status_text())
         self.lbl_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
