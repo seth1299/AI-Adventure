@@ -2,9 +2,11 @@
 from PySide6.QtWidgets import (
     QWizard, QWizardPage, QVBoxLayout, QFormLayout, 
     QLabel, QLineEdit, QTextEdit, QCheckBox, 
-    QScrollArea, QWidget, QGroupBox, QHBoxLayout
+    QScrollArea, QWidget, QGroupBox, QHBoxLayout, QPushButton, QMessageBox
 )
 from PySide6.QtCore import Qt
+from qt_ui.currency_dialog import CurrencyRow
+from qt_ui.stats_dialog import StatRow
 
 class WorldPage(QWizardPage):
     def __init__(self):
@@ -53,7 +55,7 @@ class PillarsPage(QWizardPage):
 class CharacterPage(QWizardPage):
     def __init__(self):
         super().__init__()
-        self.setTitle("Step 3: Character Bio")
+        self.setTitle("Step 5: Character Bio")
         self.setSubTitle("Tell us about your character.")
         
         layout = QVBoxLayout(self)
@@ -83,7 +85,7 @@ class CharacterPage(QWizardPage):
 class SkillsPage(QWizardPage):
     def __init__(self):
         super().__init__()
-        self.setTitle("Step 4: Skills")
+        self.setTitle("Step 6: Skills")
         self.setSubTitle("Define your starting skills. Leave descriptions blank to let the AI decide.")
         
         # We need a scroll area because there are 16 skills
@@ -126,7 +128,7 @@ class SkillsPage(QWizardPage):
 class FinalPage(QWizardPage):
     def __init__(self):
         super().__init__()
-        self.setTitle("Step 5: Final Details")
+        self.setTitle("Step 7: Final Details")
         self.setSubTitle("Where do you begin, and do you have any final rules?")
         
         layout = QVBoxLayout(self)
@@ -139,6 +141,94 @@ class FinalPage(QWizardPage):
         self.comments_input = QTextEdit()
         self.comments_input.setTabChangesFocus(True)
         layout.addWidget(self.comments_input)
+        
+class CurrencyPage(QWizardPage):
+    def __init__(self):
+        super().__init__()
+        self.setTitle("Step 3: World Currencies")
+        self.setSubTitle("Define your currencies relative to your cheapest coin.")
+        
+        layout = QVBoxLayout(self)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        self.rows_layout = QVBoxLayout(content)
+        self.rows_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        scroll.setWidget(content)
+        
+        self.rows = []
+        
+        btn_add = QPushButton("+ Add Currency")
+        btn_add.clicked.connect(lambda: self.add_row())
+        layout.addWidget(btn_add)
+        layout.addWidget(scroll)
+        
+        # Default starting rows
+        self.add_row("Copper Piece", 1, is_baseline=True)
+        self.add_row("Silver Piece", 10)
+
+    def add_row(self, name="", value=1, is_baseline=False):
+        if len(self.rows) >= 9:
+            QMessageBox.warning(self, "Limit Reached", "You can only have up to 9 currencies.")
+            return
+
+        row = CurrencyRow(name=name, value=value, is_baseline=is_baseline)
+        self.rows_layout.addWidget(row)
+        self.rows.append(row)
+        row.btn_remove.clicked.connect(lambda: self.remove_row(row))
+
+    def remove_row(self, row):
+        if row.is_baseline: return
+        self.rows_layout.removeWidget(row)
+        self.rows.remove(row)
+        row.deleteLater()
+
+    def validatePage(self):
+        """Prevent user from advancing if the base unit has no name."""
+        for row in self.rows:
+            if row.is_baseline and not row.get_data()["name"].strip():
+                QMessageBox.warning(self, "Validation Error", "The Base Unit (Value 1) cannot have a blank name!")
+                return False
+        return True
+
+
+class StatsPage(QWizardPage):
+    def __init__(self):
+        super().__init__()
+        self.setTitle("Step 4: Tracked Stats")
+        self.setSubTitle("Add, remove, or toggle tracked statuses (e.g. Health, AC, Nutrition).")
+        
+        layout = QVBoxLayout(self)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        self.rows_layout = QVBoxLayout(content)
+        self.rows_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        scroll.setWidget(content)
+        
+        self.rows = []
+        
+        btn_add = QPushButton("+ Add Stat")
+        btn_add.clicked.connect(lambda: self.add_row())
+        layout.addWidget(btn_add)
+        layout.addWidget(scroll)
+        
+        # Default starting rows
+        self.add_row("Nutrition", 100, True, "Represents how well-fed the character is. Max 100.")
+        self.add_row("Stamina", 100, True, "Represents physical energy. Depletes from actions. Max 100.")
+
+    def add_row(self, name="", value=100, enabled=True, desc=""):
+        row = StatRow(name=name, value=value, enabled=enabled, desc=desc)
+        self.rows_layout.addWidget(row)
+        self.rows.append(row)
+        row.btn_remove.clicked.connect(lambda: self.remove_row(row))
+
+    def remove_row(self, row):
+        self.rows_layout.removeWidget(row)
+        self.rows.remove(row)
+        row.deleteLater()
 
 class CreationWizard(QWizard):
     def __init__(self, parent=None):
@@ -177,12 +267,16 @@ class CreationWizard(QWizard):
         
         self.world_page = WorldPage()
         self.pillars_page = PillarsPage()
+        self.currency_page = CurrencyPage()
+        self.stats_page = StatsPage()
         self.char_page = CharacterPage()
         self.skills_page = SkillsPage()
         self.final_page = FinalPage()
         
         self.addPage(self.world_page)
         self.addPage(self.pillars_page)
+        self.addPage(self.currency_page)
+        self.addPage(self.stats_page)
         self.addPage(self.char_page)
         self.addPage(self.skills_page)
         self.addPage(self.final_page)
@@ -196,6 +290,11 @@ class CreationWizard(QWizard):
         if self.pillars_page.exploration_cb.isChecked(): pillars.append("Exploration")
         if self.pillars_page.trading_cb.isChecked(): pillars.append("Trading/Economy")
         if self.pillars_page.social_cb.isChecked(): pillars.append("Social/Roleplay")
+        
+        currencies = [r.get_data() for r in self.currency_page.rows if r.get_data()["name"].strip()]
+        currencies.sort(key=lambda x: x["value"]) # Sort mathematically
+        
+        stats = [r.get_data() for r in self.stats_page.rows if r.get_data()["name"].strip()]
 
         # Gather skills
         skills = []
@@ -216,6 +315,8 @@ class CreationWizard(QWizard):
                 "species": self.world_page.species_input.toPlainText().strip(),
             },
             "focus": pillars,
+            "currencies": currencies,
+            "stats": stats,
             "character": {
                 "name": self.char_page.name_input.text().strip(),
                 "age": self.char_page.age_input.text().strip(),
