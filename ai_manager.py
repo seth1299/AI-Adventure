@@ -4,6 +4,7 @@ import threading
 import re
 import os
 import logging
+import random
 from config import GEMINI_API_KEY, MODEL
 
 class AIManager:
@@ -40,7 +41,10 @@ class AIManager:
         if not skills_text:
             skills_text = "(No skills specified. AI, please invent 16 starting skills fitting the world following this exact level distribution: one Lvl 5, two Lvl 4, three Lvl 3, four Lvl 2, six Lvl 1.)"
             
-        currencies_text = ", ".join([f"{c['name']} (Worth {c['value']} base units)" for c in data['currencies']])
+        if data['currencies']:
+            currencies_text = ", ".join([f"{c['name']} (Worth {c['value']} base units)" for c in data['currencies']])
+        else:
+            currencies_text = "Not specified (AI, you MUST invent a localized currency system. Output [[DEFINE_CURRENCY: Name | Value]] for each denomination, starting with a base unit of 1.)"
         
         stats_text = ""
         for st in data['stats']:
@@ -55,11 +59,13 @@ class AIManager:
         prompt = f"""
 System: Initialize a new RPG adventure using the following parameters.
 CRITICAL INSTRUCTION: If any parameter says "Not specified", you must creatively invent a fitting, unique value for it based on the rest of the context.
+To guarantee absolute randomness, a creative entropy seed has been generated: {random.randint(1000000, 9999999)}. Use this seed to completely randomize the names, geography, and species you invent. 
+DO NOT use common AI fantasy names (e.g., Elara, Kael, Lyra, Aric, Seraphina, Orion, Sylas). Create genuinely culturally distinct and unusual names.
 
-World Setting: {data['world']['setting'] or 'Not specified'}
-Genre/Tone: {data['world']['genre'] or 'Not specified'}
+World Setting: {data['world']['setting'] or 'Not specified (Generate a highly unique, unpredictable world.)'}
+Genre/Tone: {data['world']['genre'] or 'Not specified (Pick a random, uncommon genre.)'}
 Tech Level: {data['world']['tech'] or 'Not specified'}
-Species/Races: {data['world']['species'] or 'Not specified'}
+Species/Races: {data['world']['species'] or 'Not specified (Invent at least 3 bizarre, unique original species)'}
 Game Focus: {focus_text}
 
 World Economy (Currencies):
@@ -69,7 +75,7 @@ Tracked Player Stats:
 {stats_text}
 
 Character Bio:
-Name: {data['character']['name'] or 'Not specified'}
+Name: {data['character']['name'] or 'Not specified (Invent a unique name)'}
 Age: {data['character']['age'] or 'Not specified'}
 Gender/Pronouns: {data['character']['gender'] or 'Not specified'} / {data['character']['pronouns'] or 'Not specified'}
 Orientation: {data['character']['orientation'] or 'Not specified'}
@@ -78,7 +84,7 @@ Background: {data['character']['background'] or 'Not specified'}
 Starting Skills:
 {skills_text}
 
-Starting Location: {data['starting_location'] or 'Not specified'}
+Starting Location: {data['starting_location'] or 'Not specified (Invent a vivid, unusual starting location)'}
 Final Comments/Rules: {data['final_comments'] or 'None'}
 
 INSTRUCTIONS:
@@ -88,7 +94,8 @@ Output the following SPECIAL TAGS to set up the game files based on this data.
 [[SKILL: Name | Level]] (Output one for EACH skill. If none were provided, output the 16 invented skills here).
 [[ADD_FOOD: Type | Name | Desc | Amount | Value | Meals | SpoilDay | SpoilTime]] (Add logical starting food for the Player Character. Repeat this tag for EACH FOOD ITEM that the Player will start out with.)
 [[ADD: Type | Name | Description | Amount | Value]] (Add logical starting equipment/wealth. Repeat this tag for EACH NON-FOOD and NON-CURRENCY item that the Player will start out with.)
-[[CHANGE_CURRENCY: X]] (Determine how wealthy the Player Character should be, and give them starting wealth accordingly by passing a positive Integer value as "X".)
+[[DEFINE_CURRENCY: Name | Value]] (If no currencies were provided, output this for EACH invented denomination. Example: [[DEFINE_CURRENCY: Iron Bit | 1]]). THIS TAG MUST COME BEFORE CHANGE_CURRENCY.
+[[CHANGE_CURRENCY: X]] (Give the player a logical amount of starting base currency for their background)
 [[STATUS: 1 | {data['starting_location'] or 'Unknown (Invent a starting location name)'} | 1 | 7:00 A.M.]]
 [[MUSIC: FILENAME_PLACEHOLDER.mp3]]
 [[START_GAME]]
@@ -149,6 +156,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
     def query_ai(self, prompt, user_text, recursion_depth=0, is_startup=False):
         """Sends the prompt to Gemini and processes all resulting tags."""
         current_rules = self.app.load_rules()
+        ai_temp = 0.95 if is_startup else 0.7
             
         try:
             response = self.client.models.generate_content(
@@ -156,7 +164,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=current_rules,
-                    temperature=0.7
+                    temperature=ai_temp
                 )
             )
             ai_text = self.clean_quotes(response.text or "")
@@ -194,6 +202,16 @@ After outputting the tags, summarize the first starting turn, describe the surro
                     s_name = match.group(1).strip()
                     s_lvl = int(match.group(2))
                     self.app.notebook_widgets["Skills"].force_learn_skill(s_name, s_lvl)
+                    
+                invented_currencies = []
+                for match in re.finditer(r"\[\[DEFINE_CURRENCY:\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text):
+                    c_name = match.group(1).strip()
+                    c_val = int(match.group(2))
+                    invented_currencies.append({"name": c_name, "value": c_val})
+                
+                # If the AI invented currencies, overwrite the player's empty list
+                if invented_currencies:
+                    self.app.player.world_currencies = invented_currencies
 
                 if "[[START_GAME]]" in ai_text:
                     self.app.story_tab.print_text("\n[System: Creation Complete. Saving Data...]\n", sender="System")

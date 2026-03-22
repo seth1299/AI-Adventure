@@ -146,7 +146,7 @@ class CurrencyPage(QWizardPage):
     def __init__(self):
         super().__init__()
         self.setTitle("Step 3: World Currencies")
-        self.setSubTitle("Define your currencies relative to your cheapest coin.")
+        self.setSubTitle("Define your currencies relative to your cheapest coin. Leave blank for AI generation.")
         
         layout = QVBoxLayout(self)
         
@@ -164,9 +164,8 @@ class CurrencyPage(QWizardPage):
         layout.addWidget(btn_add)
         layout.addWidget(scroll)
         
-        # Default starting rows
-        self.add_row("Copper Piece", 1, is_baseline=True)
-        self.add_row("Silver Piece", 10)
+        # Default starting row (Blank, allowing the AI to take over if left alone)
+        self.add_row("", 1, is_baseline=True)
 
     def add_row(self, name="", value=1, is_baseline=False):
         if len(self.rows) >= 9:
@@ -183,14 +182,8 @@ class CurrencyPage(QWizardPage):
         self.rows_layout.removeWidget(row)
         self.rows.remove(row)
         row.deleteLater()
-
-    def validatePage(self):
-        """Prevent user from advancing if the base unit has no name."""
-        for row in self.rows:
-            if row.is_baseline and not row.get_data()["name"].strip():
-                QMessageBox.warning(self, "Validation Error", "The Base Unit (Value 1) cannot have a blank name!")
-                return False
-        return True
+        
+    # Notice we completely removed the validatePage() function!
 
 
 class StatsPage(QWizardPage):
