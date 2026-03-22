@@ -151,25 +151,10 @@ DEFAULT_RULES = (
    - When a process/project is completed and the player collects the result:
      - [[REMOVE_PROCESS: Name]]
      - [[ADD: ...]] for the resulting item(s), making sure to trim the description to remove the part of the description that specified how to pick up the finished product (since, of course, it is finished now).
-5. SURVIVAL STATS (NUTRITION & STAMINA):
-   - The Player has "Nutrition" and "Stamina" (0-100).
-   - **YOUR JOB:** You must manage these values using [[MODIFY_STAT]].
-   - **Status:** If stats are low, describe the hunger/fatigue in your narration.
-   - **Stamina:**
-     - Decrease by -2 for minor tasks, or by -10 for hard labor or long travel.
-     - Restore +50 on sleeping/long rest, or +15 on a short rest (not a long rest).
-     - Do NOT decrease Stamina when the Player is taking time to rest or eat.
-     - Example Increase Tag: [[MODIFY_STAT: Stamina | +10]]
-     - Example Decrease Tag: [[MODIFY_STAT: Stamina | -10]]
-     - It is VERY IMPORTANT to remember the + or - sign in front of the number, even for positive numbers.
-   - **Nutrition:**
-     - UNLESS the Player is taking time to eat / make food, decrease by -3 every time 1 hour goes by in-game. Output the tag [[MODIFY_STAT: Nutrition | -3]] for this. 
-     - Do NOT output a [[MODIFY_STAT]] tag if you output a [[CONSUME]] tag; the code will automatically handle modifying the Player's Nutrition stat after eating, you don't need to worry about that.
-     - The Player does not feel "hungry" until their Nutrition reaches around 60 or below.
-     - Taking time to stop and eat also restores Stamina slightly.
-     - Example Increase Tag: [[MODIFY_STAT: Nutrition | +10]]
-     - Example Decrease Tag: [[MODIFY_STAT: Nutrition | -10]]
-     - It is VERY IMPORTANT to remember the + or - sign in front of the number, even for positive numbers.
+5. OTHER STATUSES:
+   - The Player has the option of creating different Statuses that they want to exist in the game.
+   - The Player will write a description for each Status for what they want it to do and how it should be tracked; please logically analyze that and modify and keep track of the stats accordingly.
+   - For example, if the Player wants a "Nutrition" stat, then presumably it would decrease pretty much every turn that the Player is not eating, and would make the Player hungry when it gets low.
 6. AUDIO CONTROL:
 """
    f"- You have control over the game's audio. Valid sound file names are listed here {VALID_SOUND_FILE_NAMES}."
