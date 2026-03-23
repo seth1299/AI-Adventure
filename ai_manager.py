@@ -30,6 +30,33 @@ class AIManager:
                 
         self.app.player.update_world_state(1, data['starting_location'] or "Unknown", 1, "7:00 A.M.")
         
+        main_types = [
+            "Cyberpunk", "Steampunk", "Modern Urban", "Futuristic Sci-Fi", 
+            "Ancient Historical", "Classic Low Fantasy", "Classic High Fantasy", 
+            "Eldritch Horror", "Post-Apocalyptic", "Biopunk", "Space Opera",
+            "Clockwork Fantasy", "Dieselpunk", "Stone Age", "Mythological"
+        ]
+        
+        subtypes = [
+            "Scavenger", "Survival", "Ice Age", "Noir", "Wasteland", 
+            "Hollow Earth", "Floating Island", "Flesh-tech", "Feudal",
+            "Slice-of-Life", "Underground", "Oceanic/Nautical", "Nomadic",
+            "Dungeon Crawler", "Political Intrigue"
+        ]
+        
+        random_vibes = [
+            "grimdark", "cozy", "paranoid", "whimsical", "brutal", 
+            "melancholic", "hyper-capitalist", "mystical", "surreal", "gritty"
+        ]
+        
+        # Combine a Main Type and a Subtype! (e.g., "Eldritch Horror Ice Age")
+        chosen_genre = f"{random.choice(main_types)} {random.choice(subtypes)}"
+        chosen_vibe = random.choice(random_vibes)
+        
+        # Override the empty fields with our forced random concepts
+        ai_genre = data['world']['genre'] or f"Not specified. (AI MUST use this exact genre: {chosen_genre}, Tone: {chosen_vibe})"
+        ai_setting = data['world']['setting'] or f"Not specified. (AI MUST invent a completely unique world that heavily leans into the assigned {chosen_genre} genre.)"
+        
         # Format skills, handling blank descriptions
         skills_text = ""
         for s in data['skills']:
@@ -59,11 +86,10 @@ class AIManager:
         prompt = f"""
 System: Initialize a new RPG adventure using the following parameters.
 CRITICAL INSTRUCTION: If any parameter says "Not specified", you must creatively invent a fitting, unique value for it based on the rest of the context.
-To guarantee absolute randomness, a creative entropy seed has been generated: {random.randint(1000000, 9999999)}. Use this seed to completely randomize the names, geography, and species you invent. 
 DO NOT use common AI fantasy names (e.g., Elara, Kael, Lyra, Aric, Seraphina, Orion, Sylas). Create genuinely culturally distinct and unusual names.
 
-World Setting: {data['world']['setting'] or 'Not specified (Generate a highly unique, unpredictable world.)'}
-Genre/Tone: {data['world']['genre'] or 'Not specified (Pick a random, uncommon genre.)'}
+World Setting: {ai_setting}
+Genre/Tone: {ai_genre}
 Tech Level: {data['world']['tech'] or 'Not specified'}
 Species/Races: {data['world']['species'] or 'Not specified (Invent at least 3 bizarre, unique original species)'}
 Game Focus: {focus_text}
@@ -215,8 +241,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
 
             # 3. FINALIZE STARTUP & SAVE
             if is_startup and "[[START_GAME]]" in ai_text:
-                self.app.is_creating = False
-                self.app.story_tab.print_text("\n[System: Creation Complete. Saving Data...]\n", sender="System")
+                #self.app.story_tab.print_text("\n[System: Creation Complete. Saving Data...]\n", sender="System")
                 
                 if os.path.exists(self.app.creation_summary_path):
                     try:
