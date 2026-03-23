@@ -226,9 +226,9 @@ After outputting the tags, summarize the first starting turn, describe the surro
                         
                 self.app.save_game()
                 
-                self.app._sync_player_state_to_ui()
+                self.app.after(0, lambda: self.app._sync_player_state_to_ui())
                 if "Inventory" in self.app.notebook_widgets:
-                    self.app.notebook_widgets["Inventory"].refresh_display()
+                    self.app.after(0, lambda: self.app.notebook_widgets["Inventory"].refresh_display())
                 
                 ai_text = ai_text.replace("[[START_GAME]]", "")
                 clean_creation_text = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", ai_text, flags=re.DOTALL).strip()
@@ -420,9 +420,9 @@ class TagParser:
                 amount = int(amount_str)
                 success, msg = self.app.player.change_currency(amount)
                 self.app.story_tab.print_text(msg, sender="System")
-                self.app._sync_player_state_to_ui()
+                self.app.after(0, lambda: self.app._sync_player_state_to_ui())
                 if "Inventory" in self.app.notebook_widgets:
-                    self.app.notebook_widgets["Inventory"].refresh_display()
+                    self.app.after(0, lambda: self.app.notebook_widgets["Inventory"].refresh_display())
 
             except ValueError:
                 self.app.story_tab.print_text(f"System Error: Invalid currency amount '{amount_str}'", sender="System")
