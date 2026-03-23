@@ -77,7 +77,8 @@ class AIManager:
         for st in data['stats']:
             if st['enabled']:
                 stats_text += f"- {st['name']}: Starts at {st['value']} (Rules: {st['desc']})\n"
-        if not stats_text: stats_text = "(No tracked stats specified)"
+        if not stats_text: 
+            stats_text = "Not specified (AI, you MUST invent 2 to 3 tracked survival/combat stats fitting the genre, such as Health, Sanity, Mana, etc. Output [[DEFINE_STAT: Name | Starting Value | Description]] for each.)"
         
         # Format focus
         focus_text = ', '.join(data['focus']) if data['focus'] else "Not specified (AI, pick a balanced focus)"
@@ -121,6 +122,7 @@ Output the following SPECIAL TAGS to set up the game files based on this data.
 [[ADD_FOOD: Type | Name | Desc | Amount | Value (MUST be an integer representing the number of smallest base currency units that this is worth) | Meals | SpoilDay | SpoilTime]] (Add logical starting food for the Player Character. Repeat this tag for EACH FOOD ITEM that the Player will start out with.)
 [[ADD: Type | Name | Description | Amount | Value (MUST be an integer representing the number of smallest base currency units that this is worth)]] (Add logical starting equipment/wealth. Repeat this tag for EACH NON-FOOD and NON-CURRENCY item that the Player will start out with.)
 [[DEFINE_CURRENCY: Name | Value]] (If no currencies were provided, output this for EACH invented denomination. Example: [[DEFINE_CURRENCY: Iron Bit | 1]]). THIS TAG MUST COME BEFORE CHANGE_CURRENCY.
+[[DEFINE_STAT: Name | Value | Description]] (If NO tracked stats were provided, output this tag for EACH invented stat. Be as specific as possible for the description of each stat, including positive effects for having a high value of the stat, and/or negative effects for having a low value of the stat (and what happens if the stat hits 0). Example: [[DEFINE_STAT: Sanity | 100 | Represents your mental fortitude against the Eldritch. Depletes when seeing horrors; replenishes when taking time to rest and give your brain a break without witnessing Eldritch horrors. High sanity allows your character to have a clear head and more easily deal with Eldritch horrors. Low sanity means that your character will have issues with Eldritch horrors when encountering them. Max value: 100.]])
 [[CHANGE_CURRENCY: X]] (Give the player a logical amount of starting base currency for their background)
 [[STATUS: 1 | {data['starting_location'] or 'Unknown (Invent a starting location name)'} | 1 | 7:00 A.M.]]
 [[MUSIC: FILENAME_PLACEHOLDER.mp3]]
@@ -210,6 +212,17 @@ After outputting the tags, summarize the first starting turn, describe the surro
                             f.write(f"- {new_summary}\n")
                     except Exception as e:
                         logging.error(f"Error writing creation summary: {e}")
+                        
+                invented_stats = []
+                # Allow for multi-line and negative numbers just in case
+                for match in re.finditer(r"\[\[DEFINE_STAT:\s*(.*?)\s*\|\s*(-?\d+)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL):
+                    s_name = match.group(1).strip()
+                    s_val = int(match.group(2))
+                    s_desc = match.group(3).strip()
+                    invented_stats.append({"name": s_name, "value": s_val, "enabled": True, "desc": s_desc})
+                
+                if invented_stats:
+                    self.app.player.tracked_stats.extend(invented_stats)
 
                 world_match = re.search(r"\[\[WORLD_INFO:\s*(.*?)\]\]", ai_text, re.DOTALL)
                 if world_match:
