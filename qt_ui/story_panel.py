@@ -12,26 +12,13 @@ from PySide6.QtWidgets import (
     QLabel,
     QSizePolicy,
     QFrame,
-    QMenu
+    QProgressBar # Added for visual stats
+    # QMenu removed as it's now handled by MainWindow
 )
 
-
 class StoryPanel(QWidget):
-    """
-    A Qt version of the Story tab.
-
-    This is intentionally minimal to get the Qt migration rolling:
-    - Status line
-    - Output log
-    - Input line + Send button
-    - Menu button (signal only for now)
-    """
-
     send_requested = Signal(str)
-    menu_requested = Signal()
-    currency_requested = Signal()
-    stats_requested = Signal()
-    help_requested = Signal()
+    # Menu signals removed as MainWindow handles them via its MenuBar natively
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -48,46 +35,25 @@ class StoryPanel(QWidget):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
 
-        # ---- Header (status + menu) ----
-        header = QHBoxLayout()
-        header.setSpacing(10)
+        # ---- Header (Status + Progress Bars on newlines) ----
+        self.header_layout = QVBoxLayout()
+        self.header_layout.setSpacing(4)
 
-        self.btn_menu = QPushButton("Menu")
-        self.btn_menu.setFixedWidth(80)
-        
-        self.main_menu = QMenu(self)
-        
-        # 1. Save/Load Action
-        action_save = self.main_menu.addAction("Save / Load Game")
-        action_save.triggered.connect(self.menu_requested.emit)
+        # Base Status text (Turn, Location, Time)
+        self.lbl_base_status = QLabel()
+        self.lbl_base_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        # Style it to stand out slightly from the progress bars below it
+        self.lbl_base_status.setStyleSheet("font-weight: bold; margin-bottom: 5px;")
+        self.header_layout.addWidget(self.lbl_base_status)
 
-        # 2. Currency Action
-        action_currencies = self.main_menu.addAction("Manage Currencies")
-        action_currencies.triggered.connect(self.currency_requested.emit)
+        # Container for the dynamically generated progress bars
+        self.stats_layout = QVBoxLayout()
+        self.stats_layout.setSpacing(2)
+        self.header_layout.addLayout(self.stats_layout)
 
-        # 3. Stats Action
-        action_stats = self.main_menu.addAction("Manage Tracked Stats")
-        action_stats.triggered.connect(self.stats_requested.emit)
-        
-        #4. Help Menu
-        self.main_menu.addSeparator() # Adds a nice visual line before Help
-        action_help = self.main_menu.addAction("Help")
-        action_help.triggered.connect(self.help_requested.emit)
+        root.addLayout(self.header_layout)
 
-        # Attach the Dropdown to the Button
-        self.btn_menu.setMenu(self.main_menu)
-        
-        self.btn_menu.clicked.connect(self.menu_requested.emit)
-        header.addWidget(self.btn_menu, alignment=Qt.AlignmentFlag.AlignLeft)
-
-        self.lbl_status = QLabel(self._format_status_text())
-        self.lbl_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.lbl_status.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        header.addWidget(self.lbl_status)
-
-        root.addLayout(header)
-
-        # Optional separator line
+        # Separator line
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
         line.setFrameShadow(QFrame.Shadow.Sunken)
@@ -115,7 +81,8 @@ class StoryPanel(QWidget):
 
         root.addLayout(input_row)
 
-    # ---- Public helpers (mirror-ish of StoryTab capabilities) ----
+        # Initial UI render
+        self._update_status_ui()
 
     def append_text(self, text: str) -> None:
         if not text:
@@ -128,8 +95,69 @@ class StoryPanel(QWidget):
         if location is not None: self._status_cache["location"] = str(location)
         if day is not None: self._status_cache["day"] = str(day)
         if time is not None: self._status_cache["time"] = str(time)
-        if dynamic_stats is not None: self._status_cache["dynamic_stats"] = dynamic_stats # <--- Cache list
-        self.lbl_status.setText(self._format_status_text())
+        if dynamic_stats is not None: self._status_cache["dynamic_stats"] = dynamic_stats 
+        
+        self._update_status_ui()
+
+    def _update_status_ui(self) -> None:
+        """Rebuilds the status text and dynamically creates progress bars for stats."""
+        s = self._status_cache
+        if not "Day" in s['day']: s['day'] = "Day: " + s['day']
+        
+        # 1. Update the top standard text
+        base_str = f"Turn: {s['turn']} \nLocation: {s['location']} \n{s['day']} \n{s['time']}"
+        self.lbl_base_status.setText(base_str)
+        
+        # 2. Safely clear old progress bars
+        while self.stats_layout.count() > 0:
+            item = self.stats_layout.takeAt(0)
+            if item is not None:
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+                
+        # 3. Create new progress bars for each enabled stat
+        for st in s.get("dynamic_stats", []):
+            if st.get("enabled", True):
+                pb = QProgressBar()
+                pb.setRange(0, 100) # Assumes stats are max 100 as per your previous design
+                
+                # Safely parse the value
+                try:
+                    val = int(st['value'])
+                except ValueError:
+                    val = 0
+                    
+                pb.setValue(val)
+                # Formats text as: "Stat Name: 75%" 
+                pb.setFormat(f"{st['name']}: %p%") 
+                pb.setTextVisible(True)
+                pb.setFixedHeight(18) # Keeps the bars sleek
+                
+                if val > 50:
+                    bar_color = "#4CAF50" # Green
+                elif val > 25:
+                    bar_color = "#FF9800" # Orange/Yellow
+                else:
+                    bar_color = "#F44336" # Red
+                    
+                # Apply a custom stylesheet to this specific progress bar
+                pb.setStyleSheet(f"""
+                    QProgressBar {{
+                        border: 1px solid #555;
+                        border-radius: 4px;
+                        text-align: center;
+                        background-color: #333; /* Dark background for the empty track */
+                        color: white; /* Text color */
+                        font-weight: bold;
+                    }}
+                    QProgressBar::chunk {{
+                        background-color: {bar_color};
+                        border-radius: 3px;
+                    }}
+                """)
+                
+                self.stats_layout.addWidget(pb)
 
     def get_log_text(self) -> str:
         return self.txt_log.toPlainText()
@@ -142,24 +170,19 @@ class StoryPanel(QWidget):
         """Enable/disable input controls. Optionally updates placeholder text."""
         self.txt_input.setEnabled(enabled)
         self.btn_send.setEnabled(enabled)
-        self.btn_menu.setEnabled(enabled)
+        # self.btn_menu removed
 
         if enabled:
-            # Always restore normal placeholder when re-enabled
             self.txt_input.setPlaceholderText("What do you do next?")
         else:
-            # Only override placeholder when disabling if provided
             if status_text is not None:
                 self.txt_input.setPlaceholderText(status_text)
 
     def print_text(self, text: str, *, sender: str = "GM") -> None:
-        """Convenience helper to mimic the old StoryTab API."""
         if not text:
             return
         prefix = f"{sender}: " if sender else ""
         self.append_text(f"{prefix}{text}")
-
-    # ---- Internals ----
 
     def _emit_send(self) -> None:
         text = (self.txt_input.text() or "").strip()
@@ -167,18 +190,6 @@ class StoryPanel(QWidget):
             return
         self.txt_input.clear()
         self.send_requested.emit(text)
-
-    def _format_status_text(self) -> str:
-        s = self._status_cache
-        base_str = f"Turn: {s['turn']} | Location: {s['location']} | {s['day']} | {s['time']}"
-        
-        # Build the dynamic UI row!
-        stats_str = ""
-        for st in s.get("dynamic_stats", []):
-            if st.get("enabled", True): # Only show if enabled
-                stats_str += f" | {st['name']}: {st['value']}"
-                
-        return base_str + stats_str
 
     def _scroll_to_bottom(self) -> None:
         cursor = self.txt_log.textCursor()

@@ -137,7 +137,7 @@ class RecipesPanel(QWidget):
                     ing_parts.append(f"{ing}: {amt or '1'}")
             table_rows.append([name, ", ".join(ing_parts), val])
 
-        txt = "RECIPES\n" + tabulate(table_rows, headers, tablefmt="simple_grid") + "\n"
+        txt = "RECIPES\n" + tabulate(table_rows, headers, tablefmt="rounded_grid") + "\n"
         self.display.setPlainText(txt)
         self._set_state("")
 
