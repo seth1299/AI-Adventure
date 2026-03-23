@@ -292,7 +292,7 @@ class ProcessingPanel(QWidget):
                     prog = f"{done:.1f}/{req:.1f} WA (Skill: {skill}) ~{hrs_left:.1f} hrs left"
                 rows.append([item.get("name", ""), "PROJECT", status, prog, y, desc])
 
-        txt = "ONGOING TASKS\n" + tabulate(rows, headers, tablefmt="simple_grid") + "\n"
+        txt = "ONGOING TASKS\n" + tabulate(rows, headers, tablefmt="rounded_grid") + "\n"
         self.display.setPlainText(txt)
         self._set_state("")
 

@@ -7,11 +7,12 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QDockWidget,
     QWidget,
+    QDialog,
+    QMenuBar
 )
 from .markdown_panel import MarkdownPanel
 from .story_panel import StoryPanel
 from ai_manager import AIManager
-from PySide6.QtWidgets import QDialog
 from .main_menu_dialog import MainMenuDialog
 from config import SAVES_DIR
 from file_manager import FileManager
@@ -47,11 +48,11 @@ class MainWindow(QMainWindow):
         self.app = app_context
         self.ai_manager = AIManager(self.app) if self.app is not None else None
 
+        # Only the send_requested signal remains on the StoryPanel
         self.story_panel.send_requested.connect(self._on_send_requested)
-        self.story_panel.menu_requested.connect(self._on_menu_requested)
-        self.story_panel.currency_requested.connect(self.open_currency_menu)
-        self.story_panel.stats_requested.connect(self.open_stats_menu)
-        self.story_panel.help_requested.connect(self.open_help_menu)
+        
+        # Setup the new native Windows-style Menu Bar in the top left
+        self._setup_menu_bar()
 
         # Docks (stubs for now)
         self._docks: dict[str, QDockWidget] = {}
@@ -77,6 +78,56 @@ class MainWindow(QMainWindow):
             | QMainWindow.DockOption.AnimatedDocks
             | QMainWindow.DockOption.GroupedDragging
         )
+        
+    def _setup_menu_bar(self):
+        """Creates the native OS-style top-left menu bar."""
+        menu_bar = self.menuBar()
+        
+        menu_bar.setStyleSheet("""
+            QMenuBar {
+                background-color: #2b2b2b; /* Dark distinct background */
+                color: #ffffff;            /* White text */
+                font-size: 14px;
+                font-weight: bold;
+                border-bottom: 2px solid #4CAF50; /* A crisp green underline to separate it from panels */
+                padding: 4px;
+            }
+            QMenuBar::item {
+                spacing: 3px;
+                padding: 4px 12px;
+                background: transparent;
+                border-radius: 4px;
+            }
+            QMenuBar::item:selected {      /* Hover state */
+                background: #4CAF50;
+                color: white;
+            }
+            QMenu {                        /* The dropdown menu itself */
+                background-color: #333333;
+                color: white;
+                border: 1px solid #555555;
+                font-weight: normal;       /* Keep dropdown text normal weight */
+            }
+            QMenu::item:selected {
+                background-color: #4CAF50;
+            }
+        """)
+        
+        game_menu = menu_bar.addMenu("Game")
+        
+        action_save = game_menu.addAction("Save / Load Game")
+        action_save.triggered.connect(self._on_menu_requested)
+        
+        action_currencies = game_menu.addAction("Manage Currencies")
+        action_currencies.triggered.connect(self.open_currency_menu)
+        
+        action_stats = game_menu.addAction("Manage Tracked Stats")
+        action_stats.triggered.connect(self.open_stats_menu)
+        
+        game_menu.addSeparator()
+        
+        action_help = game_menu.addAction("Help")
+        action_help.triggered.connect(self.open_help_menu)
 
     def _add_dock(self, title: str, widget: QWidget, area: Qt.DockWidgetArea) -> None:
         dock = QDockWidget(title, self)

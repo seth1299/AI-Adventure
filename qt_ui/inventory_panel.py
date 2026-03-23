@@ -184,7 +184,7 @@ class InventoryPanel(QWidget):
                 
             if currency_rows:
                 parts.append("\nWealth / Currencies\n")
-                parts.append(tabulate(currency_rows, headers, tablefmt="simple_grid"))
+                parts.append(tabulate(currency_rows, headers, tablefmt="rounded_grid"))
                 parts.append("\n")
 
         # --- REGULAR ITEMS ---
@@ -234,7 +234,7 @@ class InventoryPanel(QWidget):
                 rows.append([name, desc, amt, val])
 
             parts.append(f"\n{category}\n")
-            parts.append(tabulate(rows, headers, tablefmt="simple_grid"))
+            parts.append(tabulate(rows, headers, tablefmt="rounded_grid"))
             parts.append("\n")
 
         self.display.setPlainText("".join(parts).rstrip() + "\n")

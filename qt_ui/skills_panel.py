@@ -130,7 +130,7 @@ class SkillsPanel(QWidget):
                 ]
             )
 
-        txt = "SKILLS\n" + tabulate(rows, headers, tablefmt="simple_grid") + "\n"
+        txt = "SKILLS\n" + tabulate(rows, headers, tablefmt="rounded_grid") + "\n"
         self.display.setPlainText(txt)
         self._set_state("")
 
