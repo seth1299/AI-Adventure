@@ -159,6 +159,7 @@ class InventoryPanel(QWidget):
         if world_currencies:
             remaining = abs(base_currency)
             sorted_currencies = sorted(world_currencies, key=lambda x: int(x.get("value", 1)), reverse=True)
+            lowest_coin_name = sorted_currencies[-1].get("name", "Base Units") if sorted_currencies else "Base Units"
             
             currency_rows = []
             for cur in sorted_currencies:
@@ -174,7 +175,7 @@ class InventoryPanel(QWidget):
                 amt_str = str(-count) if base_currency < 0 and count > 0 else str(count)
                 
                 # ALWAYS append the row, even if count is 0!
-                currency_rows.append([name, "Legal Tender", amt_str, f"{val} base units"])
+                currency_rows.append([name, "Legal Tender", amt_str, f"{val} {lowest_coin_name}"])
             
             # If there's weird loose change left over from bad AI math, show it
             if remaining > 0:

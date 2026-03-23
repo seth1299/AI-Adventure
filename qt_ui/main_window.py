@@ -186,9 +186,12 @@ class MainWindow(QMainWindow):
                 # 2. Force an immediate save to lock in the new economy
                 self.app.save_game()
                 
+                sorted_for_msg = sorted(saved_currencies, key=lambda x: int(x.get("value", 1)), reverse=True)
+                lowest_coin_name = sorted_for_msg[-1].get("name", "base units") if sorted_for_msg else "base units"
+                
                 msg = f"Currencies successfully updated ({len(saved_currencies)} total):\n"
                 for cur in saved_currencies:
-                    msg += f" • {cur['name']} (Worth: {cur['value']} base units)\n"
+                    msg += f" • {cur['name']} (Worth: {cur['value']} {lowest_coin_name})\n"
                 
                 self.story_panel.print_text(msg, sender="System")
                 

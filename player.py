@@ -93,6 +93,9 @@ class Player:
 
         # Sort currencies from highest value to lowest
         sorted_currencies = sorted(self.world_currencies, key=lambda x: int(x.get("value", 1)), reverse=True)
+        
+        # --- NEW: Get the name of the smallest denomination to replace "Base Units" ---
+        lowest_coin_name = sorted_currencies[-1].get("name", "Base Units") if sorted_currencies else "Base Units"
 
         for cur in sorted_currencies:
             val = int(cur.get("value", 1))
@@ -104,7 +107,7 @@ class Player:
 
         # NEW: Fallback! If the AI did weird math and there is remainder left over, don't delete it!
         if remaining > 0:
-            parts.append(f"{remaining} Base Units")
+            parts.append(f"{remaining} {lowest_coin_name}")
 
         result_str = ", ".join(parts)
         return f"-{result_str}" if is_negative else result_str
