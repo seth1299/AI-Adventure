@@ -12,7 +12,7 @@ class WorldPage(QWizardPage):
     def __init__(self):
         super().__init__()
         self.setTitle("Step 1: World Setting")
-        self.setSubTitle("Define the parameters of the world you will be exploring.")
+        self.setSubTitle("Define the parameters of the world you will be exploring. Leave blank for the A.I. to decide.")
         
         layout = QVBoxLayout(self)
         
@@ -56,7 +56,7 @@ class CharacterPage(QWizardPage):
     def __init__(self):
         super().__init__()
         self.setTitle("Step 5: Character Bio")
-        self.setSubTitle("Tell us about your character.")
+        self.setSubTitle("Tell me about your character. Leave blank for the AI to decide.")
         
         layout = QVBoxLayout(self)
         
@@ -190,7 +190,7 @@ class StatsPage(QWizardPage):
     def __init__(self):
         super().__init__()
         self.setTitle("Step 4: Tracked Stats")
-        self.setSubTitle("Add, remove, or toggle tracked statuses (e.g. Health, AC, Nutrition).")
+        self.setSubTitle("Add, remove, or toggle tracked statuses (e.g. Health, AC). Leave blank for AI generation.")
         
         layout = QVBoxLayout(self)
         
@@ -209,8 +209,6 @@ class StatsPage(QWizardPage):
         layout.addWidget(scroll)
         
         # Default starting rows
-        self.add_row("Nutrition", 100, True, "Represents how well-fed the character is. Max 100.")
-        self.add_row("Stamina", 100, True, "Represents physical energy. Depletes from actions. Max 100.")
 
     def add_row(self, name="", value=100, enabled=True, desc=""):
         row = StatRow(name=name, value=value, enabled=enabled, desc=desc)
