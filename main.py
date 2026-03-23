@@ -375,6 +375,7 @@ def main() -> int:
 
     from ai_manager import AIManager
     win.app = app_ctx
+    win.inventory_panel.app = app_ctx
     win.ai_manager = AIManager(app_ctx)
     win.setWindowTitle(f"AI RPG Adventure (Qt) - {save_name}")
     win.show()
