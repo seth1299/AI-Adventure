@@ -118,6 +118,13 @@ class InventoryPanel(QWidget):
         self.save_data(self.load_data())
 
     # ---- Rendering ----
+    
+    def _get_player(self):
+        """Safely locate the Player object regardless of how the app context was injected."""
+        if not self.app: return None
+        if hasattr(self.app, 'player'): return self.app.player
+        if hasattr(self.app, 'app') and hasattr(self.app.app, 'player'): return self.app.app.player
+        return None
 
     def refresh_display(self) -> None:
         if not self.data_path:
@@ -125,6 +132,12 @@ class InventoryPanel(QWidget):
             return
 
         data = self.load_data()
+        player = self._get_player()
+        base_currency = 0
+        world_currencies = []
+        if player:
+            base_currency = player.base_currency
+            world_currencies = getattr(player, 'world_currencies', [])
         
         base_currency = 0
         world_currencies = []

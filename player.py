@@ -78,7 +78,7 @@ class Player:
 
         target_stat["value"] = new_val
             
-    def get_formatted_currency(self, amount: int = 0) -> str:
+    def get_formatted_currency(self, amount: int | None  = None) -> str:
         """Converts an integer (base currency) into a readable string like '3 Gold, 7 Silver'."""
         if amount is None: amount = self.base_currency
         if amount == 0: return "0 (None)"
