@@ -30,6 +30,9 @@ class Player:
         self.day = data.get("day", "1")
         self.time = data.get("time", "Start")
         self.base_currency = int(data.get("base_currency", 0))
+        
+        if "world_currencies" in data:
+            self.world_currencies = data["world_currencies"]
 
     def get_status_dict(self):
         """Returns the dictionary format required for the UI and saving."""
@@ -39,7 +42,8 @@ class Player:
             "day": str(self.day),
             "time": self.time,
             "base_currency": self.base_currency,
-            "tracked_stats": self.tracked_stats
+            "tracked_stats": self.tracked_stats,
+            "world_currencies": self.world_currencies
         }
 
     def update_world_state(self, turn, location, day, time):
