@@ -138,12 +138,6 @@ class InventoryPanel(QWidget):
         if player:
             base_currency = player.base_currency
             world_currencies = getattr(player, 'world_currencies', [])
-        
-        base_currency = 0
-        world_currencies = []
-        if self.app and hasattr(self.app, 'player'):
-            base_currency = self.app.player.base_currency
-            world_currencies = getattr(self.app.player, 'world_currencies', [])
 
         # Only display Empty if there are NO items AND NO currencies defined
         if not data and not world_currencies:
