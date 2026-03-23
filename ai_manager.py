@@ -92,8 +92,8 @@ Output the following SPECIAL TAGS to set up the game files based on this data.
 [[WORLD_INFO: Write a summary of the game focus, world setting, tone, currency, and tech level here. Include anything the Player specified.]]
 [[CHARACTER_INFO: Write the full character biography, appearance, and details here.]]
 [[SKILL: Name | Level]] (Output one for EACH skill. If none were provided, output the 16 invented skills here).
-[[ADD_FOOD: Type | Name | Desc | Amount | Value | Meals | SpoilDay | SpoilTime]] (Add logical starting food for the Player Character. Repeat this tag for EACH FOOD ITEM that the Player will start out with.)
-[[ADD: Type | Name | Description | Amount | Value]] (Add logical starting equipment/wealth. Repeat this tag for EACH NON-FOOD and NON-CURRENCY item that the Player will start out with.)
+[[ADD_FOOD: Type | Name | Desc | Amount | Value (MUST be an integer representing the number of smallest base currency units that this is worth) | Meals | SpoilDay | SpoilTime]] (Add logical starting food for the Player Character. Repeat this tag for EACH FOOD ITEM that the Player will start out with.)
+[[ADD: Type | Name | Description | Amount | Value (MUST be an integer representing the number of smallest base currency units that this is worth)]] (Add logical starting equipment/wealth. Repeat this tag for EACH NON-FOOD and NON-CURRENCY item that the Player will start out with.)
 [[DEFINE_CURRENCY: Name | Value]] (If no currencies were provided, output this for EACH invented denomination. Example: [[DEFINE_CURRENCY: Iron Bit | 1]]). THIS TAG MUST COME BEFORE CHANGE_CURRENCY.
 [[CHANGE_CURRENCY: X]] (Give the player a logical amount of starting base currency for their background)
 [[STATUS: 1 | {data['starting_location'] or 'Unknown (Invent a starting location name)'} | 1 | 7:00 A.M.]]
@@ -170,14 +170,11 @@ After outputting the tags, summarize the first starting turn, describe the surro
             ai_text = self.clean_quotes(response.text or "")
             if not ai_text: raise ValueError("Empty response")
             
-            # --- TAG PARSING ---
+           # --- TAG PARSING ---
             tag_parser = TagParser(self.app)
             ai_text = tag_parser.process_inline_tags(ai_text)
             
-            # 1. PROCESS STANDARD TAGS ALWAYS (Inventory, Music, Status, etc.)
-            tag_parser.process_standard_tags(ai_text, is_startup=is_startup)    
-
-            # 2. Creation Specific Tags
+            # 1. SETUP FOUNDATION FIRST (Creation Specific Tags)
             if is_startup:
                 summary_match = re.search(r"\[\[STEP_SUMMARY:\s*(.*?)\]\]", ai_text, re.DOTALL)
                 if summary_match:
@@ -202,31 +199,39 @@ After outputting the tags, summarize the first starting turn, describe the surro
                     s_name = match.group(1).strip()
                     s_lvl = int(match.group(2))
                     self.app.notebook_widgets["Skills"].force_learn_skill(s_name, s_lvl)
-                    
+
+                # Parse Invented Currencies BEFORE standard tags run!
                 invented_currencies = []
                 for match in re.finditer(r"\[\[DEFINE_CURRENCY:\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text):
                     c_name = match.group(1).strip()
                     c_val = int(match.group(2))
                     invented_currencies.append({"name": c_name, "value": c_val})
                 
-                # If the AI invented currencies, overwrite the player's empty list
                 if invented_currencies:
                     self.app.player.world_currencies = invented_currencies
 
-                if "[[START_GAME]]" in ai_text:
-                    self.app.story_tab.print_text("\n[System: Creation Complete. Saving Data...]\n", sender="System")
-                    if os.path.exists(self.app.creation_summary_path):
-                        try:
-                            os.remove(self.app.creation_summary_path)
-                        except Exception as e:
-                            logging.error(f"Error deleting creation summary: {e}")
-                            
-                    # Because standard tags processed first, inventory is populated when we save!
-                    self.app.save_game()
-                    
-                    ai_text = ai_text.replace("[[START_GAME]]", "")
-                    clean_creation_text = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", ai_text, flags=re.DOTALL).strip()
-                    self.app.conversation_history += f"GM: {clean_creation_text}\n"
+            # 2. PROCESS STANDARD TAGS (Now it has the currencies loaded to do the math!)
+            tag_parser.process_standard_tags(ai_text, is_startup=is_startup)    
+
+            # 3. FINALIZE STARTUP & SAVE
+            if is_startup and "[[START_GAME]]" in ai_text:
+                self.app.is_creating = False
+                self.app.story_tab.print_text("\n[System: Creation Complete. Saving Data...]\n", sender="System")
+                
+                if os.path.exists(self.app.creation_summary_path):
+                    try:
+                        os.remove(self.app.creation_summary_path)
+                    except Exception as e:
+                        logging.error(f"Error deleting creation summary: {e}")
+                        
+                self.app.save_game()
+                
+                ai_text = ai_text.replace("[[START_GAME]]", "")
+                clean_creation_text = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", ai_text, flags=re.DOTALL).strip()
+                self.app.conversation_history += f"GM: {clean_creation_text}\n"
+
+            # 4. RECURSIVE LOGIC (Rolls)
+            roll_match = re.search(r"\[\[ROLL:\s*(.*?)\]\]", ai_text)
 
             # 3. Recursive Logic (Rolls)
             roll_match = re.search(r"\[\[ROLL:\s*(.*?)\]\]", ai_text)

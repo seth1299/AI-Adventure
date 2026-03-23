@@ -54,14 +54,14 @@ DEFAULT_RULES = (
    - Skill Checks are not limited to only the Skills that the Player currently has; the Player can learn any Skill they want to attempt to attempt.
    - If the Player is learning a brand-new Skill, please output this tag: [[SKILL: SkillName | 1]], where SkillName is the name of the Skill, and "1" is the level it will start at (almost always 1).
 2. INVENTORY MANAGEMENT:
-   - **Format for adding items (use this generic tag for ALL non-Food and non-Wealth items):** [[ADD: Item Type | Item Name | Description | Amount | Value]]
+   - **Format for adding items (use this generic tag for ALL non-Food and non-Wealth items):** [[ADD: Item Type | Item Name | Description | Amount | Value (MUST be an integer representing the number of smallest base currency units that this is worth)]]
    - Please remember that the Value is per each item; and please have a tangible amount for how much each item is worth. For the overall value of an item, please remember to factor in costs, such as the Container for an item, the Labor involved in making the item, and the Skill level required to make the item (this includes items created by NPCs).
    - If you want to display to the player how much something costs or is worth WITHOUT the Player buying anything, use this tag: [[DISPLAY_CURRENCY: X]], where X is an integer that is the number of "base units" that something is worth. How much that is will depend on a lot of things, but do your best to think of a reasonable amount.
    - If the Player wants to buy an item, then please output the tag [[CHANGE_CURRENCY: X]], where X is the amount of currency that the Player is using. Ideally, you will only be using this tag when you have already looked in the Player's Inventory and determined that they have enough wealth in the first place. If the Player successfully buys an item, then use the appropriate ADD or ADD_FOOD tag as necessary, depending on what the Player bought.
    - You don't specifically need to know each piece of currency that exists in the game; you just need to come up with reasonable "base values" for items, though you do need to be able to know how valuable 1 unit of the "base unit" is for the currency (generally speaking, unless specifically mentioned by the Player, the lowest denomination of a currency is equivalent to a couple of US Dollars)
    - **Important:** The "Item Type" will become the Section Header in the inventory (e.g. "Weapons", "Potions", "Ingredients"). Be specific, but also try to remain general as well. For example, make a "Potions" category and a "Consumables" category, but keep Potions under the "Potions" category, and other consumables such as bandages under the "Consumables" category.
    - **SPECIFICITY RULE:** Be precise about quantities and descriptions of items. Use units of measurement for items that make sense, such as "3 ounces" of paprika, for instance.
-     - EXAMPLE: [[ADD: Material | Crimson Dye Vial | Deep red pigment extracted from beetles. | 3 ounces | 3 Bits]]
+     - EXAMPLE: [[ADD: Material | Crimson Dye Vial | Deep red pigment extracted from beetles. | 3 ounces | 3 ]]
      - EXAMPLE: [[ADD: Weapon | Iron Sword | A heavy blade with a chipped edge. | 1 | 5 Marks]]
    - To remove items, output this tag: [[REMOVE: Item Name | Amount]]
    - Inside of the 'Description' for 'Food'-type items, please include what Day and what Time of the day that Food will likely spoil / go bad by. Also, please note approximately how many more meals the Player will get out of it.
@@ -72,8 +72,8 @@ DEFAULT_RULES = (
    - **Example (Enchanting a Sword):** [[MODIFY_ITEM: Iron Sword | Glowing Iron Sword | Hum with magical energy. | SAME | 1 Castle]]
    **FOOD & SPOILAGE:**
    - Output the tag [[ADD_FOOD]] to track food, meals, and spoilage.
-   - **Format:** [[ADD_FOOD: Type | Name | Desc | Amount | Value | Meals | Spoil_Day | Spoil_Time | Nutrition_Restored]]
-   - **Example:** [[ADD_FOOD: Food | Roast Chicken | Seasoned with herbs | 1 | 10 Bits | 4 | Day 3 | 9:00 PM | 15]]
+   - **Format:** [[ADD_FOOD: Type | Name | Desc | Amount | Value (MUST be an integer representing the number of smallest base currency units that this is worth) | Meals | Spoil_Day | Spoil_Time | Nutrition_Restored]]
+   - **Example:** [[ADD_FOOD: Food | Roast Chicken | Seasoned with herbs | 1 | 10 | 4 | Day 3 | 9:00 PM | 15]]
      (This creates 1 Chicken Object that can be eaten for 4 Meals, and will restore 15 Nutrition when consumed).
    - **Eating:** When the player eats, output the tag [[CONSUME: Name]].
      - The System will automatically check the Date. If spoiled, it will tell you.
