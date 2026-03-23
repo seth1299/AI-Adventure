@@ -92,10 +92,15 @@ class Player:
 
         for cur in sorted_currencies:
             val = int(cur.get("value", 1))
+            if val <= 0: continue # Safely avoid zero division
             if remaining >= val:
                 count = remaining // val
                 remaining %= val
                 parts.append(f"{count} {cur.get('name', 'Unit')}")
+
+        # NEW: Fallback! If the AI did weird math and there is remainder left over, don't delete it!
+        if remaining > 0:
+            parts.append(f"{remaining} Base Units")
 
         result_str = ", ".join(parts)
         return f"-{result_str}" if is_negative else result_str

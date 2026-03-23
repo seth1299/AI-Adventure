@@ -127,35 +127,52 @@ class InventoryPanel(QWidget):
         data = self.load_data()
         
         base_currency = 0
+        world_currencies = []
         if self.app and hasattr(self.app, 'player'):
             base_currency = self.app.player.base_currency
+            world_currencies = getattr(self.app.player, 'world_currencies', [])
 
-        if not data and base_currency == 0:
+        # Only display Empty if there are NO items AND NO currencies defined
+        if not data and not world_currencies:
             self.display.setPlainText("INVENTORY\n\n(Empty)")
             self._set_state("")
             return
 
         headers = ["Name", "Description", "Amount", "Value (each)"]
-        parts: list[str] = ["INVENTORY\n"]
+        
+        # Restore the top text line showing total wealth
+        wealth_str = "0 (None)"
+        if self.app and hasattr(self.app, 'player'):
+            wealth_str = self.app.player.get_formatted_currency()
+            
+        parts: list[str] = ["INVENTORY\n", f"Wealth: {wealth_str}\n"]
 
-        # --- NEW: DYNAMIC CURRENCY TABLE ---
-        if base_currency != 0 and self.app and hasattr(self.app, 'player'):
+        # --- DYNAMIC CURRENCY TABLE ---
+        if world_currencies:
             remaining = abs(base_currency)
-            sorted_currencies = sorted(self.app.player.world_currencies, key=lambda x: int(x.get("value", 1)), reverse=True)
+            sorted_currencies = sorted(world_currencies, key=lambda x: int(x.get("value", 1)), reverse=True)
             
             currency_rows = []
             for cur in sorted_currencies:
                 val = int(cur.get("value", 1))
-                if remaining >= val:
-                    count = remaining // val
-                    remaining %= val
-                    name = cur.get("name", "Unknown Coin")
-                    
-                    # If the player is somehow in debt, display it as a negative amount
-                    amt_str = str(-count) if base_currency < 0 else str(count)
-                    
-                    currency_rows.append([name, "Legal Tender", amt_str, f"{val} base units"])
+                if val <= 0: continue
+                
+                # Calculate how many of this coin we have
+                count = remaining // val
+                remaining %= val
+                name = cur.get("name", "Unknown Coin")
+                
+                # Format negative debts correctly
+                amt_str = str(-count) if base_currency < 0 and count > 0 else str(count)
+                
+                # ALWAYS append the row, even if count is 0!
+                currency_rows.append([name, "Legal Tender", amt_str, f"{val} base units"])
             
+            # If there's weird loose change left over from bad AI math, show it
+            if remaining > 0:
+                loose_str = str(-remaining) if base_currency < 0 else str(remaining)
+                currency_rows.append(["Loose Change", "Base Units", loose_str, "1 base unit"])
+                
             if currency_rows:
                 parts.append("\nWealth / Currencies\n")
                 parts.append(tabulate(currency_rows, headers, tablefmt="simple_grid"))
@@ -179,7 +196,7 @@ class InventoryPanel(QWidget):
                     name = str(item.get("name", "Unknown"))
                     desc = str(item.get("desc", "No desc"))
                     amt = str(item.get("amount", "1"))
-                    val = str(item.get("value", "0"))
+                    val = int(item.get("value", 0))
 
                     # Expand food metadata into description
                     meta = item.get("meta") if isinstance(item.get("meta"), dict) else None
@@ -201,7 +218,7 @@ class InventoryPanel(QWidget):
                     name = str(item[0]) if len(item) > 0 else "Unknown"
                     desc = str(item[1]) if len(item) > 1 else "No desc"
                     amt = str(item[2]) if len(item) > 2 else "1"
-                    val = str(item[3]) if len(item) > 3 else "0"
+                    val = int(item[3]) if len(item) > 3 else 0
                 else:
                     continue
 
