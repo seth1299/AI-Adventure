@@ -147,10 +147,11 @@ class InventoryPanel(QWidget):
 
         headers = ["Name", "Description", "Amount", "Value (each)"]
         
-        # Restore the top text line showing total wealth
         wealth_str = "0 (None)"
-        if self.app and hasattr(self.app, 'player'):
-            wealth_str = self.app.player.get_formatted_currency()
+        if player:
+            wealth_str = player.get_formatted_currency()
+        else:
+            logging.error("Cannot find Player object.")
             
         parts: list[str] = ["INVENTORY\n", f"Wealth: {wealth_str}\n"]
 

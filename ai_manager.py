@@ -202,7 +202,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
 
                 # Parse Invented Currencies BEFORE standard tags run!
                 invented_currencies = []
-                for match in re.finditer(r"\[\[DEFINE_CURRENCY:\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text):
+                for match in re.finditer(r"\[\[DEFINE_CURRENCY:\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text, re.DOTALL):
                     c_name = match.group(1).strip()
                     c_val = int(match.group(2))
                     invented_currencies.append({"name": c_name, "value": c_val})
@@ -290,11 +290,11 @@ class TagParser:
     def process_standard_tags(self, ai_text, is_startup=False):
         """Processes typical gameplay tags and returns the cleaned text."""
         # Inventory
-        for match in re.finditer(r"\[\[ADD:\s*(.*?)\]\]", ai_text):
+        for match in re.finditer(r"\[\[ADD:\s*(.*?)\]\]", ai_text, re.DOTALL):
             res = self.app.notebook_widgets["Inventory"].autonomous_add(match.group(1))
             self.app.story_tab.print_text(res, sender="GM")
 
-        for match in re.finditer(r"\[\[REMOVE:\s*(.*?)\]\]", ai_text):
+        for match in re.finditer(r"\[\[REMOVE:\s*(.*?)\]\]", ai_text, re.DOTALL):
             res = self.app.notebook_widgets["Inventory"].autonomous_remove(match.group(1))
             self.app.story_tab.print_text(res, sender="GM")
             
@@ -303,16 +303,16 @@ class TagParser:
             self.app.player.modify_stat(stat_name, stat_val)
             self.app._sync_player_state_to_ui()
             
-        music_match = re.search(r"\[\[MUSIC:\s*(.*?)\]\]", ai_text)
+        music_match = re.search(r"\[\[MUSIC:\s*(.*?)\]\]", ai_text, re.DOTALL)
         if music_match:
             track = music_match.group(1).strip()
             self.app.after(0, lambda: self.app.sound_manager.play_music(track))
 
-        for match in re.finditer(r"\[\[SOUND:\s*(.*?)\]\]", ai_text):
+        for match in re.finditer(r"\[\[SOUND:\s*(.*?)\]\]", ai_text, re.DOTALL):
             sfx = match.group(1).strip()
             self.app.after(0, lambda s=sfx: self.app.sound_manager.play_sfx(s))
 
-        status_match = re.search(r"\[\[STATUS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text)
+        status_match = re.search(r"\[\[STATUS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL)
         if status_match:
             self.app.player.update_world_state(
                 turn=status_match.group(1).strip(),
@@ -329,11 +329,11 @@ class TagParser:
                     self.app.story_tab.print_text(sys_msg, sender="System")
                     self.app.conversation_history += f"\n{sys_msg}\n"
                     
-        for match in re.finditer(r"\[\[RECIPE:\s*(.*?)\]\]", ai_text):
+        for match in re.finditer(r"\[\[RECIPE:\s*(.*?)\]\]", ai_text, re.DOTALL):
             res = self.app.notebook_widgets["Recipes"].add_recipe_from_tag(match.group(1))
             self.app.story_tab.print_text(res, sender="System")
                     
-        for match in re.finditer(r"\[\[START_PROCESS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\]\]", ai_text):
+        for match in re.finditer(r"\[\[START_PROCESS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL):
             p_name = match.group(1).strip()
             p_desc = match.group(2).strip()
             p_slots = match.group(3).strip()
@@ -341,11 +341,11 @@ class TagParser:
             res = self.app.notebook_widgets["Processing"].add_timed_process(p_name, p_desc, p_slots, self.app.player.day, self.app.player.time, p_yield)
             self.app.story_tab.print_text(res, sender="System")
             
-        for match in re.finditer(r"\[\[REMOVE_PROCESS:\s*(.*?)\]\]", ai_text):
+        for match in re.finditer(r"\[\[REMOVE_PROCESS:\s*(.*?)\]\]", ai_text, re.DOTALL):
             res = self.app.notebook_widgets["Processing"].remove_process(match.group(1).strip())
             if res: self.app.story_tab.print_text(res, sender="System")
             
-        for match in re.finditer(r"\[\[START_PROJECT:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text):
+        for match in re.finditer(r"\[\[START_PROJECT:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL):
             p_name = match.group(1).strip()
             p_desc = match.group(2).strip()
             work_required = match.group(3).strip()
@@ -355,7 +355,7 @@ class TagParser:
             res = self.app.notebook_widgets["Processing"].add_project(p_name, p_desc, work_required, skill_name, lvl, p_yield)
             if res: self.app.story_tab.print_text(res, sender="System")
 
-        for match in re.finditer(r"\[\[WORK:\s*(.*?)\s*\|\s*([\d.]+)\]\]", ai_text):
+        for match in re.finditer(r"\[\[WORK:\s*(.*?)\s*\|\s*([\d.]+)\]\]", ai_text, re.DOTALL):
             project_name = match.group(1).strip()
             hours_worked = float(match.group(2).strip())
             req_skill = self.app.notebook_widgets["Processing"].get_required_skill(project_name) or ""
@@ -373,14 +373,14 @@ class TagParser:
 
             if res: self.app.story_tab.print_text(res, sender="System")
             
-        for match in re.finditer(r"\[\[ADD_FOOD:\s*(.*?)\]\]", ai_text):
+        for match in re.finditer(r"\[\[ADD_FOOD:\s*(.*?)\]\]", ai_text, re.DOTALL):
             res = self.app.notebook_widgets["Inventory"].add_food(match.group(1))
             self.app.story_tab.print_text(res, sender="GM")
             
-        for match in re.finditer(r"\[\[CONSUME:\s*(.*?)\]\]", ai_text):
+        for match in re.finditer(r"\[\[CONSUME:\s*(.*?)\]\]", ai_text, re.DOTALL):
             f_name = match.group(1).strip()
             res = self.app.notebook_widgets["Inventory"].consume_food(f_name, self.app.player.day, self.app.player.time)
-            for match in re.finditer(r"\[\[MODIFY_STAT:\s*(.*?)\s*\|\s*(.*?)\]\]", res):
+            for match in re.finditer(r"\[\[MODIFY_STAT:\s*(.*?)\s*\|\s*(.*?)\]\]", res, re.DOTALL):
                 stat_name = match.group(1).strip()
                 stat_val = match.group(2).strip()
                 self.app.player.modify_stat(stat_name, stat_val)
@@ -388,7 +388,7 @@ class TagParser:
                 res = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", res).strip()
             self.app.story_tab.print_text(res, sender="System")
             
-        for match in re.finditer(r"\[\[SECRET:\s*(.*?)\]\]", ai_text):
+        for match in re.finditer(r"\[\[SECRET:\s*(.*?)\]\]", ai_text, re.DOTALL):
             try:
                 if not self.app.secret_path:
                     with open(self.app.secret_path, "w", encoding="utf-8") as f:
@@ -403,7 +403,7 @@ class TagParser:
             except Exception as e:
                     logging.error(f"Error writing secret: {e}")
                     
-        for match in re.finditer(r"\[\[UPDATE_WORLD:\s*(.*?)\]\]", ai_text):
+        for match in re.finditer(r"\[\[UPDATE_WORLD:\s*(.*?)\]\]", ai_text, re.DOTALL):
             try:
                 if self.app.world_path:
                     with open(self.app.world_path, "a", encoding="utf-8") as f:
@@ -414,7 +414,7 @@ class TagParser:
             except Exception as e:
                 logging.error(f"Error: Couldn't update world: {e}")
                 
-        for match in re.finditer(r"\[\[CHANGE_CURRENCY:\s*(-?\d+)\]\]", ai_text):
+        for match in re.finditer(r"\[\[CHANGE_CURRENCY:\s*(-?\d+)\]\]", ai_text, re.DOTALL):
             amount_str = match.group(1).strip()
             try:
                 amount = int(amount_str)
