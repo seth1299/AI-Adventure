@@ -146,14 +146,6 @@ class FileManager:
         if not app.current_adventure_path or not app.game_loaded_successfully: 
             return
 
-        # Import locally to avoid circular dependency
-        from ui import MarkdownEditorTab
-
-        # 1. Save Markdown Tabs (Journal, World, Character)
-        for name, widget in app.notebook_widgets.items():
-            if isinstance(widget, MarkdownEditorTab):
-                FileManager.write_text_file(widget.filename, widget.get_text())
-
         # 2. Gather History
         history_list = [line for line in app.conversation_history.split("\n") if line.strip()]
         
@@ -162,8 +154,7 @@ class FileManager:
         
         save_data = {
             "Chat History": history_list, 
-            "Status": status_data, 
-            "is_creating": app.is_creating, 
+            "Status": status_data,
             "karmic_streak": app.player.karmic_streak 
         }
         
@@ -175,7 +166,6 @@ class FileManager:
     @staticmethod
     def load_game(app, save_name):
         """Loads a game state, populates the app, and switches the UI."""
-        from ui import MarkdownEditorTab # Local import
 
         app.game_loaded_successfully = False
         app.current_adventure_path = os.path.join(SAVES_DIR, save_name)
@@ -198,13 +188,6 @@ class FileManager:
             try:
                 if hasattr(widget, 'set_base_path'):
                     widget.set_base_path(app.current_adventure_path)
-                elif isinstance(widget, MarkdownEditorTab):
-                    widget.filename = os.path.join(app.current_adventure_path, f"{name}.md")
-                    content = FileManager.read_text_file(widget.filename)
-                    if content:
-                        widget.set_text(content)
-                    else: 
-                        widget.set_text(f"{name}\n")
             except Exception as e:
                 logging.error(f"Error loading tab {name}: {e}")
 
@@ -226,23 +209,12 @@ class FileManager:
                 # Restore History
                 hist = data.get("Chat History", [])
                 app.conversation_history = "\n".join(hist) if isinstance(hist, list) else hist
-                
-                # 6. Resume Game Logic
-                if app.is_creating:
-                    last_gm_msg = "Resuming character creation..."
-                    for line in reversed(app.conversation_history.split('\n')):
-                        if line.startswith("GM:"):
-                            last_gm_msg = line.replace("GM:", "").strip()
-                            break
-                    app.story_tab.print_text(last_gm_msg, sender="GM")
-                else:
-                    app.generate_local_recap()
+                app.generate_local_recap()
             except Exception as e:
                 logging.error(f"Error parsing save data: {e}")
         else:
             # New Game
             app.conversation_history = ""
-            app.is_creating = True
             app.story_tab.print_text("System: Initialization Sequence Started...", sender="System")
             threading.Thread(target=app.ai_manager.start_creation_wizard, daemon=True).start()
             

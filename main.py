@@ -177,8 +177,7 @@ class QtAppContext:
             save_data = {
                 "Chat History": history_list,
                 "Status": status_data,
-                "karmic_streak": int(getattr(self.player, "karmic_streak", 0) or 0),
-                "Currencies": getattr(self.player, "world_currencies", [])
+                "karmic_streak": int(getattr(self.player, "karmic_streak", 0) or 0)
             }
             history_path = os.path.join(self.current_adventure_path, "savegame.json")
             logging.info(f"Saved to {history_path}.")

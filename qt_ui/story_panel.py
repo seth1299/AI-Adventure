@@ -63,6 +63,12 @@ class StoryPanel(QWidget):
         self.txt_log = QTextEdit()
         self.txt_log.setReadOnly(True)
         self.txt_log.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self.txt_log.setStyleSheet("""
+            QTextEdit {
+                font-family: Consolas, 'Courier New', monospace;
+                font-size: 14px; /* Adjust size to your preference */
+            }
+        """)
         root.addWidget(self.txt_log, stretch=1)
 
         # ---- Input row ----

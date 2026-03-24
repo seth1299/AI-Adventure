@@ -2,7 +2,7 @@
 from __future__ import annotations
 from qt_ui.currency_dialog import CurrencyManagerDialog
 from qt_ui.stats_dialog import StatsManagerDialog
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSettings
 from PySide6.QtWidgets import (
     QMainWindow,
     QDockWidget,
@@ -50,9 +50,6 @@ class MainWindow(QMainWindow):
 
         # Only the send_requested signal remains on the StoryPanel
         self.story_panel.send_requested.connect(self._on_send_requested)
-        
-        # Setup the new native Windows-style Menu Bar in the top left
-        self._setup_menu_bar()
 
         # Docks (stubs for now)
         self._docks: dict[str, QDockWidget] = {}
@@ -79,17 +76,21 @@ class MainWindow(QMainWindow):
             | QMainWindow.DockOption.GroupedDragging
         )
         
+        self._setup_menu_bar()
+        
     def _setup_menu_bar(self):
         """Creates the native OS-style top-left menu bar."""
         menu_bar = self.menuBar()
         
-        menu_bar.setStyleSheet("""
+        # --- NEW: Expanded styling to apply to the Menu Bar AND the Dock Panels ---
+        # Note: We apply this to `self` (the whole window) so it cascades down to the docks
+        self.setStyleSheet("""
             QMenuBar {
-                background-color: #2b2b2b; /* Dark distinct background */
-                color: #ffffff;            /* White text */
+                background-color: #2b2b2b;
+                color: #ffffff;
                 font-size: 14px;
                 font-weight: bold;
-                border-bottom: 2px solid #4CAF50; /* A crisp green underline to separate it from panels */
+                border-bottom: 2px solid #4CAF50;
                 padding: 4px;
             }
             QMenuBar::item {
@@ -98,21 +99,39 @@ class MainWindow(QMainWindow):
                 background: transparent;
                 border-radius: 4px;
             }
-            QMenuBar::item:selected {      /* Hover state */
+            QMenuBar::item:selected {
                 background: #4CAF50;
                 color: white;
             }
-            QMenu {                        /* The dropdown menu itself */
+            QMenu {
                 background-color: #333333;
                 color: white;
                 border: 1px solid #555555;
-                font-weight: normal;       /* Keep dropdown text normal weight */
+                font-weight: normal;
             }
             QMenu::item:selected {
                 background-color: #4CAF50;
             }
+            
+            /* --- NEW: Dock Widget Styling --- */
+            QDockWidget {
+                border: 2px solid #555555; /* Visible border around the whole dock */
+                font-weight: bold;
+                color: #ffffff;
+            }
+            QDockWidget::title {
+                background: #333333;
+                text-align: center;
+                padding: 6px;
+            }
+            /* Adds a border directly to the contents inside the dock to separate them from the title */
+            QDockWidget > QWidget {
+                border: 1px solid #444444; 
+                background-color: #2b2b2b;
+            }
         """)
         
+        # 1. Game Menu
         game_menu = menu_bar.addMenu("Game")
         
         action_save = game_menu.addAction("Save / Load Game")
@@ -129,14 +148,23 @@ class MainWindow(QMainWindow):
         action_help = game_menu.addAction("Help")
         action_help.triggered.connect(self.open_help_menu)
 
+        # --- 2. View Menu (NEW) ---
+        view_menu = menu_bar.addMenu("View")
+        
+        # Qt's QDockWidget comes with a built-in toggle action that acts as a checkbox!
+        for title, dock in self._docks.items():
+            view_menu.addAction(dock.toggleViewAction())
+
     def _add_dock(self, title: str, widget: QWidget, area: Qt.DockWidgetArea) -> None:
         dock = QDockWidget(title, self)
         dock.setWidget(widget)
+        dock.setObjectName(f"Dock_{title.replace(' ', '_')}")
 
         # Float / move / close supported.
         dock.setFeatures(
             QDockWidget.DockWidgetFeature.DockWidgetMovable
             | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
         )
 
         self.addDockWidget(area, dock)
@@ -149,6 +177,7 @@ class MainWindow(QMainWindow):
         """Ensure game state is saved when the window is closed."""
         try:
             if self.app is not None:
+                self._save_ui_state()
                 self.app.save_game()
         except Exception:
             pass
@@ -185,6 +214,7 @@ class MainWindow(QMainWindow):
 
         if os.path.exists(savegame_path):
             self.app.load_savegame_state(save_path)
+            self._load_ui_state(save_path)
             self.app.generate_recap()
             return
 
@@ -221,6 +251,31 @@ class MainWindow(QMainWindow):
             self.story_panel.print_text("System: New game creation cancelled.", sender="System")
             
     from qt_ui.currency_dialog import CurrencyManagerDialog
+    
+    def _save_ui_state(self) -> None:
+        """Saves the exact layout, dock positions, window size, and panel visibility."""
+        if self.app and getattr(self.app, 'current_adventure_path', None):
+            ini_path = os.path.join(self.app.current_adventure_path, "ui_layout.ini")
+            
+            # QSettings handles the complex Qt serialization automatically
+            settings = QSettings(ini_path, QSettings.Format.IniFormat)
+            settings.setValue("geometry", self.saveGeometry())
+            settings.setValue("windowState", self.saveState())
+
+    def _load_ui_state(self, save_path: str) -> None:
+        """Restores the UI layout from the save folder if it exists."""
+        ini_path = os.path.join(save_path, "ui_layout.ini")
+        if os.path.exists(ini_path):
+            settings = QSettings(ini_path, QSettings.Format.IniFormat)
+            
+            geometry = settings.value("geometry")
+            state = settings.value("windowState")
+            
+            # Safely restore both the overall window size and the internal panel layout
+            if geometry:
+                self.restoreGeometry(geometry)
+            if state:
+                self.restoreState(state)
 
     def open_currency_menu(self):
         try:

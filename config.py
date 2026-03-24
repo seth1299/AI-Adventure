@@ -8,7 +8,7 @@ load_dotenv(dotenv_path)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise RuntimeError("GEMINI_API_KEY not found. Make sure it exists in your .env or environment variables.")
-MODEL = "gemini-3.1-flash-lite-preview"
+MODEL = "gemini-3.1-pro-preview"
 SAVES_DIR = "saves"
 APP_NAME = "AI_RPG_ADVENTURE"
 
@@ -43,16 +43,15 @@ DEFAULT_RULES = (
 <formatting>
 - Keep responses under 30 sentences in total length, unless describing a major event (the "possible actions" you give to the Player at the end of your responses does not count towards this).
 - Leave at least one line of white space in between paragraphs for legibility.
-- There is only plaintext for how the Player see your messages; so please avoid using Tables, Bold/Italic tags, etc.
+- There is only plaintext for how the Player see your messages; so please avoid using complex tags/formatting.
 - During "Sales/Transactions", please output each individual product for sale on their own line; with their prices right next to them. The prices should be in the most logical denomination of currency: e.g. you wouldn't say something is 2,500 cents, you would say that it is 25 Dollars. Similarly, if someone asks you for $40, you wouldn't give them 40 $1 bills, you would give them 2 $20 Bills. Apply that logic to whatever form of currency and denominations of said currency are in the game.
 </formatting>
 <game_mechanics>
 1. SKILL CHECKS:
-   - If the player attempts an action (fighting, climbing, lying), DO NOT narrate the outcome until you receive the Skill Check result from the Python Script. Instead, output ONLY this tag as a parameter to the Python Script: [[ROLL: SkillName]]. Example: [[ROLL: Strength]]
-   - STOP generating text immediately after this tag. Wait for the Python Script to provide the dice result, and then, using the result from the dice roll, determine the outcome of the result and now you can narrate it.
+   - If the player attempts an action (fighting, climbing, lying) that would warrant a skill check / die roll, output ONLY this tag as a parameter to the Python Script: [[ROLL: SkillName]]. Example: [[ROLL: Strength]]
    - Remember that the Die Rolls are NON-DIEGETIC. E.G., the Player is not actually physically rolling dice in the game world. The die roll is a metaphor for a combination of the Player's skill and raw luck.
    - Skill Checks are not limited to only the Skills that the Player currently has; the Player can learn any Skill they want to attempt to attempt.
-   - If the Player is learning a brand-new Skill, please output this tag: [[SKILL: SkillName | 1]], where SkillName is the name of the Skill, and "1" is the level it will start at (almost always 1).
+   - If the Player is learning a brand-new Skill, please output this tag: [[SKILL: SkillName | 1]], where SkillName is the name of the Skill, and "1" is the level it will start at (always 1).
 2. INVENTORY MANAGEMENT:
    - **Format for adding items (use this generic tag for ALL non-Food and non-Wealth items):** [[ADD: Item Type | Item Name | Description | Amount | Value (MUST be an integer representing the number of smallest base currency units that this is worth)]]
    - Please remember that the Value is per each item; and please have a tangible amount for how much each item is worth. For the overall value of an item, please remember to factor in costs, such as the Container for an item, the Labor involved in making the item, and the Skill level required to make the item (this includes items created by NPCs).
@@ -155,6 +154,8 @@ DEFAULT_RULES = (
 """
     f"- Every time the Player moves to a new location (e.g. when the Location variable changes), please make sure that the appropriate background music is playing for the location by outputting a [[MUSIC: file_name_placeholder.mp3]] tag, replacing filename.mp3 with one of the strings from this list: {VALID_SOUND_FILE_NAMES}. DO NOT ATTEMPT TO PLAY ANY MUSIC OR SOUND EFFECT THAT IS NOT LISTED IN THAT LIST."
 """
+11. MERCHANTS:
+    - If the Player is buying something from a Merchant/Vendor, please output the following tag. [[MERCHANT: "Name of Item | Description of Item | Price of Item", "Name of 2nd item | Description of 2nd item | Price of 2nd item"]]
 </game_mechanics>
 """
 )
