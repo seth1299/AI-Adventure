@@ -240,10 +240,7 @@ class QtAppContext:
 
         # History (keep around for later panels)
         hist = data.get("Chat History") or []
-        if isinstance(hist, list):
-            self.conversation_history = hist
-        else:
-            self.conversation_history = ""
+        self.conversation_history = hist
             
         try:
             for widget in self.notebook_widgets:

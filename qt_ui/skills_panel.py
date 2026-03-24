@@ -113,7 +113,7 @@ class SkillsPanel(QWidget):
             self._set_state("")
             return
 
-        headers = ["Skill Name", "Level (Bonus)", "XP", "Next Level"]
+        headers = ["Skill Name", "Skill Description", "Level (Bonus)", "XP", "Next Level"]
         rows = []
         for s in data:
             try:
@@ -124,6 +124,7 @@ class SkillsPanel(QWidget):
             rows.append(
                 [
                     str(s.get("Name", "Unknown")),
+                    str(s.get("Description", "Unknown")),
                     lvl_str,
                     str(s.get("XP", 0)),
                     str(s.get("Threshold", 0)),
@@ -139,7 +140,7 @@ class SkillsPanel(QWidget):
 
     # ---- AIManager helpers ----
 
-    def force_learn_skill(self, skill_name: str, level: int):
+    def force_learn_skill(self, skill_name: str, skill_description: str, level: int):
         clean_name = (skill_name or "").split("(")[0].strip().title()
         data = self.load_data()
 
@@ -147,6 +148,7 @@ class SkillsPanel(QWidget):
         for item in data:
             if str(item.get("Name", "")).lower() == clean_name.lower():
                 item["Level"] = int(level)
+                item["Description"] = skill_description
                 item["XP"] = 0
                 item["Threshold"] = 5 + (int(level) * 2)
                 found = True
@@ -156,6 +158,7 @@ class SkillsPanel(QWidget):
             data.append(
                 {
                     "Name": clean_name,
+                    "Description": skill_description,
                     "Level": int(level),
                     "XP": 0,
                     "Threshold": 5 + (int(level) * 2),

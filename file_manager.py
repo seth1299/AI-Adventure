@@ -214,7 +214,7 @@ class FileManager:
                 logging.error(f"Error parsing save data: {e}")
         else:
             # New Game
-            app.conversation_history = ""
+            app.conversation_history = []
             app.story_tab.print_text("System: Initialization Sequence Started...", sender="System")
             threading.Thread(target=app.ai_manager.start_creation_wizard, daemon=True).start()
             
