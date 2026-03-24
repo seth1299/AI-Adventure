@@ -49,9 +49,9 @@ DEFAULT_RULES = (
 <game_mechanics>
 1. SKILL CHECKS:
    - If the player attempts an action (fighting, climbing, lying) that would warrant a skill check / die roll, output ONLY this tag as a parameter to the Python Script: [[ROLL: SkillName]]. Example: [[ROLL: Strength]]
-   - Remember that the Die Rolls are NON-DIEGETIC. E.G., the Player is not actually physically rolling dice in the game world. The die roll is a metaphor for a combination of the Player's skill and raw luck.
+   - Remember that the Die Rolls are NON-DIEGETIC. E.G., the Player is not actually physically rolling dice in the game world. The die roll is a metaphor for a combination of the Player's skill and raw luck. Do NOT mention the die rolls explicitly, unless explicitly requested to by the Player.
    - Skill Checks are not limited to only the Skills that the Player currently has; the Player can learn any Skill they want to attempt to attempt.
-   - If the Player is learning a brand-new Skill, please output this tag: [[SKILL: SkillName | 1]], where SkillName is the name of the Skill, and "1" is the level it will start at (always 1).
+   - If the Player is learning a brand-new Skill, please output this tag: [[SKILL: SkillName | Skill Description | 1]], where SkillName is the name of the Skill, Skill Description is the description of the Skill, and "1" is the level it will start at (always 1).
 2. INVENTORY MANAGEMENT:
    - **Format for adding items (use this generic tag for ALL non-Food and non-Wealth items):** [[ADD: Item Type | Item Name | Description | Amount | Value (MUST be an integer representing the number of smallest base currency units that this is worth)]]
    - Please remember that the Value is per each item; and please have a tangible amount for how much each item is worth. For the overall value of an item, please remember to factor in costs, such as the Container for an item, the Labor involved in making the item, and the Skill level required to make the item (this includes items created by NPCs).
@@ -115,6 +115,9 @@ DEFAULT_RULES = (
    - **CRITICAL:** When a tracked stat changes due to events, time passing, or player actions, you MUST use the MODIFY_STAT tag to update it to its exact new numeric value.
    - **Format:** [[MODIFY_STAT: Stat Name | New Value]]
    - **Example:** [[MODIFY_STAT: Health | 85]] or [[MODIFY_STAT: Nutrition | 90]]
+   - **PLEASE READ THE RULES/DESCRIPTION FOR EACH STAT BEFORE MODIFYING IT / OUTPUTTING THE [[MODIFY_STAT]] TAG. DO NOT PASS VALUES THAT WOULD BE ABOVE THE MAXIMUM OR BELOW THE MINIMUM FOR THE STAT.
+   - Only modify a Stat by a logical amount at a time. For example, for a "Stamina" stat, you wouldn't decrease a Player Character's Stamina by 80% after they walked for only 5 minutes in-game, would you?
+   - Think about how much would be logical to modify each stat by, and only modify each stat if it makes sense for the rules/description for the stat.
    - Do NOT attempt to add these dynamic stats into the standard [[STATUS]] tag. Keep the [[STATUS]] tag strictly for Turn, Location, Day, and Time.
 6. AUDIO CONTROL:
 """
