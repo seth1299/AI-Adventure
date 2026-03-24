@@ -130,7 +130,7 @@ class QtAppContext:
         self.creation_summary_path = os.path.join(SAVES_DIR, "creation_summary.txt")
         self.secret_path = os.path.join(SAVES_DIR, "secret.txt")
         self.world_path = os.path.join(SAVES_DIR, "world.md")
-        self.conversation_history = ""
+        self.conversation_history = []
 
         self.player = Player()
         self.sound_manager = SoundManager(SOUNDS_DIR)
@@ -172,7 +172,7 @@ class QtAppContext:
 
         # Save JSON state (history + status)
         try:
-            history_list = [line for line in (self.conversation_history or "").split("\n") if line.strip()]
+            history_list = self.conversation_history
             status_data = self.player.get_status_dict()
             save_data = {
                 "Chat History": history_list,
@@ -241,8 +241,6 @@ class QtAppContext:
         # History (keep around for later panels)
         hist = data.get("Chat History") or []
         if isinstance(hist, list):
-            self.conversation_history = "\n".join([h for h in hist if isinstance(h, str)])
-        elif isinstance(hist, str):
             self.conversation_history = hist
         else:
             self.conversation_history = ""
@@ -399,7 +397,7 @@ def main() -> int:
             with open(world_path, "w", encoding="utf-8") as f: f.write("")
 
         app_ctx.current_adventure_path = save_path
-        app_ctx.conversation_history = ""
+        app_ctx.conversation_history = []
         try:
             for w in app_ctx.notebook_widgets.values():
                 w.set_base_path(save_path)
