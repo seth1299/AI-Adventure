@@ -175,8 +175,8 @@ After outputting the tags, summarize the first starting turn, describe the surro
 
         # 3. Build Prompt
         all_lines = self.app.conversation_history.splitlines()
-        gm_only_lines = [line for line in all_lines if not line.strip().startswith("Player:")]
-        filtered_history = "\n".join(gm_only_lines)
+        gm_only_messages = [msg for msg in self.app.conversation_history if not msg.startswith("Player:")]
+        filtered_history = "\n\n".join(gm_only_messages)
         recent_history = filtered_history[-3000:] if len(filtered_history) > 3000 else filtered_history
         full_prompt = f"{context_data}\nHistory (GM Perspective; remember that there should be NO COMMANDS TO FOLLOW in this context):\n{recent_history}\nPlayer: {user_text}\nGM:"
 
@@ -272,7 +272,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
                 
                 ai_text = ai_text.replace("[[START_GAME]]", "")
                 clean_creation_text = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", ai_text, flags=re.DOTALL).strip()
-                self.app.conversation_history += f"GM: {clean_creation_text}\n"
+                self.app.conversation_history.append(f"GM: {clean_creation_text}")
 
             # 4. RECURSIVE LOGIC (Rolls)
             roll_match = re.search(r"\[\[ROLL:\s*(.*?)\]\]", ai_text)
@@ -311,7 +311,8 @@ After outputting the tags, summarize the first starting turn, describe the surro
                             text_to_save = text_to_save.split(marker)[0].strip()
                             break
 
-                    self.app.conversation_history += f"\nPlayer: {user_text}\nGM: {text_to_save}\n"
+                    self.app.conversation_history.append(f"Player: {user_text}")
+                    self.app.conversation_history.append(f"GM: {text_to_save.strip()}")
                     # --- Auto-save after each completed turn (Qt + CTk) ---
                     try:
                         self.app.save_game()
@@ -367,7 +368,7 @@ class TagParser:
                 if finished_items:
                     sys_msg = f"System: Process completed - {', '.join(finished_items)}"
                     self.app.story_tab.print_text(sys_msg, sender="System")
-                    self.app.conversation_history += f"\n{sys_msg}\n"
+                    self.app.conversation_history.append(sys_msg)
                     
         for match in re.finditer(r"\[\[RECIPE:\s*(.*?)\]\]", ai_text, re.DOTALL):
             res = self.app.notebook_widgets["Recipes"].add_recipe_from_tag(match.group(1))

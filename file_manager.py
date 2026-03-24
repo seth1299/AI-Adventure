@@ -147,7 +147,7 @@ class FileManager:
             return
 
         # 2. Gather History
-        history_list = [line for line in app.conversation_history.split("\n") if line.strip()]
+        history_list = app.conversation_history
         
         # 3. Gather Player & Game Status
         status_data = app.player.get_status_dict()
@@ -208,7 +208,7 @@ class FileManager:
 
                 # Restore History
                 hist = data.get("Chat History", [])
-                app.conversation_history = "\n".join(hist) if isinstance(hist, list) else hist
+                app.conversation_history = hist
                 app.generate_local_recap()
             except Exception as e:
                 logging.error(f"Error parsing save data: {e}")

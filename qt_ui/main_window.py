@@ -220,7 +220,7 @@ class MainWindow(QMainWindow):
 
         # New game flow
         self.app.current_adventure_path = save_path
-        self.app.conversation_history = ""
+        self.app.conversation_history = []
         try:
             for w in self.app.notebook_widgets.values():
                 w.set_base_path(save_path)

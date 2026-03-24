@@ -269,7 +269,7 @@ class QtAppContext:
 
             last_gm: str | None = ""
             if isinstance(history, list):
-                for line in reversed(history):
+                for line in history:
                     if isinstance(line, str) and line.strip().startswith("GM:") and len(line.strip()) > 8:
                         last_gm += line.strip()[len("GM:"):].strip() + "\n"
                     elif isinstance(line, str) and line.strip().startswith("Player:") == False and len(line.strip()) > 8:

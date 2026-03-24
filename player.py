@@ -4,16 +4,11 @@ from file_manager import FileManager
 class Player:
     def __init__(self):
         self.name = "Unknown"
-        self.nutrition = 100
-        self.stamina = 100
         self.karmic_streak = 0
         self.save_path = None
-        self.tracked_stats = [
-            {"name": "Nutrition", "value": 100, "enabled": True, "desc": "Represents how well-fed the character is. Max 100."},
-            {"name": "Stamina", "value": 100, "enabled": True, "desc": "Represents physical energy. Depletes from actions. Max 100."}
-        ]
+        self.tracked_stats = []
         self.base_currency = 0
-        self.world_currencies = [{"name": "Copper Piece", "value": 1}, {"name": "Silver Piece", "value": 10}]
+        self.world_currencies = []
         
         # World State (often tied to the player in single-player RPGs)
         self.location = "Unknown"
@@ -23,8 +18,6 @@ class Player:
 
     def load_from_dict(self, data):
         """Loads state from the Status dictionary in savegame.json."""
-        self.nutrition = int(data.get("nutrition", 100))
-        self.stamina = int(data.get("stamina", 100))
         self.location = data.get("location", "Unknown")
         self.turn = int(data.get("turn", 1))
         self.day = data.get("day", "1")
@@ -33,6 +26,9 @@ class Player:
         
         if "world_currencies" in data:
             self.world_currencies = data["world_currencies"]
+            
+        if "tracked_stats" in data:
+            self.tracked_stats = data["tracked_stats"]
 
     def get_status_dict(self):
         """Returns the dictionary format required for the UI and saving."""
@@ -48,15 +44,20 @@ class Player:
 
     def update_world_state(self, turn, location, day, time):
         """Updates the tracking variables."""
-        if turn is not None: 
+        if turn is not None and str(turn).strip().upper() != "AUTO": 
             try:
                 self.turn = int(turn)
             except:
                 logging.error(f"Error converting turn to integer: {turn}")
                 self.turn = -1
-        if location: self.location = location
-        if day: self.day = day
-        if time: self.time = time
+        if location and str(location).strip().upper() != "AUTO": 
+            self.location = location
+            
+        if day and str(day).strip().upper() != "AUTO": 
+            self.day = day
+            
+        if time and str(time).strip().upper() != "AUTO": 
+            self.time = time
 
     def modify_stat(self, stat_name, raw_value):
         """
@@ -81,6 +82,42 @@ class Player:
             return
 
         target_stat["value"] = new_val
+        
+    def _pluralize_currency(self, name: str, count: int) -> str:
+        """A simple heuristic to pluralize currency names if count is not exactly 1."""
+        if count == 1: 
+            return name
+        
+        clean_name = name.strip()
+        if not clean_name: 
+            return name
+        
+        # Extract the last word to check (e.g., "Gold Piece" -> "Piece")
+        parts = clean_name.split()
+        last_word = parts[-1]
+        last_word_lower = last_word.lower()
+        
+        # 1. Common irregulars or uncountables that shouldn't change
+        no_change = ["fish", "moose", "sheep", "deer", "gold", "silver", "copper", "iron", "dust", "cash", "money", "gear", "scrap"]
+        if last_word_lower in no_change:
+            return clean_name
+            
+        # 2. If it already ends in 's', assume it's already pluralized (e.g., "Credits")
+        if last_word_lower.endswith("s"):
+            return clean_name
+            
+        # 3. Handle consonant + "y" ending (e.g., "Penny" -> "Pennies")
+        if last_word_lower.endswith("y") and len(last_word_lower) > 1 and last_word_lower[-2] not in "aeiou":
+            # Replace the 'y' with 'ies'
+            parts[-1] = last_word[:-1] + (last_word[-1].replace('y', 'ies').replace('Y', 'IES'))
+            return " ".join(parts)
+            
+        # 4. Handle words ending in 'ch', 'sh', 'x', 'z' (e.g., "Stash" -> "Stashes")
+        if last_word_lower.endswith(("ch", "sh", "x", "z")):
+            return clean_name + "es"
+            
+        # 5. Default fallback: just add 's' (e.g., "Piece" -> "Pieces")
+        return clean_name + "s"
             
     def get_formatted_currency(self, amount: int | None  = None) -> str:
         """Converts an integer (base currency) into a readable string like '3 Gold, 7 Silver'."""
@@ -103,11 +140,14 @@ class Player:
             if remaining >= val:
                 count = remaining // val
                 remaining %= val
-                parts.append(f"{count} {cur.get('name', 'Unit')}")
+                currency_name = cur.get('name', 'Unit')
+                plural_name = self._pluralize_currency(currency_name, count)
+                parts.append(f"{count} {plural_name}")
 
         # NEW: Fallback! If the AI did weird math and there is remainder left over, don't delete it!
         if remaining > 0:
-            parts.append(f"{remaining} {lowest_coin_name}")
+            plural_lowest = self._pluralize_currency(lowest_coin_name, remaining)
+            parts.append(f"{remaining} {plural_lowest}")
 
         result_str = ", ".join(parts)
         return f"-{result_str}" if is_negative else result_str
