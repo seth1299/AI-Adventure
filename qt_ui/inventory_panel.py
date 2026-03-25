@@ -213,14 +213,11 @@ class InventoryPanel(QWidget):
                         meals = meta.get("meals")
                         spoil_day = str(meta.get("spoil_day", ""))
                         spoil_time = str(meta.get("spoil_time", ""))
-                        nut = meta.get("nutrition_restored")
 
                         spoil_prefix = "" if "day" in spoil_day.lower() else "Day "
                         extra = f" [Meals: {meals}"
                         if spoil_day and spoil_time:
                             extra += f", Spoils: {spoil_prefix}{spoil_day} at {spoil_time}"
-                        if nut is not None:
-                            extra += f", Nutrition Value: {nut}"
                         extra += "]"
                         desc += extra
                 elif isinstance(item, list):
@@ -369,7 +366,7 @@ class InventoryPanel(QWidget):
                 data[category].append(new_item)
 
             self.save_data(data)
-            return f"(Added {amount}x {name} to inventory as \"{category}\"!)."
+            return
         except Exception:
             logging.exception("InventoryPanel.autonomous_add failed")
             return f"Sorry, I had trouble adding '{raw_args}' to your inventory."
@@ -429,7 +426,7 @@ class InventoryPanel(QWidget):
             return f"Sorry, I had trouble finding {raw_args}."
 
     def add_food(self, raw_args: str):
-        # Format: Type | Name | Desc | Amount | Value | Meals | SpoilDay | SpoilTime | Nutrition_Restored
+        # Format: Type | Name | Desc | Amount | Value | Meals | SpoilDay | SpoilTime
         try:
             parts = [p.strip() for p in (raw_args or "").split("|")]
             if len(parts) < 6:
@@ -443,14 +440,12 @@ class InventoryPanel(QWidget):
             meals = self._safe_int(parts[5] if len(parts) > 4 else 1)
             spoil_day = parts[6] if len(parts) > 6 else "Day 99"
             spoil_time = parts[7] if len(parts) > 7 else "11:59 PM"
-            nutrition_restored = parts[8] if len(parts) > 8 else 15
 
             meta = {
                 "type": "food",
                 "meals": meals,
                 "spoil_day": spoil_day,
-                "spoil_time": spoil_time,
-                "nutrition_restored": nutrition_restored,
+                "spoil_time": spoil_time
             }
             new_item = {"name": name, "desc": desc, "amount": amount, "value": value, "meta": meta}
 
@@ -460,7 +455,7 @@ class InventoryPanel(QWidget):
             data[category].append(new_item)
 
             self.save_data(data)
-            return f"(Added {name} [Meals: {meals}, Spoils: {spoil_day} at {spoil_time}, Nutrition Restored: {nutrition_restored}])."
+            return
         except Exception:
             logging.exception("InventoryPanel.add_food failed")
             return f"System Error adding food: {raw_args}"
@@ -484,7 +479,6 @@ class InventoryPanel(QWidget):
                         return self.autonomous_remove(f"{name}|1")
 
                     spoil_ticks = self._get_ticks(meta.get("spoil_day", "Day 99"), meta.get("spoil_time", "12:00 AM"))
-                    nutrition_restored = meta.get("nutrition_restored", 15)
 
                     if current_ticks >= spoil_ticks:
                         items.pop(i)
@@ -504,14 +498,6 @@ class InventoryPanel(QWidget):
                         msg = f"(Ate the last of {name}. It is finished.)"
                     else:
                         msg = f"(Ate a meal of {name}. {remaining} meals remaining.)"
-
-                    # Apply nutrition stat change via existing tag logic
-                    try:
-                        n = int(nutrition_restored)
-                    except Exception:
-                        n = 0
-                    sign = "+" if n > 0 else ""
-                    msg += f"[[MODIFY_STAT: NUTRITION | {sign}{n}]]"
 
                     self.save_data(data)
                     return msg

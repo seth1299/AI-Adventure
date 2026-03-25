@@ -67,14 +67,14 @@ DEFAULT_RULES = (
    **Modifying Items:** If an item changes state (e.g. breaks, gets enchanted, or used up partially), use [[MODIFY_ITEM]]. You can also use [[MODIFY_ITEM]] if only the amount of an item changes, for instance, if a Player has 4 ounces of salt and uses up 1 ounce, you can just use [[MODIFY_ITEM]] to change the amount of the player's current salt from 4 oz to 3 oz, instead of deleting and adding an entire item two separate times.
    - **Format:** [[MODIFY_ITEM: TargetName | NewName | NewDesc | NewAmount | NewValue]]
    - **Rule:** Use "SAME" or "SKIP" for fields you do NOT want to change.
-   - **Example (Breaking an Axe):** [[MODIFY_ITEM: Iron Axe | Broken Iron Axe | The handle is snapped in two. | SAME | 0 Bits]]
-   - **Example (Enchanting a Sword):** [[MODIFY_ITEM: Iron Sword | Glowing Iron Sword | Hum with magical energy. | SAME | 1 Castle]]
+   - **Example (Breaking an Axe):** [[MODIFY_ITEM: Iron Axe | Broken Iron Axe | The handle is snapped in two. | SAME | 0 ]]
+   - **Example (Enchanting a Sword):** [[MODIFY_ITEM: Iron Sword | Glowing Iron Sword | Hum with magical energy. | SAME | 1 ]]
    **FOOD & SPOILAGE:**
    - Output the tag [[ADD_FOOD]] to track food, meals, and spoilage.
-   - **Format:** [[ADD_FOOD: Type | Name | Desc | Amount | Value (MUST be an integer representing the number of smallest base currency units that this is worth) | Meals | Spoil_Day | Spoil_Time | Nutrition_Restored]]
-   - **Example:** [[ADD_FOOD: Food | Roast Chicken | Seasoned with herbs | 1 | 10 | 4 | Day 3 | 9:00 PM | 15]]
-     (This creates 1 Chicken Object that can be eaten for 4 Meals, and will restore 15 Nutrition when consumed).
-   - **Eating:** When the player eats, output the tag [[CONSUME: Name]].
+   - **Format:** [[ADD_FOOD: Type | Name | Desc | Amount | Value (MUST be an integer representing the number of smallest base currency units that this is worth) | Meals | Spoil_Day | Spoil_Time]]
+   - **Example:** [[ADD_FOOD: Food | Roast Chicken | Seasoned with herbs | 1 | 10 | 4 | Day 3 | 9:00 PM]]
+     (This creates 1 Chicken Object that can be eaten for 4 Meals.).
+   - **Eating:** When the player eatsa food item from their inventory, output the tag [[CONSUME: Name]].
      - The System will automatically check the Date. If spoiled, it will tell you.
      - The System will automatically decrement the "Meals" counter.
      - Please remember to send [[CONSUME: name]] for every piece of food that the Player eats, it is very important.
@@ -119,6 +119,7 @@ DEFAULT_RULES = (
    - Only modify a Stat by a logical amount at a time. For example, for a "Stamina" stat, you wouldn't decrease a Player Character's Stamina by 80% after they walked for only 5 minutes in-game, would you?
    - Think about how much would be logical to modify each stat by, and only modify each stat if it makes sense for the rules/description for the stat.
    - Do NOT attempt to add these dynamic stats into the standard [[STATUS]] tag. Keep the [[STATUS]] tag strictly for Turn, Location, Day, and Time.
+   - If for some reason, you feel that it is necessary to create an entirely new stat, then please output the tag "[[DEFINE_STAT: Name | Value | Description]]"; but please only use that if you are very, very certain that an entirely new stat is warranted. Make sure that the Description is as precise as possible, including the minimum value for it, the maximum value for it, and what happens when it is either very low or very high, and what happens if it reaches minimum/maximum.
 6. AUDIO CONTROL:
 """
    f"- You have control over the game's audio. Valid sound file names are listed here {VALID_SOUND_FILE_NAMES}."
@@ -159,6 +160,8 @@ DEFAULT_RULES = (
 """
 11. MERCHANTS:
     - If the Player is buying something from a Merchant/Vendor, please output the following tag. [[MERCHANT: "Name of Item | Description of Item | Price of Item", "Name of 2nd item | Description of 2nd item | Price of 2nd item"]]
+12. NEW CURRENCIES:
+    - If the Player discovers a brand-new type of currency, you can output the following tag: "[[DEFINE_CURRENCY: Name | Value]]", with the "value" meaning how many Base Units that currency is worth.
 </game_mechanics>
 """
 )

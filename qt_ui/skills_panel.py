@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import textwrap
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
@@ -121,10 +122,12 @@ class SkillsPanel(QWidget):
             except Exception:
                 lvl = 0
             lvl_str = f"+{lvl}" if lvl >= 0 else str(lvl)
+            raw_desc = str(s.get("Desc", ""))
+            desc_wrapped = "\n".join(textwrap.wrap(raw_desc, width=35))
             rows.append(
                 [
                     str(s.get("Name", "Unknown")),
-                    str(s.get("Description", "Unknown")),
+                    desc_wrapped,
                     lvl_str,
                     str(s.get("XP", 0)),
                     str(s.get("Threshold", 0)),
@@ -148,7 +151,7 @@ class SkillsPanel(QWidget):
         for item in data:
             if str(item.get("Name", "")).lower() == clean_name.lower():
                 item["Level"] = int(level)
-                item["Description"] = skill_description
+                if skill_description: item["Description"] = skill_description
                 item["XP"] = 0
                 item["Threshold"] = 5 + (int(level) * 2)
                 found = True
