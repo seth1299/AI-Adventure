@@ -56,8 +56,10 @@ class AIManager:
         chosen_vibe = random.choice(random_vibes)
         
         # Override the empty fields with our forced random concepts
-        ai_genre = data['world']['genre'] or f"Not specified. (AI MUST use this exact genre: {chosen_genre}, Tone: {chosen_vibe})"
-        ai_setting = data['world']['setting'] or f"Not specified. (AI MUST invent a completely unique world that heavily leans into the assigned {chosen_genre} genre.)"
+        ai_genre = data['world']['genre'] or f"The genre of the game will be a {chosen_genre}, with a {chosen_vibe} sort of vibe to it."
+        ai_setting = data['world']['setting'] or f"The main setting of the world must make sense for the {chosen_genre} genre."
+        
+        logging.info(f"Chosen genre: {chosen_genre}\nChosen vibe: {chosen_vibe}\nAI Genre: {ai_genre}\nAI Setting {ai_setting}")
         
         # Format skills, handling blank descriptions
         skills_text = ""
@@ -68,7 +70,7 @@ class AIManager:
             
         # If the player left EVERY skill blank:
         if not skills_text:
-            skills_text = "(No skills specified. AI, please invent 16 starting skills fitting the world following this exact level distribution: one Lvl 5, two Lvl 4, three Lvl 3, four Lvl 2, six Lvl 1.)"
+            skills_text = "(Please invent 16 starting skills fitting the world following this exact level distribution: one Lvl 5, two Lvl 4, three Lvl 3, four Lvl 2, six Lvl 1.)"
             
         if data['currencies']:
             currencies_text = ", ".join([f"{c['name']} (Worth {c['value']} base units)" for c in data['currencies']])
@@ -80,10 +82,10 @@ class AIManager:
             if st['enabled']:
                 stats_text += f"- {st['name']}: Starts at {st['value']} (Rules: {st['desc']})\n"
         if not stats_text: 
-            stats_text = "Not specified (AI, you MUST invent 2 to 3 tracked survival/combat stats fitting the genre, such as Health, Sanity, Mana, etc. Output [[DEFINE_STAT: Name | Starting Value | Description]] for each.)"
+            stats_text = f"Not specified (AI, you MUST invent 2 to 3 tracked stats fitting the {ai_genre} genre, such as Health, Sanity, Mana, etc. Output [[DEFINE_STAT: Name | Starting Value | Description]] for each stat that you create.)"
         
         # Format focus
-        focus_text = ', '.join(data['focus']) if data['focus'] else "Not specified (AI, pick a balanced focus)"
+        focus_text = ', '.join(data['focus']) if data['focus'] else "AI, please pick a balanced focus for the game (e.g. any combination of Combat, Exploration, Trading/Economy, Social/Roleplay)."
 
         # The prompt is now safely un-indented!
         prompt = f"""
@@ -113,8 +115,8 @@ Background: {data['character']['background'] or 'Not specified'}
 Starting Skills:
 {skills_text}
 
-Starting Location: {data['starting_location'] or 'Not specified (Invent a vivid, unusual starting location)'}
-Final Comments/Rules: {data['final_comments'] or 'None'}
+Starting Location: {data['starting_location'] or f"Start the Player off in a Location that would make sense for the {ai_genre}."}
+Final Comments/Rules: {data['final_comments'] or ''}
 
 INSTRUCTIONS:
 Output the following SPECIAL TAGS to set up the game files based on this data.
@@ -235,10 +237,11 @@ After outputting the tags, summarize the first starting turn, describe the surro
                     content = char_match.group(1).strip()
                     self.app.notebook_widgets["Character"].set_text(f"Character Bio\n\n{content}")
 
-                for match in re.finditer(r"\[\[SKILL:\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text):
+                for match in re.finditer(r"\[\[SKILL:\s*(.*?)\s*\|\s*(\d+)(?:\s*\|\s*(.*?))?\]\]", ai_text):
                     s_name = match.group(1).strip()
-                    s_lvl = int(match.group(2))
-                    self.app.notebook_widgets["Skills"].force_learn_skill(s_name, s_lvl)
+                    s_desc = match.group(2).strip() if match.group(2) else "No description provided."
+                    s_lvl = int(match.group(3)) if match.group(3) else 1                    
+                    self.app.notebook_widgets["Skills"].force_learn_skill(s_name, s_desc, s_lvl)
 
                 # Parse Invented Currencies BEFORE standard tags run!
                 invented_currencies = []
@@ -254,7 +257,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
             tag_parser.process_standard_tags(ai_text, is_startup=is_startup)    
 
             # 3. FINALIZE STARTUP & SAVE
-            if is_startup and "[[START_GAME]]" in ai_text:
+            if is_startup:
                 #self.app.story_tab.print_text("\n[System: Creation Complete. Saving Data...]\n", sender="System")
                 
                 if os.path.exists(self.app.creation_summary_path):
@@ -466,6 +469,15 @@ class TagParser:
             except Exception as e:
                 logging.error(f"Error: Couldn't update world: {e}")
                 
+        invented_currencies = []
+        for match in re.finditer(r"\[\[DEFINE_CURRENCY:\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text, re.DOTALL):
+            c_name = match.group(1).strip()
+            c_val = int(match.group(2))
+            invented_currencies.append({"name": c_name, "value": c_val})
+                
+        if invented_currencies:
+            self.app.player.world_currencies.extend(invented_currencies)
+                
         for match in re.finditer(r"\[\[CHANGE_CURRENCY:\s*(-?\d+)\]\]", ai_text, re.DOTALL):
             amount_str = match.group(1).strip()
             try:
@@ -478,6 +490,16 @@ class TagParser:
 
             except ValueError:
                 self.app.story_tab.print_text(f"System Error: Invalid currency amount '{amount_str}'", sender="System")
+                
+        invented_stats = []
+        # Allow for multi-line and negative numbers just in case
+        for match in re.finditer(r"\[\[DEFINE_STAT:\s*(.*?)\s*\|\s*(-?\d+)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL):
+            s_name = match.group(1).strip()
+            s_val = int(match.group(2))
+            s_desc = match.group(3).strip()
+            invented_stats.append({"name": s_name, "value": s_val, "enabled": True, "desc": s_desc})
+        if invented_stats:
+            self.app.player.tracked_stats.extend(invented_stats)
                 
     def process_inline_tags(self, ai_text):
         """Processes tags that need to be replaced with actual text before displaying."""
