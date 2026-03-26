@@ -78,8 +78,8 @@ class AIManager:
         
         skills_text = ""
         for s in data['skills']:
-            name = s['name'] if len(name) > 1 else f'AI, please invent a name for this skill; it must be relevant to a {ai_genre} type of game with a focus on {focus_text}.'
-            desc = s['desc'] if len(desc) > 1 else f'AI, please invent a description for this {name} skill.'
+            name = s['name'] if len(s['name']) > 1 else f'AI, please invent a name for this skill; it must be relevant to a {ai_genre} type of game with a focus on {focus_text}.'
+            desc = s['desc'] if len(s['desc']) > 1 else f'AI, please invent a description for this {name} skill.'
             skills_text += f"- Level {s['level']}: {name} ({desc})\n"
             
         # If the player left EVERY skill blank:
@@ -110,7 +110,7 @@ DO NOT use common AI fantasy names (e.g., Elara, Kael, Lyra, Aric, Seraphina, Or
 World Setting: {ai_setting}
 Genre/Tone: {ai_genre}
 Tech Level: {ai_tech}
-Species/Races: {data['world']['species'] or f'No specific species were specified by the Player. Feel free to create however many species you think would make sense for a {ai_genre} type of game.'}
+Species/Races: {data['world']['species'] if not (None or "") else f'No specific species were specified by the Player. Feel free to create however many species you think would make sense for a {ai_genre} type of game.'}
 Game Focus: {focus_text}
 
 World Economy (Currencies):

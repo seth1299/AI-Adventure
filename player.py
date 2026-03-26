@@ -69,7 +69,15 @@ class Player:
         # Find the stat, or dynamically create it if the AI invents one!
         target_stat = next((s for s in self.tracked_stats if s["name"].lower() == stat.lower()), None)
         if not target_stat:
-            target_stat = {"name": stat.title(), "value": 100, "enabled": True, "desc": "A dynamically tracked status."}
+            # Added min and max defaults for dynamically created stats
+            target_stat = {
+                "name": stat.title(), 
+                "value": 100, 
+                "min": 0, 
+                "max": 100, 
+                "enabled": True, 
+                "desc": "A dynamically tracked status."
+            }
             self.tracked_stats.append(target_stat)
 
         new_val = target_stat["value"]
@@ -80,6 +88,14 @@ class Player:
                 new_val += int(raw)
         except Exception:
             return
+        
+        stat_min = target_stat.get("min", 0)
+        stat_max = target_stat.get("max", 100)
+        
+        if new_val < stat_min:
+            new_val = stat_min
+        elif new_val > stat_max:
+            new_val = stat_max
 
         target_stat["value"] = new_val
         

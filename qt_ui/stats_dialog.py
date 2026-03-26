@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt
 
 class StatRow(QFrame):
     # --- NEW: Added desc parameter ---
-    def __init__(self, parent=None, name="", value=100, enabled=True, desc=""):
+    def __init__(self, parent=None, name="", value=100, enabled=True, desc="", min_val=0, max_val=100):
         super().__init__(parent)
         
         # Make it look like a distinct card
@@ -28,9 +28,19 @@ class StatRow(QFrame):
         self.name_input.setPlaceholderText("e.g. Health, Mana, Sanity")
         self.name_input.setText(name)
         
+        self.min_input = QSpinBox()
+        self.min_input.setRange(-10000, 10000)
+        self.min_input.setValue(min_val)
+        
+        self.max_input = QSpinBox()
+        self.max_input.setRange(-10000, 10000)
+        self.max_input.setValue(max_val)
+        
         self.value_input = QSpinBox()
         self.value_input.setRange(-10000, 10000) 
         self.value_input.setValue(value)
+        self.value_input.setReadOnly(True)
+        self.value_input.setToolTip("Tracked by AI. Cannot be changed manually.")
         
         self.btn_remove = QPushButton("X")
         self.btn_remove.setFixedWidth(30)
@@ -38,14 +48,17 @@ class StatRow(QFrame):
         self.top_row.addWidget(self.cb_enabled)
         self.top_row.addWidget(QLabel("Name:"))
         self.top_row.addWidget(self.name_input, stretch=2)
+        self.top_row.addWidget(QLabel("Min:"))
+        self.top_row.addWidget(self.min_input)
+        self.top_row.addWidget(QLabel("Max:"))
+        self.top_row.addWidget(self.max_input)
         self.top_row.addWidget(QLabel("Value:"))
-        self.top_row.addWidget(self.value_input, stretch=1)
+        self.top_row.addWidget(self.value_input)
         self.top_row.addWidget(self.btn_remove)
-
         # --- Bottom Row (AI Description) ---
         self.bottom_row = QHBoxLayout()
         self.desc_input = QLineEdit()
-        self.desc_input.setPlaceholderText("AI Rules (e.g. 'Max 100. Decreases when taking damage.')")
+        self.desc_input.setPlaceholderText("AI Rules (e.g. 'Max 100. Decreases when taking damage.') Be as specific as you can be. The more specific you are, the better the A.I. will be at tracking the stat.")
         self.desc_input.setText(desc)
         
         self.bottom_row.addWidget(QLabel("AI Rules:"))
@@ -59,8 +72,10 @@ class StatRow(QFrame):
         return {
             "name": self.name_input.text().strip(),
             "value": self.value_input.value(),
+            "min": self.min_input.value(), # Grab the minimum value
+            "max": self.max_input.value(), # Grab the maximum value
             "enabled": self.cb_enabled.isChecked(),
-            "desc": self.desc_input.text().strip() # <--- NEW: Grab the description
+            "desc": self.desc_input.text().strip()
         }
 class StatsManagerDialog(QDialog):
     def __init__(self, parent=None, existing_stats=None):
@@ -100,14 +115,17 @@ class StatsManagerDialog(QDialog):
                     stat.get("name", ""), 
                     stat.get("value", 100), 
                     stat.get("enabled", True),
-                    stat.get("desc", "")
+                    stat.get("desc", ""),
+                    # Load min and max from existing data, falling back to 0 and 100
+                    stat.get("min", 0),
+                    stat.get("max", 100)
                 )
         else:
-            self.add_stat_row("Nutrition", 100, True, "Represents how well-fed the character is. Max 100.")
-            self.add_stat_row("Stamina", 100, True, "Represents physical energy. Depletes from actions. Max 100.")
+            self.add_stat_row("Nutrition", 100, True, "Represents how well-fed the character is. Max 100.", 0, 100)
+            self.add_stat_row("Stamina", 100, True, "Represents physical energy. Depletes from actions. Max 100.", 0, 100)
 
-    def add_stat_row(self, name="", value=100, enabled=True,  desc=""):
-        row = StatRow(name=name, value=value, enabled=enabled, desc=desc)
+    def add_stat_row(self, name="", value=100, enabled=True, desc="", min_val=0, max_val=100):
+        row = StatRow(name=name, value=value, enabled=enabled, desc=desc, min_val=min_val, max_val=max_val)
         self.rows_layout.addWidget(row)
         self.rows.append(row)
         row.btn_remove.clicked.connect(lambda: self.remove_stat_row(row))
