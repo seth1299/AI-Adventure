@@ -185,10 +185,10 @@ class StoryPanel(QWidget):
                 self.txt_input.setPlaceholderText(status_text)
 
     def print_text(self, text: str, *, sender: str = "GM") -> None:
-        if not text:
+        if not text or text == "":
             return
-        prefix = f"{sender}: " if sender else ""
-        self.append_text(f"{prefix}{text}")
+        #prefix = f"{sender}: " if sender else ""
+        self.append_text(f"{text}")
 
     def _emit_send(self) -> None:
         text = (self.txt_input.text() or "").strip()

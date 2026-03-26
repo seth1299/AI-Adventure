@@ -36,14 +36,15 @@ class AIManager:
             "Cyberpunk", "Steampunk", "Modern Urban", "Futuristic Sci-Fi", 
             "Ancient Historical", "Classic Low Fantasy", "Classic High Fantasy", 
             "Eldritch Horror", "Post-Apocalyptic", "Biopunk", "Space Opera",
-            "Clockwork Fantasy", "Dieselpunk", "Stone Age", "Mythological"
+            "Clockwork Fantasy", "Dieselpunk", "Stone Age", "Mythological", "Iron Age",
+            "Bronze Age", "Western"
         ]
         
         subtypes = [
             "Scavenger", "Survival", "Ice Age", "Noir", "Wasteland", 
             "Hollow Earth", "Floating Island", "Flesh-tech", "Feudal",
             "Slice-of-Life", "Underground", "Oceanic/Nautical", "Nomadic",
-            "Dungeon Crawler", "Political Intrigue"
+            "Dungeon Crawler", "Political Intrigue", "Vintage", "Adventure", "Anti-Hero"
         ]
         
         random_vibes = [
@@ -51,42 +52,55 @@ class AIManager:
             "melancholic", "hyper-capitalist", "mystical", "surreal", "gritty"
         ]
         
+        tech_levels = [
+            "Stone Age / Primitive", "Bronze Age / Ancient", "Iron Age / Classical", 
+            "Medieval / Feudal", "Renaissance / Gunpowder", "Industrial Revolution", 
+            "Wild West / Frontier", "Early 20th Century / World War Era", "Modern Information Age", 
+            "Near-Future", "Far-Future Sci-Fi", "Space-Faring / Intergalactic",
+            "Purely Magical (No conventional tech)"
+        ]
+        
         # Combine a Main Type and a Subtype! (e.g., "Eldritch Horror Ice Age")
         chosen_genre = f"{random.choice(main_types)} {random.choice(subtypes)}"
         chosen_vibe = random.choice(random_vibes)
+        chosen_tech = random.choice(tech_levels)
         
         # Override the empty fields with our forced random concepts
         ai_genre = data['world']['genre'] or f"The genre of the game will be a {chosen_genre}, with a {chosen_vibe} sort of vibe to it."
         ai_setting = data['world']['setting'] or f"The main setting of the world must make sense for the {chosen_genre} genre."
+        ai_tech = data['world']['tech'] or f"The technology level is strictly: {chosen_tech}."
         
-        logging.info(f"Chosen genre: {chosen_genre}\nChosen vibe: {chosen_vibe}\nAI Genre: {ai_genre}\nAI Setting {ai_setting}")
+        logging.info(f"Chosen genre: {chosen_genre}\nChosen vibe: {chosen_vibe}\nAI Genre: {ai_genre}\nAI Setting {ai_setting}\nAI Tech: {ai_tech}")
         
         # Format skills, handling blank descriptions
+        # Format focus
+        focus_text = ', '.join(data['focus']) if data['focus'] else "AI, please pick a balanced focus for the game (e.g. any combination of Combat, Exploration, Trading/Economy, Social/Roleplay)."
+        
         skills_text = ""
         for s in data['skills']:
-            name = s['name'] if len(name) > 1 else 'AI, please invent a name for this skill'
-            desc = s['desc'] if len(desc) > 1 else 'AI, please invent a description for this skill'
+            name = s['name'] if len(name) > 1 else f'AI, please invent a name for this skill; it must be relevant to a {ai_genre} type of game with a focus on {focus_text}.'
+            desc = s['desc'] if len(desc) > 1 else f'AI, please invent a description for this {name} skill.'
             skills_text += f"- Level {s['level']}: {name} ({desc})\n"
             
         # If the player left EVERY skill blank:
         if not skills_text:
-            skills_text = "(Please invent 16 starting skills fitting the world following this exact level distribution: one Lvl 5, two Lvl 4, three Lvl 3, four Lvl 2, six Lvl 1.)"
+            skills_text = f"(Please invent 16 starting skills fitting the world following this exact level distribution: one Lvl 5, two Lvl 4, three Lvl 3, four Lvl 2, six Lvl 1. The Skills must be relevant to a {ai_genre} type of game with a focus on {focus_text}.)"
             
         if data['currencies']:
             currencies_text = ", ".join([f"{c['name']} (Worth {c['value']} base units)" for c in data['currencies']])
         else:
-            currencies_text = "Not specified (AI, you MUST invent a localized currency system. Output [[DEFINE_CURRENCY: Name | Value]] for each denomination, starting with a base unit of 1.)"
+            currencies_text = f"No specific currencies were created. (AI, you MUST invent a localized currency system that would make sense for a {ai_genre} type of game. Output [[DEFINE_CURRENCY: Name | Value]] for each denomination of currency, starting with a base unit of 1.)"
         
         stats_text = ""
         for st in data['stats']:
             if st['enabled']:
                 stats_text += f"- {st['name']}: Starts at {st['value']} (Rules: {st['desc']})\n"
         if not stats_text: 
-            stats_text = f"Not specified (AI, you MUST invent 2 to 3 tracked stats fitting the {ai_genre} genre, such as Health, Sanity, Mana, etc. Output [[DEFINE_STAT: Name | Starting Value | Description]] for each stat that you create.)"
+            stats_text = f"No specific Stats were specified (AI, you MUST invent 2 to 3 tracked stats fitting the {ai_genre} genre, such as Health, Sanity, Mana, etc. Output [[DEFINE_STAT: Name | Starting Value | Description]] for each stat that you create.)"
         
-        # Format focus
-        focus_text = ', '.join(data['focus']) if data['focus'] else "AI, please pick a balanced focus for the game (e.g. any combination of Combat, Exploration, Trading/Economy, Social/Roleplay)."
-
+        
+        random_gender = random.choice(["Male", "Female", "Non-Binary"])
+        random_pronouns = "He/Him" if random_gender == "Male" else "She/Her" if random_gender == "Female" else "They/Them"
         # The prompt is now safely un-indented!
         prompt = f"""
 System: Initialize a new RPG adventure using the following parameters.
@@ -95,8 +109,8 @@ DO NOT use common AI fantasy names (e.g., Elara, Kael, Lyra, Aric, Seraphina, Or
 
 World Setting: {ai_setting}
 Genre/Tone: {ai_genre}
-Tech Level: {data['world']['tech'] or 'Not specified'}
-Species/Races: {data['world']['species'] or 'Not specified (Invent at least 3 bizarre, unique original species)'}
+Tech Level: {ai_tech}
+Species/Races: {data['world']['species'] or f'No specific species were specified by the Player. Feel free to create however many species you think would make sense for a {ai_genre} type of game.'}
 Game Focus: {focus_text}
 
 World Economy (Currencies):
@@ -106,11 +120,11 @@ Tracked Player Stats:
 {stats_text}
 
 Character Bio:
-Name: {data['character']['name'] or 'Not specified (Invent a unique name)'}
-Age: {data['character']['age'] or 'Not specified'}
-Gender/Pronouns: {data['character']['gender'] or 'Not specified'} / {data['character']['pronouns'] or 'Not specified'}
-Orientation: {data['character']['orientation'] or 'Not specified'}
-Background: {data['character']['background'] or 'Not specified'}
+Name: {data['character']['name'] or f'The Player Character\'s name was not specified, please create one for them (The Player Character is a {data['character']['gender'] or random_gender}). Use your imagination; please do not rely on just your training data.'}
+Age: {data['character']['age'] or 'The Player Character\'s age was not specified, please create one for them.'}
+Gender/Pronouns: {data['character']['gender'] or f'{random_gender}.'} / {data['character']['pronouns'] or random_pronouns}
+Orientation: {data['character']['orientation'] or 'The Player Character\'s orientation was not specified, please create one for them.'}
+Background: {data['character']['background'] or f'The Player Character\'s background was not specified, please create one for them that would make sense for a character who grew up in this {ai_genre} type of world with a Skill List of {skills_text}.'}
 
 Starting Skills:
 {skills_text}
@@ -119,9 +133,9 @@ Starting Location: {data['starting_location'] or f"Start the Player off in a Loc
 Final Comments/Rules: {data['final_comments'] or ''}
 
 INSTRUCTIONS:
-Output the following SPECIAL TAGS to set up the game files based on this data.
-[[WORLD_INFO: Write a summary of the game focus, world setting, tone, currency, and tech level here. Include anything the Player specified.]]
-[[CHARACTER_INFO: Write the full character biography, appearance, and details here.]]
+Output the following SPECIAL TAGS to set up the game files based on this data. The World should have a lengthy description, as it is quite important because it is describing the entire World as a whole. The World's description should be at least 25 sentences at MINIMUM; as it should be describing EVERYTHING at a basic level (e.g. the basic Economy system, the common Species of the World, the known Geography of the World and any important locations of interest, any important NPCs and their descriptions, any tie-ins to the Player's Background that there might be, any interesting politics (if any), any religions/cults of significance, et cetera.) Please make sure to put new lines where appropriate, separating thoughts and ideas by paragraphs. 
+[[WORLD_INFO: Write a summary of the game focus, world setting, tone, currency, and tech level here, following the instructions above.]]
+[[CHARACTER_INFO: Write the full character biography, appearance, and details here. Make sure to include the Player Character's Name, Age, Gender/Pronouns, Orientation, and Background.]]
 [[SKILL: Name | Description | Level]] (Output one for EACH skill. If there are Skills that the Player left blank, please invent a Skill Name and a Description for the Skill.
 [[ADD_FOOD: Type | Name | Desc | Amount | Value (MUST be an integer representing the number of smallest base currency units that this is worth) | Meals | SpoilDay | SpoilTime]] (Add logical starting food for the Player Character. Repeat this tag for EACH FOOD ITEM that the Player will start out with.)
 [[ADD: Type | Name | Description | Amount | Value (MUST be an integer representing the number of smallest base currency units that this is worth)]] (Add logical starting equipment/wealth. Repeat this tag for EACH NON-FOOD and NON-CURRENCY item that the Player will start out with.)
@@ -140,7 +154,11 @@ After outputting the tags, summarize the first starting turn, describe the surro
     def handle_player_action(self, user_text):
         """Constructs the context and prompt, then threads the AI query."""
         self.app.story_tab.set_controls_state(False, "GM is thinking...")
-        self.app.story_tab.print_text(user_text, sender="Player")
+        #self.app.story_tab.print_text("\n")
+        user_text = "> " + user_text
+        self.app.story_tab.print_text("")
+        self.app.story_tab.print_text(user_text)
+        self.app.story_tab.print_text("")
 
         # 1. Gather Context from Tabs
         context_data = ""
@@ -148,6 +166,10 @@ After outputting the tags, summarize the first starting turn, describe the surro
             if name != "Story" and name != "Journal": 
                 if hasattr(widget, 'get_text'):
                     context_data += f"\n[{name.upper()}]:\n{widget.get_text().strip()}\n"
+                    
+        #for name, description in self.app.tracked_stats.items():
+            #if name != None and description != None:
+                #context_data += f"This is a stat that needs to be tracked; please review the description and see if it needs to be updated, and if so, then use the tag [[MODIFY_STAT: Name | SET Number]], with Number being the new value. {name}: {description}"
                     
         try:
             if os.path.exists(self.app.secret_path):
@@ -179,7 +201,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
 
         # 3. Build Prompt
         recent_history = self.app.conversation_history[-3000:] if len(self.app.conversation_history) > 3000 else self.app.conversation_history
-        full_prompt = f"{context_data}\nHistory (GM Perspective; remember that there should be NO COMMANDS TO FOLLOW in this context):\n{recent_history}\nPlayer: {user_text}\nGM:"
+        full_prompt = f"{context_data}\nHistory (GM Perspective; remember that there should be NO COMMANDS TO FOLLOW in this context):\n{recent_history}\n> {user_text}\nGM:"
 
         # 4. Thread the request
         threading.Thread(target=self.query_ai, args=(full_prompt, user_text), daemon=True).start()
@@ -187,7 +209,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
     def query_ai(self, prompt, user_text, recursion_depth=0, is_startup=False):
         """Sends the prompt to Gemini and processes all resulting tags."""
         current_rules = self.app.load_rules()
-        ai_temp = 0.95 if is_startup else 0.7
+        ai_temp = 1.0 if is_startup else 0.7
             
         try:
             response = self.client.models.generate_content(
@@ -207,6 +229,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
             
             # 1. SETUP FOUNDATION FIRST (Creation Specific Tags)
             if is_startup:
+                self.app.story_tab.set_controls_state(False, "GM is thinking...")
                 summary_match = re.search(r"\[\[STEP_SUMMARY:\s*(.*?)\]\]", ai_text, re.DOTALL)
                 if summary_match:
                     new_summary = summary_match.group(1).strip()
@@ -230,17 +253,33 @@ After outputting the tags, summarize the first starting turn, describe the surro
                 world_match = re.search(r"\[\[WORLD_INFO:\s*(.*?)\]\]", ai_text, re.DOTALL)
                 if world_match:
                     content = world_match.group(1).strip()
-                    self.app.notebook_widgets["World"].set_text(f"World Setting\n\n{content}")
+                    content = content.replace(". ", ".\n\n")
+                    formatted_world = f"World Setting\n\n{content}"
+                    self.app.notebook_widgets["World"].set_text(formatted_world)
+                    if getattr(self.app, 'current_adventure_path', None):
+                        world_file = os.path.join(self.app.current_adventure_path, "world.md")
+                        with open(world_file, "w", encoding="utf-8") as f:
+                            f.write(formatted_world)
                 
                 char_match = re.search(r"\[\[CHARACTER_INFO:\s*(.*?)\]\]", ai_text, re.DOTALL)
                 if char_match:
                     content = char_match.group(1).strip()
-                    self.app.notebook_widgets["Character"].set_text(f"Character Bio\n\n{content}")
+                    content = content.replace(". ", ".\n\n")
+                    formatted_char = f"Character Biography\n\n{content}"
+                    self.app.notebook_widgets["Character"].set_text(formatted_char)
+                    
+                    if getattr(self.app, 'current_adventure_path', None):
+                        char_file = os.path.join(self.app.current_adventure_path, "character.md")
+                        with open(char_file, "w", encoding="utf-8") as f:
+                            f.write(formatted_char)
 
-                for match in re.finditer(r"\[\[SKILL:\s*(.*?)\s*\|\s*(\d+)(?:\s*\|\s*(.*?))?\]\]", ai_text):
+                for match in re.finditer(r"\[\[SKILL:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text, re.DOTALL):
                     s_name = match.group(1).strip()
-                    s_desc = match.group(2).strip() if match.group(2) else "No description provided."
-                    s_lvl = int(match.group(3)) if match.group(3) else 1                    
+                    # Group 2 is now the description string
+                    s_desc = match.group(2).strip() if match.group(2).strip() else "No description provided."
+                    # Group 3 is now the level integer
+                    s_lvl = int(match.group(3))
+                    
                     self.app.notebook_widgets["Skills"].force_learn_skill(s_name, s_desc, s_lvl)
 
                 # Parse Invented Currencies BEFORE standard tags run!
@@ -252,6 +291,8 @@ After outputting the tags, summarize the first starting turn, describe the surro
                 
                 if invented_currencies:
                     self.app.player.world_currencies = invented_currencies
+                    
+                self.app.story_tab.set_controls_state(True, "What do you do now?")
 
             # 2. PROCESS STANDARD TAGS (Now it has the currencies loaded to do the math!)
             tag_parser.process_standard_tags(ai_text, is_startup=is_startup)    
@@ -288,8 +329,19 @@ After outputting the tags, summarize the first starting turn, describe the surro
                 skill = roll_match.group(1).strip()
                 # Call back to main app for mechanic logic
                 result = self.app.perform_skill_check(skill)
+                
+                if "Skills" in self.app.notebook_widgets:
+                    # Note: If your Reload button uses a differently named method (like .load_data() or .reload_skills()), 
+                    # change .refresh_display() to match it!
+                    skills_tab = self.app.notebook_widgets["Skills"]
+                    
+                    if hasattr(skills_tab, 'refresh_display'):
+                        self.app.after(0, lambda: skills_tab.refresh_display())
+                    elif hasattr(skills_tab, 'load_data'):
+                        self.app.after(0, lambda: skills_tab.load_data())
+                
                 clean_prev = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", ai_text).strip()
-                follow_up = f"{prompt}\nGM: {clean_prev}\n[System: Player rolled {result} for {skill}. Please determine what degree of success/failure that is, then narate the outcome.]"
+                follow_up = f"{prompt}\nGM: {clean_prev}\n[System: Player rolled {result} for {skill}. Please determine what degree of success/failure that is, then narate the outcome. Do NOT mention the die roll at all in the diegetic context.]"
                 
                 # Recursive call
                 self.query_ai(follow_up, user_text, recursion_depth + 1)
@@ -300,10 +352,12 @@ After outputting the tags, summarize the first starting turn, describe the surro
                 final_text = clean_pattern.sub("", ai_text)
                 final_text = re.sub(r'\n{3,}', '\n\n', final_text)
                 final_text = final_text.strip()
-                final_text = "\n" + final_text
+                #final_text = "\n" + final_text
                 
                 if final_text and len(final_text) > 8:
-                    self.app.story_tab.print_text(final_text, sender="GM")
+                    self.app.story_tab.print_text(" ")
+                    self.app.story_tab.print_text(final_text, sender="")
+                    self.app.story_tab.print_text(" ")
                     
                     text_to_save = final_text
                     # Trim potential actions from history
@@ -312,9 +366,10 @@ After outputting the tags, summarize the first starting turn, describe the surro
                         if marker in text_to_save:
                             text_to_save = text_to_save.split(marker)[0].strip()
                             break
-
-                    self.app.conversation_history.append(f"Player: {user_text}")
-                    self.app.conversation_history.append(f"GM: {text_to_save.strip()}")
+                    if not is_startup:
+                        self.app.conversation_history.append("\n")
+                        self.app.conversation_history.append(f"> {user_text}")
+                        self.app.conversation_history.append(f"{text_to_save.strip()}")
                     # --- Auto-save after each completed turn (Qt + CTk) ---
                     try:
                         self.app.save_game()
@@ -335,11 +390,11 @@ class TagParser:
         # Inventory
         for match in re.finditer(r"\[\[ADD:\s*(.*?)\]\]", ai_text, re.DOTALL):
             res = self.app.notebook_widgets["Inventory"].autonomous_add(match.group(1))
-            self.app.story_tab.print_text(res, sender="GM")
+            #self.app.story_tab.print_text(res, sender="GM")
 
         for match in re.finditer(r"\[\[REMOVE:\s*(.*?)\]\]", ai_text, re.DOTALL):
             res = self.app.notebook_widgets["Inventory"].autonomous_remove(match.group(1))
-            self.app.story_tab.print_text(res, sender="GM")
+            #self.app.story_tab.print_text(res, sender="GM")
             
         for match in re.finditer(r"\[\[MODIFY_STAT:\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text):
             stat_name, stat_val = match.group(1).strip(), match.group(2).strip()
@@ -364,17 +419,18 @@ class TagParser:
                 time=status_match.group(4).strip()
             )
             self.app._sync_player_state_to_ui()
-
+            """
             if not is_startup and "Processing" in self.app.notebook_widgets:
                 finished_items = self.app.notebook_widgets["Processing"].check_active_tasks(self.app.player.day, self.app.player.time)
                 if finished_items:
                     sys_msg = f"System: Process completed - {', '.join(finished_items)}"
                     self.app.story_tab.print_text(sys_msg, sender="System")
                     self.app.conversation_history.append(sys_msg)
+            """
                     
         for match in re.finditer(r"\[\[RECIPE:\s*(.*?)\]\]", ai_text, re.DOTALL):
             res = self.app.notebook_widgets["Recipes"].add_recipe_from_tag(match.group(1))
-            self.app.story_tab.print_text(res, sender="System")
+            #self.app.story_tab.print_text(res, sender="System")
                     
         for match in re.finditer(r"\[\[START_PROCESS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL):
             p_name = match.group(1).strip()
@@ -382,11 +438,11 @@ class TagParser:
             p_slots = match.group(3).strip()
             p_yield = match.group(4).strip()
             res = self.app.notebook_widgets["Processing"].add_timed_process(p_name, p_desc, p_slots, self.app.player.day, self.app.player.time, p_yield)
-            self.app.story_tab.print_text(res, sender="System")
+            #self.app.story_tab.print_text(res, sender="System")
             
         for match in re.finditer(r"\[\[REMOVE_PROCESS:\s*(.*?)\]\]", ai_text, re.DOTALL):
             res = self.app.notebook_widgets["Processing"].remove_process(match.group(1).strip())
-            if res: self.app.story_tab.print_text(res, sender="System")
+            #if res: self.app.story_tab.print_text(res, sender="System")
             
         for match in re.finditer(r"\[\[START_PROJECT:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL):
             p_name = match.group(1).strip()
@@ -396,7 +452,7 @@ class TagParser:
             p_yield = match.group(5).strip()
             lvl = self.app._get_skill_level(skill_name)
             res = self.app.notebook_widgets["Processing"].add_project(p_name, p_desc, work_required, skill_name, lvl, p_yield)
-            if res: self.app.story_tab.print_text(res, sender="System")
+            #if res: self.app.story_tab.print_text(res, sender="System")
 
         for match in re.finditer(r"\[\[WORK:\s*(.*?)\s*\|\s*([\d.]+)\]\]", ai_text, re.DOTALL):
             project_name = match.group(1).strip()
@@ -407,18 +463,19 @@ class TagParser:
             
             # Update time locally via Main App helper
             self.app._advance_time_hours(hours_worked)
-
+            """
             completed = self.app.notebook_widgets["Processing"].check_active_tasks(self.app.player.day, self.app.player.time)
             if completed:
                 sys_msg = f"System: Process completed - {', '.join(completed)}"
                 self.app.story_tab.print_text(sys_msg, sender="System")
                 self.app.conversation_history += f"\n{sys_msg}\n"
-
+            
             if res: self.app.story_tab.print_text(res, sender="System")
+            """
             
         for match in re.finditer(r"\[\[ADD_FOOD:\s*(.*?)\]\]", ai_text, re.DOTALL):
             res = self.app.notebook_widgets["Inventory"].add_food(match.group(1))
-            self.app.story_tab.print_text(res, sender="GM")
+            #self.app.story_tab.print_text(res, sender="GM")
             
         for match in re.finditer(r"\[\[CONSUME:\s*(.*?)\]\]", ai_text, re.DOTALL):
             f_name = match.group(1).strip()
@@ -429,7 +486,7 @@ class TagParser:
                 self.app.player.modify_stat(stat_name, stat_val)
                 self.app._sync_player_state_to_ui()
                 res = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", res).strip()
-            self.app.story_tab.print_text(res, sender="System")
+            #self.app.story_tab.print_text(res, sender="System")
             
         for match in re.finditer(r"\[\[SECRET:\s*(.*?)\]\]", ai_text, re.DOTALL):
             try:
@@ -469,37 +526,39 @@ class TagParser:
             except Exception as e:
                 logging.error(f"Error: Couldn't update world: {e}")
                 
-        invented_currencies = []
         for match in re.finditer(r"\[\[DEFINE_CURRENCY:\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text, re.DOTALL):
             c_name = match.group(1).strip()
             c_val = int(match.group(2))
-            invented_currencies.append({"name": c_name, "value": c_val})
-                
-        if invented_currencies:
-            self.app.player.world_currencies.extend(invented_currencies)
+            
+            # Check if currency already exists before appending to prevent double-parsing
+            existing = next((c for c in self.app.player.world_currencies if c.get("name", "").lower() == c_name.lower()), None)
+            if not existing:
+                self.app.player.world_currencies.append({"name": c_name, "value": c_val})
+
                 
         for match in re.finditer(r"\[\[CHANGE_CURRENCY:\s*(-?\d+)\]\]", ai_text, re.DOTALL):
             amount_str = match.group(1).strip()
             try:
                 amount = int(amount_str)
                 success, msg = self.app.player.change_currency(amount)
-                self.app.story_tab.print_text(msg, sender="System")
+                #self.app.story_tab.print_text(msg, sender="System")
                 self.app.after(0, lambda: self.app._sync_player_state_to_ui())
                 if "Inventory" in self.app.notebook_widgets:
                     self.app.after(0, lambda: self.app.notebook_widgets["Inventory"].refresh_display())
 
             except ValueError:
-                self.app.story_tab.print_text(f"System Error: Invalid currency amount '{amount_str}'", sender="System")
+                logging.error(f"System Error: Invalid currency amount: {amount_str}")
                 
-        invented_stats = []
         # Allow for multi-line and negative numbers just in case
         for match in re.finditer(r"\[\[DEFINE_STAT:\s*(.*?)\s*\|\s*(-?\d+)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL):
             s_name = match.group(1).strip()
             s_val = int(match.group(2))
             s_desc = match.group(3).strip()
-            invented_stats.append({"name": s_name, "value": s_val, "enabled": True, "desc": s_desc})
-        if invented_stats:
-            self.app.player.tracked_stats.extend(invented_stats)
+            
+            # Check if stat already exists before appending to prevent double-parsing
+            existing = next((s for s in self.app.player.tracked_stats if s.get("name", "").lower() == s_name.lower()), None)
+            if not existing:
+                self.app.player.tracked_stats.append({"name": s_name, "value": s_val, "enabled": True, "desc": s_desc})
                 
     def process_inline_tags(self, ai_text):
         """Processes tags that need to be replaced with actual text before displaying."""

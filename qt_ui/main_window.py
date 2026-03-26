@@ -295,11 +295,11 @@ class MainWindow(QMainWindow):
                 sorted_for_msg = sorted(saved_currencies, key=lambda x: int(x.get("value", 1)), reverse=True)
                 lowest_coin_name = sorted_for_msg[-1].get("name", "base units") if sorted_for_msg else "base units"
                 
-                msg = f"Currencies successfully updated ({len(saved_currencies)} total):\n"
-                for cur in saved_currencies:
-                    msg += f" • {cur['name']} (Worth: {cur['value']} {lowest_coin_name})\n"
+                #msg = f"Currencies successfully updated ({len(saved_currencies)} total):\n"
+                #for cur in saved_currencies:
+                #    msg += f" • {cur['name']} (Worth: {cur['value']} {lowest_coin_name})\n"
                 
-                self.story_panel.print_text(msg, sender="System")
+                #self.story_panel.print_text(msg, sender="System")
                 
                 # 3. Refresh the inventory UI to use the new math
                 if hasattr(self.inventory_panel, "refresh_display"):
@@ -336,12 +336,14 @@ class MainWindow(QMainWindow):
                 self.app._sync_player_state_to_ui()
                 
                 # Feedback loop
+                """
                 msg = f"Tracked Stats successfully updated:\n"
                 for st in saved_stats:
                     status = "Enabled" if st['enabled'] else "Disabled"
                     msg += f" • {st['name']} ({status}): {st['value']}\n"
                 
                 self.story_panel.print_text(msg, sender="System")
+                """
         except Exception as e:
             error_msg = f"Error opening stats menu: {str(e)}"
             logging.exception(error_msg)

@@ -113,10 +113,10 @@ DEFAULT_RULES = (
    - The Player will write a description for each Status for what they want it to do and how it should be tracked; please logically analyze that and modify and keep track of the stats accordingly.
    - For example, if the Player wants a "Nutrition" stat, then presumably it would decrease pretty much every turn that the Player is not eating, and would make the Player hungry when it gets low.
    - **CRITICAL:** When a tracked stat changes due to events, time passing, or player actions, you MUST use the MODIFY_STAT tag to update it to its exact new numeric value.
-   - **Format:** [[MODIFY_STAT: Stat Name | New Value]]
-   - **Example:** [[MODIFY_STAT: Health | 85]] or [[MODIFY_STAT: Nutrition | 90]]
+   - **Format:** [[MODIFY_STAT: Stat Name | SET {New Value}]]
+   - **Example:** [[MODIFY_STAT: Health | SET 85]] or [[MODIFY_STAT: Nutrition | SET 90]]
    - **PLEASE READ THE RULES/DESCRIPTION FOR EACH STAT BEFORE MODIFYING IT / OUTPUTTING THE [[MODIFY_STAT]] TAG. DO NOT PASS VALUES THAT WOULD BE ABOVE THE MAXIMUM OR BELOW THE MINIMUM FOR THE STAT.
-   - Only modify a Stat by a logical amount at a time. For example, for a "Stamina" stat, you wouldn't decrease a Player Character's Stamina by 80% after they walked for only 5 minutes in-game, would you?
+   - Only set a Stat to a logical amount. For example, for a "Stamina" stat, you wouldn't decrease a Player Character's Stamina to 10% (from 90%) after they walked for only 5 minutes in-game, would you?
    - Think about how much would be logical to modify each stat by, and only modify each stat if it makes sense for the rules/description for the stat.
    - Do NOT attempt to add these dynamic stats into the standard [[STATUS]] tag. Keep the [[STATUS]] tag strictly for Turn, Location, Day, and Time.
    - If for some reason, you feel that it is necessary to create an entirely new stat, then please output the tag "[[DEFINE_STAT: Name | Value | Description]]"; but please only use that if you are very, very certain that an entirely new stat is warranted. Make sure that the Description is as precise as possible, including the minimum value for it, the maximum value for it, and what happens when it is either very low or very high, and what happens if it reaches minimum/maximum.
