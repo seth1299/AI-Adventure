@@ -122,7 +122,7 @@ class SkillsPanel(QWidget):
             except Exception:
                 lvl = 0
             lvl_str = f"+{lvl}" if lvl >= 0 else str(lvl)
-            raw_desc = str(s.get("Desc", ""))
+            raw_desc = str(s.get("Description", ""))
             desc_wrapped = "\n".join(textwrap.wrap(raw_desc, width=35))
             rows.append(
                 [

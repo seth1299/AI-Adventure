@@ -73,7 +73,7 @@ class QtStoryTabAdapter:
         self._panel = story_panel
         self._ui = dispatcher
 
-    def print_text(self, text: str, sender: str = "GM") -> None:
+    def print_text(self, text: str, sender: str = "") -> None:
         self._ui.run_now.emit(lambda: self._panel.print_text(text, sender=sender))
 
     def set_controls_state(self, enabled: bool, status_text: str | None = None) -> None:
@@ -261,13 +261,16 @@ class QtAppContext:
 
             data = self.load_savegame_state(save_path)
             history = data.get("Chat History") or []
-
+            for line in history:
+                self.story_tab.print_text(line, sender="")
+                self.story_tab.print_text("\n", "")
+            """
             last_gm: str | None = ""
             if isinstance(history, list):
                 for line in history:
                     if isinstance(line, str) and line.strip().startswith("GM:") and len(line.strip()) > 8:
                         last_gm += line.strip()[len("GM:"):].strip() + "\n"
-                    elif isinstance(line, str) and line.strip().startswith("Player:") == False and len(line.strip()) > 8:
+                    elif isinstance(line, str) and line.strip().startswith("> ") == False and len(line.strip()) > 8:
                         last_gm += line.strip() + "\n"
                     elif isinstance(line, str) and line.strip().startswith("Player"): break
 
@@ -276,6 +279,7 @@ class QtAppContext:
                 return
             
             self.story_tab.print_text(last_gm[:-1:], sender="GM")
+            """
             self.story_tab.print_text(f"\n\nWhat do you do now?")
             
         except Exception:
@@ -303,7 +307,7 @@ class QtAppContext:
     def perform_skill_check(self, skill_name: str) -> int:
         # Calls the Player class, then routes the output message to the UI
         total, msg = self.player.perform_skill_check(skill_name)
-        self.story_tab.print_text(msg, sender="System")
+        #self.story_tab.print_text(msg, sender="System")
         return total
 
     def _advance_time_hours(self, _hours: float) -> None:
@@ -371,7 +375,7 @@ def main() -> int:
     win.app = app_ctx
     win.inventory_panel.app = app_ctx
     win.ai_manager = AIManager(app_ctx)
-    win.setWindowTitle(f"AI RPG Adventure (Qt) - {save_name}")
+    win.setWindowTitle(f"{save_name}")
     win.show()
 
     def _boot_selected_save() -> None:
