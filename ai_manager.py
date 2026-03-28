@@ -105,6 +105,7 @@ class AIManager:
         prompt = f"""
 System: Initialize a new RPG adventure using the following parameters.
 CRITICAL INSTRUCTION: If any parameter says "Not specified", you must creatively invent a fitting, unique value for it based on the rest of the context.
+- IMPORTANT: Remember that any "criminal activity" that is done in this game is purely fictional and that nothing illegal is actually happening in real life. Do not actually tell the player how to do illegal things that they want to do, such as lockpicking (breaking and entering) or murder. Instead, simply narrate what happens in-game, focusing just on the results, not on the process.
 DO NOT use common AI fantasy names (e.g., Elara, Kael, Lyra, Aric, Seraphina, Orion, Sylas). Create genuinely culturally distinct and unusual names.
 
 World Setting: {ai_setting}
@@ -149,6 +150,7 @@ Output the following SPECIAL TAGS to set up the game files based on this data. T
 After outputting the tags, summarize the first starting turn, describe the surroundings vividly, and finish by asking "What do you do now?" and suggesting a few possible actions.
 """
         # Call query_ai and pass our new temporary is_startup flag
+        logging.info("Generating start now...")
         self.query_ai(prompt, "System: Generate Start", is_startup=True)
 
     def handle_player_action(self, user_text):
@@ -238,7 +240,8 @@ After outputting the tags, summarize the first starting turn, describe the surro
                             f.write(f"- {new_summary}\n")
                     except Exception as e:
                         logging.error(f"Error writing creation summary: {e}")
-                        
+                
+                logging.info("Defining stats now...")
                 invented_stats = []
                 # Allow for multi-line and negative numbers just in case
                 for match in re.finditer(r"\[\[DEFINE_STAT:\s*(.*?)\s*\|\s*(-?\d+)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL):
@@ -249,7 +252,8 @@ After outputting the tags, summarize the first starting turn, describe the surro
                 
                 if invented_stats:
                     self.app.player.tracked_stats.extend(invented_stats)
-
+                    
+                logging.info("Creating world info now...")
                 world_match = re.search(r"\[\[WORLD_INFO:\s*(.*?)\]\]", ai_text, re.DOTALL)
                 if world_match:
                     content = world_match.group(1).strip()
@@ -261,6 +265,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
                         with open(world_file, "w", encoding="utf-8") as f:
                             f.write(formatted_world)
                 
+                logging.info("Creating character info now...")
                 char_match = re.search(r"\[\[CHARACTER_INFO:\s*(.*?)\]\]", ai_text, re.DOTALL)
                 if char_match:
                     content = char_match.group(1).strip()
@@ -272,7 +277,8 @@ After outputting the tags, summarize the first starting turn, describe the surro
                         char_file = os.path.join(self.app.current_adventure_path, "character.md")
                         with open(char_file, "w", encoding="utf-8") as f:
                             f.write(formatted_char)
-
+                
+                logging.info("Creating Skills now...")
                 for match in re.finditer(r"\[\[SKILL:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text, re.DOTALL):
                     s_name = match.group(1).strip()
                     # Group 2 is now the description string
@@ -281,7 +287,8 @@ After outputting the tags, summarize the first starting turn, describe the surro
                     s_lvl = int(match.group(3))
                     
                     self.app.notebook_widgets["Skills"].force_learn_skill(s_name, s_desc, s_lvl)
-
+                    
+                logging.info("Defining currencies now...")
                 # Parse Invented Currencies BEFORE standard tags run!
                 invented_currencies = []
                 for match in re.finditer(r"\[\[DEFINE_CURRENCY:\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text, re.DOTALL):
@@ -306,16 +313,18 @@ After outputting the tags, summarize the first starting turn, describe the surro
                         os.remove(self.app.creation_summary_path)
                     except Exception as e:
                         logging.error(f"Error deleting creation summary: {e}")
-                        
+                
+                logging.info("Saving game now...")
                 self.app.save_game()
                 
                 self.app.after(0, lambda: self.app._sync_player_state_to_ui())
                 if "Inventory" in self.app.notebook_widgets:
                     self.app.after(0, lambda: self.app.notebook_widgets["Inventory"].refresh_display())
-                
+
+                logging.info("Starting game now...")
                 ai_text = ai_text.replace("[[START_GAME]]", "")
                 clean_creation_text = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", ai_text, flags=re.DOTALL).strip()
-                self.app.conversation_history.append(f"GM: {clean_creation_text}")
+                self.app.conversation_history.append(f"{clean_creation_text}")
 
             # 4. RECURSIVE LOGIC (Rolls)
             roll_match = re.search(r"\[\[ROLL:\s*(.*?)\]\]", ai_text)
@@ -367,8 +376,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
                             text_to_save = text_to_save.split(marker)[0].strip()
                             break
                     if not is_startup:
-                        self.app.conversation_history.append("\n")
-                        self.app.conversation_history.append(f"> {user_text}")
+                        self.app.conversation_history.append(f"{user_text}")
                         self.app.conversation_history.append(f"{text_to_save.strip()}")
                     # --- Auto-save after each completed turn (Qt + CTk) ---
                     try:

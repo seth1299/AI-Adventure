@@ -280,7 +280,7 @@ class QtAppContext:
             
             self.story_tab.print_text(last_gm[:-1:], sender="GM")
             """
-            self.story_tab.print_text(f"\n\nWhat do you do now?")
+            self.story_tab.print_text(f"What do you do now?\n")
             
         except Exception:
             logging.exception("Generate recap failed")
