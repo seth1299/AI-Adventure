@@ -91,8 +91,8 @@ class StoryPanel(QWidget):
         self._update_status_ui()
 
     def append_text(self, text: str) -> None:
-        if not text:
-            return
+        #if not text:
+        #    return
         self.txt_log.append(text)
         self._scroll_to_bottom()
 
@@ -185,8 +185,8 @@ class StoryPanel(QWidget):
                 self.txt_input.setPlaceholderText(status_text)
 
     def print_text(self, text: str, *, sender: str = "GM") -> None:
-        if not text or text == "":
-            return
+        #if not text or text == "":
+        #    return
         #prefix = f"{sender}: " if sender else ""
         self.append_text(f"{text}")
 
