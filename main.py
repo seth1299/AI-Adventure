@@ -262,8 +262,9 @@ class QtAppContext:
             data = self.load_savegame_state(save_path)
             history = data.get("Chat History") or []
             for line in history:
+                if line == "" or line == None: continue
                 self.story_tab.print_text(line, sender="")
-                self.story_tab.print_text("\n", "")
+                self.story_tab.print_text("", sender="")
             """
             last_gm: str | None = ""
             if isinstance(history, list):
@@ -306,7 +307,7 @@ class QtAppContext:
 
     def perform_skill_check(self, skill_name: str) -> int:
         # Calls the Player class, then routes the output message to the UI
-        total, msg = self.player.perform_skill_check(skill_name)
+        total = self.player.perform_skill_check(skill_name)
         #self.story_tab.print_text(msg, sender="System")
         return total
 

@@ -41,6 +41,10 @@ class Player:
             "tracked_stats": self.tracked_stats,
             "world_currencies": self.world_currencies
         }
+    
+    def get_world_currencies(self):
+        if self.world_currencies: return self.world_currencies
+        else: return ""
 
     def update_world_state(self, turn, location, day, time):
         """Updates the tracking variables."""
@@ -255,11 +259,11 @@ class Player:
         
         skill_entry = next((item for item in data if str(item.get("Name", "")).lower() == clean_name.lower()), None)
         
-        msg_lines = []
+        #msg_lines = []
         if not skill_entry:
             skill_entry = {"Name": clean_name, "Level": 0, "XP": 0, "Threshold": 5}
             data.append(skill_entry)
-            msg_lines.append(f"Learned new skill: {clean_name}!")
+            logging.info(f"Learned new skill: {clean_name}!")
 
         die_roll = random.randint(1, 20)
         try:
@@ -267,7 +271,8 @@ class Player:
             die_roll = int(new_roll)
             if not intervened:
                 self.update_karma(die_roll)
-        except Exception:
+        except Exception as e:
+            logging.error(f"Error during karma intervention: {e}")
             pass
 
         # Handle XP & Leveling
@@ -287,7 +292,9 @@ class Player:
         skill_bonus = int(skill_entry.get("Level", 0) or 0)
 
         total = die_roll + skill_bonus
-        
+        return total
+        """
+        msg_lines = []
         msg_lines.append(f"Rolling {clean_name}: {die_roll} + ({skill_bonus} (Skill) = {total}")
         
         if leveled_up:
@@ -296,3 +303,5 @@ class Player:
             msg_lines.append(f"{clean_name}: {skill_entry.get('XP', 0)} / {skill_entry.get('Threshold', 0)} XP towards next level up.")
 
         return total, "\n".join(msg_lines)
+        """
+        

@@ -8,6 +8,7 @@ import random
 from config import GEMINI_API_KEY, MODEL
 from tabulate import tabulate
 import csv
+from rapidfuzz import process, fuzz
 
 class AIManager:
     def __init__(self, app):
@@ -140,9 +141,9 @@ Output the following SPECIAL TAGS to set up the game files based on this data. T
 [[SKILL: Name | Description | Level]] (Output one for EACH skill. If there are Skills that the Player left blank, please invent a Skill Name and a Description for the Skill.
 [[ADD_FOOD: Type | Name | Desc | Amount | Value (MUST be an integer representing the number of smallest base currency units that this is worth) | Meals | SpoilDay | SpoilTime]] (Add logical starting food for the Player Character. Repeat this tag for EACH FOOD ITEM that the Player will start out with.)
 [[ADD: Type | Name | Description | Amount | Value (MUST be an integer representing the number of smallest base currency units that this is worth)]] (Add logical starting equipment/wealth. Repeat this tag for EACH NON-FOOD and NON-CURRENCY item that the Player will start out with.)
-[[DEFINE_CURRENCY: Name | Value]] (If no currencies were provided, output this for EACH invented denomination. Example: [[DEFINE_CURRENCY: Iron Bit | 1]]). THIS TAG MUST COME BEFORE CHANGE_CURRENCY.
+[[DEFINE_CURRENCY: Name | Value]] (If no currencies were provided, output this for EACH invented denomination. Example: [[DEFINE_CURRENCY: Iron Bit | 1]]). THIS TAG MUST COME BEFORE [[GIVE_COIN]].
 [[DEFINE_STAT: Name | Value | Description]] (If NO tracked stats were provided, output this tag for EACH invented stat. Be as specific as possible for the description of each stat, including positive effects for having a high value of the stat, and/or negative effects for having a low value of the stat (and what happens if the stat hits 0). Example: [[DEFINE_STAT: Sanity | 100 | Represents your mental fortitude against the Eldritch. Depletes when seeing horrors; replenishes when taking time to rest and give your brain a break without witnessing Eldritch horrors. High sanity allows your character to have a clear head and more easily deal with Eldritch horrors. Low sanity means that your character will have issues with Eldritch horrors when encountering them. Max value: 100.]])
-[[CHANGE_CURRENCY: X]] (Give the player a logical amount of starting base currency for their background.)
+[[GIVE_COIN: X]] (Give the player a logical amount of starting base currency for their background. Repeat this tag however many times you need to if you are adding different types of coins; e.g. "[[GIVE_COIN: 5 Copper Pieces]] [[GIVE_COIN: 5 Silver Pieces]] [[GIVE_COIN: 5 Gold Pieces]]". Please only use whatever currency you described previous in the "DEFINE_CURRENCY" tag from earlier.)
 [[STATUS: 1 | {data['starting_location'] or 'Unknown (Invent a starting location name)'} | 1 | 7:00 A.M.]]
 [[MUSIC: FILENAME_PLACEHOLDER.mp3]]
 [[START_GAME]]
@@ -158,9 +159,9 @@ After outputting the tags, summarize the first starting turn, describe the surro
         self.app.story_tab.set_controls_state(False, "GM is thinking...")
         #self.app.story_tab.print_text("\n")
         user_text = "> " + user_text
-        self.app.story_tab.print_text("")
+        #self.app.story_tab.print_text("")
         self.app.story_tab.print_text(user_text)
-        self.app.story_tab.print_text("")
+        #self.app.story_tab.print_text("")
 
         # 1. Gather Context from Tabs
         context_data = ""
@@ -329,11 +330,6 @@ After outputting the tags, summarize the first starting turn, describe the surro
             # 4. RECURSIVE LOGIC (Rolls)
             roll_match = re.search(r"\[\[ROLL:\s*(.*?)\]\]", ai_text)
 
-            # 3. Recursive Logic (Rolls)
-            roll_match = re.search(r"\[\[ROLL:\s*(.*?)\]\]", ai_text)
-
-            # Recursive Logic (Rolls)
-            roll_match = re.search(r"\[\[ROLL:\s*(.*?)\]\]", ai_text)
             if roll_match and recursion_depth < 2:
                 skill = roll_match.group(1).strip()
                 # Call back to main app for mechanic logic
@@ -350,6 +346,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
                         self.app.after(0, lambda: skills_tab.load_data())
                 
                 clean_prev = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", ai_text).strip()
+                logging.info(f"[System: Player rolled {result} for {skill}]")
                 follow_up = f"{prompt}\nGM: {clean_prev}\n[System: Player rolled {result} for {skill}. Please determine what degree of success/failure that is, then narate the outcome. Do NOT mention the die roll at all in the diegetic context.]"
                 
                 # Recursive call
@@ -556,6 +553,41 @@ class TagParser:
 
             except ValueError:
                 logging.error(f"System Error: Invalid currency amount: {amount_str}")
+                
+        for match in re.finditer(r"\[\[GIVE_COIN:\s*(.*?)\s*\|\s*(-?\d+)\]\]", ai_text, re.DOTALL):
+            ai_coin_name = match.group(1).strip()
+            try:
+                coin_amount = int(match.group(2).strip())
+                coin_value = 1 # Default fallback to base units
+                
+                if self.app.player.world_currencies:
+                    # 1. Create a simple list of valid currency names to check against
+                    valid_names = [cur.get("name", "") for cur in self.app.player.world_currencies]
+                    
+                    # 2. Use RapidFuzz to find the closest match
+                    # extractOne returns a tuple: (best_match_string, score_out_of_100, original_index)
+                    best_match = process.extractOne(ai_coin_name, valid_names, scorer=fuzz.WRatio)
+                    
+                    # 3. Check if the match is "close enough" (70% is usually a good threshold)
+                    if best_match and best_match[1] >= 70:
+                        matched_index = best_match[2]
+                        matched_coin_dict = self.app.player.world_currencies[matched_index]
+                        coin_value = int(matched_coin_dict.get("value", 1))
+                        logging.info(f"Fuzzy matched AI coin '{ai_coin_name}' to '{best_match[0]}' with score {best_match[1]}")
+                    else:
+                        logging.warning(f"Could not fuzzy match AI coin '{ai_coin_name}'. Defaulting to base unit 1.")
+                        
+                # 4. Let Python do the math safely
+                total_base_change = coin_amount * coin_value
+                success, msg = self.app.player.change_currency(total_base_change)
+                
+                # 5. Sync the UI
+                self.app.after(0, lambda: self.app._sync_player_state_to_ui())
+                if "Inventory" in self.app.notebook_widgets:
+                    self.app.after(0, lambda: self.app.notebook_widgets["Inventory"].refresh_display())
+                    
+            except ValueError:
+                logging.error(f"System Error: Invalid coin amount for GIVE_COIN tag.")
                 
         # Allow for multi-line and negative numbers just in case
         for match in re.finditer(r"\[\[DEFINE_STAT:\s*(.*?)\s*\|\s*(-?\d+)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL):
