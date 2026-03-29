@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QApplication, QDialog
 from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt, QThread
 from queue import Queue
 import time_utils
+from config import VALID_SOUND_FILE_NAMES
 
 class _UiDispatcher(QObject):
     run_now = Signal(object)          # callable
@@ -154,7 +155,34 @@ class QtAppContext:
         self.ui.run_later.emit(int(ms), func)
 
     def load_rules(self) -> str:
-        return FileManager.get_rules(self.current_adventure_path)
+        # 1. Fetch the raw rules string from the file manager
+        base_rules = FileManager.get_rules(self.current_adventure_path)
+        
+        # 2. Get the current currencies
+        currency_list = self.player.get_world_currencies()
+        stats_list = self.player.get_status_dict().get("tracked_stats", "UNKNOWN STATS")
+        sounds_list = VALID_SOUND_FILE_NAMES
+        
+        # 3. Format and inject them
+        if currency_list:
+            currency_names = ", ".join([f"{c.get('name', 'Unit')} (Value: {c.get('value', 1)})" for c in currency_list])
+            formatted_rules = base_rules.replace("{DYNAMIC_CURRENCIES}", currency_names)
+        else:
+            formatted_rules = base_rules.replace("{DYNAMIC_CURRENCIES}", "No currencies defined yet.")
+            
+        if stats_list:
+            stats_names = ", ".join([stat.get("name", "UNKNOWN STAT") for stat in stats_list])
+            formatted_rules = base_rules.replace("{DYNAMIC_STATS}", stats_names)
+        else:
+            formatted_rules = base_rules.replace("{DYNAMIC_STATS}", "No stats defined yet.")
+            
+        if sounds_list:
+            sounds_names = ", ".join(sound for sound in sounds_list)
+            formatted_rules = base_rules.replace("{VALID_SOUND_FILE_NAMES}", sounds_names)
+        else:
+            formatted_rules = base_rules.replace("{VALID_SOUND_FILE_NAMES}", "No sounds defined yet.")
+            
+        return formatted_rules
 
     def save_game(self) -> None:
         if not self.current_adventure_path:

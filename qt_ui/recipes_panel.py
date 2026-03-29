@@ -34,8 +34,7 @@ class RecipesPanel(QWidget):
         "ingredient_2",
         "ingredient_2_amount",
         "ingredient_3",
-        "ingredient_3_amount",
-        "value",
+        "ingredient_3_amount"
     ]
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -124,18 +123,17 @@ class RecipesPanel(QWidget):
             self._set_state("")
             return
 
-        headers = ["Recipe", "Ingredients", "Value"]
+        headers = ["Recipe", "Ingredients"]
         table_rows = []
         for r in rows:
             name = (r.get("recipe_name") or "Unknown").strip()
-            val = (r.get("value") or "N/A").strip()
             ing_parts = []
             for i in range(1, 4):
                 ing = (r.get(f"ingredient_{i}") or "").strip()
                 amt = (r.get(f"ingredient_{i}_amount") or "").strip()
                 if ing:
                     ing_parts.append(f"{ing}: {amt or '1'}")
-            table_rows.append([name, ", ".join(ing_parts), val])
+            table_rows.append([name, ", ".join(ing_parts)])
 
         txt = "RECIPES\n" + tabulate(table_rows, headers, tablefmt="rounded_grid") + "\n"
         self.display.setPlainText(txt)
@@ -195,18 +193,17 @@ class RecipesPanel(QWidget):
     # ---- AI tag helper ----
 
     def add_recipe_from_tag(self, tag_content: str):
-        """Parses: "Name | Ing1: 5, Ing2: 2 | 50 Gold" """
+        """Parses: "Name | Ing1: 5, Ing2: 2" """
         if not self.csv_path:
             return "Invalid csv path."
 
         try:
             parts = [p.strip() for p in (tag_content or "").split("|")]
-            if len(parts) < 3:
+            if len(parts) < 2:
                 return "System: Invalid Recipe Tag Format."
 
             r_name = parts[0]
             ing_string = parts[1]
-            r_val = parts[2]
 
             # Parse ingredients
             ing_list: list[tuple[str, str]] = []
@@ -224,11 +221,9 @@ class RecipesPanel(QWidget):
             rows = self._read_rows()
             if any((row.get("recipe_name") or "").strip().lower() == r_name.lower() for row in rows):
                 return f"System: Recipe '{r_name}' already known."
-
             new_row = {c: "" for c in self.COLUMNS}
             new_row["recipe_name"] = r_name
-            new_row["value"] = r_val
-            for i, (n, a) in enumerate(ing_list[:3], start=1):
+            for i, (n, a) in enumerate(ing_list[:len(ing_list)], start=1):
                 new_row[f"ingredient_{i}"] = n
                 new_row[f"ingredient_{i}_amount"] = a
 

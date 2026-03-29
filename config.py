@@ -2,7 +2,6 @@
 import os
 import platform
 from dotenv import load_dotenv, find_dotenv
-import shutil
 
 dotenv_path = find_dotenv(usecwd=False)
 load_dotenv(dotenv_path)
@@ -12,8 +11,6 @@ if not GEMINI_API_KEY:
 MODEL = "gemini-3.1-flash-lite-preview"
 SAVES_DIR = "saves"
 APP_NAME = "AI_RPG_ADVENTURE"
-#currency_list = player.Player.get_world_currencies
-#logging.info(f"From config.py, currency list: {currency_list}")
 
 if platform.system() == "Windows":
     # C:\Users\YourName\AppData\Roaming\AI_RPG_Adventure
@@ -58,22 +55,20 @@ Whenever a "[[WORD: ]]" is mentioned, it is assumed that "please output the foll
    - If the Player attempts an entirely new skill, output: [[SKILL: SkillName | Skill Description | 1]]
 
 2. INVENTORY & WEALTH:
-   - CRUCIALLY IMPORTANT: Please remember that any of the "Value" parameters mentioned are PER ITEM that you are giving the Player and NOT IN TOTAL. So, for example, if the Player is buying 3 loaves of bread, and they are each 3 copper, then you would use the tag [[ADD_FOOD: ... | ... | ... | 3 | 3 | ... | ... | ...]], DO NOT MULTIPLY THEM TOGETHER TO GET 9.
    - **Currency Transactions:** 
-    - For ANY coins/currency/wealth gained or spent, use [[GIVE_COIN: Coin Name | Amount]]. Use positive numbers for gaining, negative for spending. (Example: [[GIVE_COIN: Gold Piece | 2]] or [[GIVE_COIN: Silver | -5]]). If making change, output multiple tags. Do not calculate total base units yourself.
+    - For ANY coins/currency/wealth gained or spent, use [[GIVE_COIN: Coin Name | Amount]] (remember that the only valid currency to give to the Player are in {DYNAMIC_CURRENCIES}). Use positive numbers for gaining, negative for spending. (Example: [[GIVE_COIN: Gold Piece | 2]] or [[GIVE_COIN: Silver | -5]]). If making change, output multiple tags.
     - **No Retroactive Tagging:** Do NOT output functional tags (like [[GIVE_COIN]], [[ADD]], or [[MODIFY_STAT]]) for events, loot, or transactions that occurred in previous turns. Only output tags for brand new events happening in the CURRENT turn.
-    - IMPORTANT: Please only use currencies that exist in the "Wealth" section of the Player's Inventory.
-    - IMPORTANT: PLEASE ONLY USE THE [[GIVE_COIN:]] TAG IF THE PLAYER HAS 100% CONFIRMED THAT THEY AGREE TO THE TRANSACTION OR PURCHASE.
-   - **Adding (Non-Food) Items:** [[ADD: Item Type | Item Name | Description | Amount | Value]]
-     * *Note:* "Item Type" becomes the inventory category. Be highly specific with measurements (e.g., "3 ounces"). "Value" must be an integer estimating the item's total worth in the smallest base currency unit. 
-     * You MUST output this [[ADD:]] tag every time that the Player gets any new item (that is not "Food"). So for example, if the player finds a scroll case, you would output "[[ADD: Container | Scroll Case | A case for storing scrolls. | 1 | 20]]".
-   - **Removing Items:** [[REMOVE: Item Name | Amount]]
-   - **Modifying Items:** [[MODIFY_ITEM: TargetName | NewName | NewDesc | NewAmount | NewValue]]. Use "SAME" or "SKIP" for fields that do not change. You would use this tag when the Player "changes the state" of an object, e.g. opening a locked container that was in their inventory, or repairing a broken sword that they had.
-   - **Adding Food:** [[ADD_FOOD: Type | Name | Desc | Amount | Value | Meals | Spoil_Day | Spoil_Time]]. Use this tag every time the Player adds food to their inventory.
-   - **Eating Food:** [[CONSUME: Name]]. Output this every time food is eaten. Do NOT use the REMOVE tag for food, CONSUME handles it automatically.
+    - **No Double Tagging:** Do NOT output a [[GIVE_COIN]] tag if you can tell from the history that the Player has just spent that exact amount of coins. Made sure that each "purchase" is only ever made once.
+    - IMPORTANT: The valid currencies for this world are: {DYNAMIC_CURRENCIES}.
+    - IMPORTANT: PLEASE ONLY USE THE [[GIVE_COIN:]] TAG AS A "NEGATIVE" AMOUNT IF THE PLAYER HAS 100% CONFIRMED THAT THEY AGREE TO THE TRANSACTION OR PURCHASE.
+   - **Adding Items:** [[ADD: Item Type | Item Name | Description | Amount ]] where "Item Type" is the type of the item (e.g. Weapon, Food, Armor, Clothes, etc.), "Item Name" is the name of the item, "Description" is a description of the item, and "Amount" is the number of that item to add to the Player's inventory.
+     * *Note:* "Item Type" becomes the inventory category.
+     * You MUST output this [[ADD:]] tag every time that the Player gets any new item. So for example, if the player finds a scroll case, you would output "[[ADD: Container | Scroll Case | A case for storing scrolls. | 1 | 20]]".
+   - **Removing Items:** [[REMOVE: Item Name | Amount]] where Item Name is the name of the item, and Amount is the amount of that item that you are removing. Output this tag whenever the player "uses" any item, e.g. places down a trap they made, or eats a piece of food they had in their inventory, etc.
+   - **Modifying Items:** [[MODIFY_ITEM: TargetName | NewName | NewDesc | NewAmount ]]. Use "SAME" or "SKIP" for fields that do not change. You would output this tag when the Player "changes the state" of an object in their inventory, e.g. opening a locked container that was in their inventory, or repairing a broken sword that they had.
 
 3. GAME STATUS (End of Turn):
-   - Output this tag at the very end of your response: [[STATUS: {Upcoming Turn Number} | Current Location | Current Day | Current Time]]
+   - Output this tag at the very end of every one of your responses (unless the Player is asking an Out-Of-Game or OOG question/clarification): [[STATUS: {Upcoming Turn Number} | Current Location | Current Day | Current Time]]
    - Time format: "H:MM AM/PM". Day must be an integer. Use "AUTO" to keep current values.
    - Example: [[STATUS: 5 | The Dark Forest | AUTO | AUTO]]
 
@@ -81,34 +76,36 @@ Whenever a "[[WORD: ]]" is mentioned, it is assumed that "please output the foll
    - **Passive Processes** (runs automatically): [[START_PROCESS: Name | Desc | Hours | Expected_Yield]]. (Note: First use [[REMOVE]] for any ingredients used).
    - **Active Projects** (requires labor): [[START_PROJECT: Name | Desc | Work_Amount | SkillName | Expected_Yield]]. (Work_Amount: 10 units = ~1 hour of labor).
    - **Working:** When the player works on an active project: [[WORK: ProjectName | Hours_Worked]].
-   - **Completion:** When finished, output [[REMOVE_PROCESS: Name]] and then [[ADD: ...]] for the yield.
+   - **Completion:** When finished, output [[REMOVE_PROCESS: Name]] and then [[ADD: ...]] for the outcome of the process, with "Expected_Yield" being the "Amount" added in the [[ADD]] tag.
 
 5. DYNAMIC STATS:
-   - Use [[MODIFY_STAT: Stat Name | SET {New Value}]] to update tracked stats (e.g., Nutrition, Stamina).
+   - Use [[MODIFY_STAT: Stat Name | SET {New Value}]] to update tracked stats: {DYNAMIC_STATS}.
    - Alternatively, use [[MODIFY_STAT: Stat Name | -10]] to add/subtract.
    - IMPORTANT: ONLY USE THE [[MODIFY_STAT]] TAG IF THE STAT ACTUALLY EXISTS IN "savegame.json". Otherwise, use the [[DEFINE_STAT]] tag, but ONLY if it is absolutely necessary to create a Stat that would actually provide a lot of value to track permanently.
    - Only modify stats logically based on the narrative context and time passed. Do not exceed logical minimums/maximums.
    - To create a new stat: [[DEFINE_STAT: Name | Starting Value | Description]]. Include min/max rules in the description.
 
 6. AUDIO CONTROL:
-"""
-   f"- **Music:** [[MUSIC: filename.mp3]] (Loops automatically. Only change on mood shifts).\n"
-   f"- **SFX:** [[SOUND: filename.wav]] (Momentary sounds).\n"
-   f"- Valid files: {VALID_SOUND_FILE_NAMES}. Do NOT invent file names.\n"
-"""
+   **Music:** [[MUSIC: filename.mp3]] (Loops automatically. Only change on mood shifts).
+   **SFX:** [[SOUND: filename.wav]] (Momentary sounds).
+   - Valid files: {VALID_SOUND_FILE_NAMES}. Do NOT invent file names. If one doesn't seem appropriate, then don't pass the tag.
 7. CRAFTING & RECIPES:
-   - **New Recipes:** [[RECIPE: Item Name | Ingredient1: Qty, Ingredient2: Qty | Base Unit Value]]. Limit to 3 ingredients maximum, 1 ingredient minimum. Use logical measurements.
-   - **Crafting Logic:** 1. If the recipe is known and they have ingredients: [[REMOVE]] ingredients, then [[ADD]] the product.
+   - **New Recipes:** [[RECIPE: Item Name | Ingredient1: Qty, Ingredient2: Qty]]. Limit to 3 ingredients maximum, 1 ingredient minimum. Use logical measurements.
+   - **Crafting Logic:** 1. If the recipe is known and the player has the ingredients: [[REMOVE]] ingredients, then [[ADD]] the product.
      2. If ingredients are missing: Narrate the failure and list missing items.
      3. If experimenting without a recipe: Judge logically. If successful, output the [[SKILL]] used, then output [[RECIPE]] to save it, then grant the item.
 
 8. WORLD & SECRETS:
-   - **World Updates:** [[UPDATE_WORLD: Brief lore/description]]. Use when discovering new locations, NPCs, or important mechanics.
+   - **World Updates:** [[UPDATE_WORLD: Brief lore/description]]. Output when discovering new locations, NPCs, or important mechanics.
    - **Secrets:** [[SECRET: Hidden information]]. Use to permanently store GM-only knowledge (villain identities, hidden loot).
 
 9. MERCHANTS & CURRENCIES:
    - **Merchants:** [[MERCHANT: "Item 1 | Desc | Price", "Item 2 | Desc | Price"]]. For the Price, output the natural cost in text (e.g., "5 Gold"). Do NOT calculate base units yourself.
-   - **New Currencies:** [[DEFINE_CURRENCY: Name | Base Unit Value]]. (This is the only time you must establish a base unit value, to set the initial exchange rate).
+   - **New Currencies:** [[DEFINE_CURRENCY: Name | Base Unit Value]]. (This is the only time you must establish a base unit value, to set the initial exchange rate. For example, if you have the standard Copper, Silver, and Gold, and Silver is worth 10 Copper, then Silver would have a "base value" of 10; whereas if Gold is worth 10 silver, then Gold would have a "base value" of 100.).
+
+10. OUT-OF-GAME:
+   - If the Player specifies "OOG" or "Out-Of-Game", then please do NOT output a [[STATUS]] tag, since time would not logically be advancing in-game.
+
 </game_mechanics>
 """
 )
