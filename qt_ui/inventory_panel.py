@@ -1,34 +1,15 @@
 # qt_ui/inventory_panel.py
 from __future__ import annotations
-
-import json
-import logging
-import os
-import re
-
+import logging, os
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QPlainTextEdit,
-)
-
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QPlainTextEdit
 from tabulate import tabulate
-
 from file_manager import FileManager
-from time_utils import to_abs_minutes
-
 
 class InventoryPanel(QWidget):
     """Qt Inventory panel that reads/writes inventory.json and renders a readable table.
 
-    Mirrors the data behavior of the old CTk InventoryTab:
-    - JSON storage: { "Category": [ {name, desc, amount, value, ...}, ... ] }
-    - Methods used by AIManager tags: autonomous_add/remove, add_food, consume_food, modify_item
     """
 
     def __init__(self, parent: QWidget | None = None, app_context=None) -> None:
@@ -145,7 +126,7 @@ class InventoryPanel(QWidget):
             self._set_state("")
             return
 
-        headers = ["Name", "Description", "Amount", "Value (each)"]
+        headers = ["Name", "Description", "Amount", "Value"]
         
         wealth_str = "0 (None)"
         if player:
@@ -205,30 +186,15 @@ class InventoryPanel(QWidget):
                     name = str(item.get("name", "Unknown"))
                     desc = str(item.get("desc", "No desc"))
                     amt = str(item.get("amount", "1"))
-                    val = int(item.get("value", 0))
 
-                    # Expand food metadata into description
-                    meta = item.get("meta") if isinstance(item.get("meta"), dict) else None
-                    if meta and "meals" in meta:
-                        meals = meta.get("meals")
-                        spoil_day = str(meta.get("spoil_day", ""))
-                        spoil_time = str(meta.get("spoil_time", ""))
-
-                        spoil_prefix = "" if "day" in spoil_day.lower() else "Day "
-                        extra = f" [Meals: {meals}"
-                        if spoil_day and spoil_time:
-                            extra += f", Spoils: {spoil_prefix}{spoil_day} at {spoil_time}"
-                        extra += "]"
-                        desc += extra
                 elif isinstance(item, list):
                     name = str(item[0]) if len(item) > 0 else "Unknown"
                     desc = str(item[1]) if len(item) > 1 else "No desc"
                     amt = str(item[2]) if len(item) > 2 else "1"
-                    val = int(item[3]) if len(item) > 3 else 0
                 else:
                     continue
 
-                rows.append([name, desc, amt, val])
+                rows.append([name, desc, amt])
 
             parts.append(f"\n{category}\n")
             parts.append(tabulate(rows, headers, tablefmt="rounded_grid"))
@@ -239,21 +205,6 @@ class InventoryPanel(QWidget):
 
     def _set_state(self, text: str) -> None:
         self.lbl_state.setText(text or "")
-
-    # ---- Time helper ----
-
-    def _get_ticks(self, day, time_str) -> int:
-        return int(to_abs_minutes(day, time_str))
-    
-    def _safe_int(self, value, default: int = 0) -> int:
-        """Safely extract first integer from a value. Returns default if none found."""
-        if value is None:
-            return default
-        try:
-            match = re.search(r"-?\d+", str(value))
-            return int(match.group(0)) if match else default
-        except Exception:
-            return default
 
     # ---- AIManager tag helpers ----
 
@@ -274,7 +225,6 @@ class InventoryPanel(QWidget):
             new_name = parts[1] if should_update(1) else None
             new_desc = parts[2] if should_update(2) else None
             new_amt = parts[3] if should_update(3) else None
-            new_val = parts[4] if should_update(4) else None
 
             data = self.load_data()
             found = False
@@ -298,8 +248,6 @@ class InventoryPanel(QWidget):
                             item["desc"] = new_desc
                         if new_amt:
                             item["amount"] = new_amt
-                        if new_val:
-                            item["value"] = new_val
                     else:
                         if new_name:
                             item[0] = new_name
@@ -307,8 +255,6 @@ class InventoryPanel(QWidget):
                             item[1] = new_desc
                         if new_amt:
                             item[2] = new_amt
-                        if new_val:
-                            item[3] = new_val
 
                     found = True
                     break
@@ -317,17 +263,10 @@ class InventoryPanel(QWidget):
 
             if found:
                 self.save_data(data)
-                changes = []
-                if new_name:
-                    changes.append(f"Name->{new_name}")
-                if new_desc:
-                    changes.append("Description updated")
-                if new_val:
-                    changes.append("Value updated")
-                return f""
-            return f"System: Could not find item '{target}' to modify."
+                    
         except Exception as e:
             logging.exception(f"InventoryPanel.modify_item failed for arguments {raw_args}: {e}")
+        self.refresh_display()
 
     def autonomous_add(self, raw_args: str):
         try:
@@ -338,25 +277,23 @@ class InventoryPanel(QWidget):
             category = parts[0].title()
             name = parts[1]
             desc = parts[2] if len(parts) > 2 else "No description."
-            amount = parts[3] if len(parts) > 3 else "1"
-            value = parts[4] if len(parts) > 4 else "N/A"
+            amount = parts[3] if len(parts) > 3 else 1
 
-            new_item = {"name": name, "desc": desc, "amount": amount, "value": value}
+            new_item = {"name": name, "desc": desc, "amount": amount}
 
             data = self.load_data()
             if category not in data or not isinstance(data.get(category), list):
                 data[category] = []
 
-            # Stack logic (only for non-meta items)
+            # Stack logic
             found = False
             for item in data[category]:
                 if not isinstance(item, dict):
                     continue
                 if str(item.get("name", "")).lower() == str(name).lower() and "meta" not in item:
                     try:
-                        cur_amt = self._safe_int(item.get("amount", 0), 0)
-                        add_amt = self._safe_int(amount, 0)
-                        item["amount"] = str(cur_amt + add_amt)
+                        cur_amt = item.get("amount", 0)
+                        item["amount"] = str(cur_amt + amount)
                         found = True
                     except Exception as e:
                         logging.error(f"InventoryPanel.autonomous_add: stacking failed: {e}")
@@ -366,143 +303,48 @@ class InventoryPanel(QWidget):
                 data[category].append(new_item)
 
             self.save_data(data)
-            return
-        except Exception:
-            logging.exception("InventoryPanel.autonomous_add failed")
-            return f"Sorry, I had trouble adding '{raw_args}' to your inventory."
+        except Exception as e:
+            logging.exception(f"InventoryPanel.autonomous_add failed: {e}")
+        self.refresh_display()
 
     def autonomous_remove(self, raw_args: str):
+        # Format: Name | Amount
         try:
             parts = [p.strip() for p in (raw_args or "").split("|")]
-            target_name = parts[0] if parts else (raw_args or "").strip()
-            amount = self._safe_int(parts[1], 1) if len(parts) > 1 else 1
-
+            target_name = parts[0] if parts else (raw_args or "UNKNOWN ITEM").strip()
+            amount_to_remove = parts[1] if len(parts) > 1 else 1
             data = self.load_data()
             removed = False
 
             for _cat, items in data.items():
                 if not isinstance(items, list):
                     continue
-                for i in range(len(items) - 1, -1, -1):
-                    it = items[i]
-                    it_name = ""
-                    it_amt = "1"
-                    if isinstance(it, dict):
-                        it_name = str(it.get("name", ""))
-                        it_amt = str(it.get("amount", "1"))
-                    elif isinstance(it, list) and it:
-                        it_name = str(it[0])
-                        it_amt = str(it[2]) if len(it) > 2 else "1"
-                    else:
-                        continue
+                
+                for item in range(len(items) - 1):
+                    if not isinstance(item, dict): continue
+                    item = items[item]
+                    item_name = item.get("name", "UNKNOWN NAME")
+                    item_amount = item.get("amount", 1)
 
-                    if str(target_name).lower() not in it_name.lower():
+                    if str(target_name).lower() not in item_name.lower():
                         continue
 
                     try:
-                        curr = self._safe_int(it_amt, 0)
-                        new_val = curr - amount
-                        if new_val <= 0:
-                            items.pop(i)
+                        current_amount = item_amount
+                        new_amount = current_amount - amount_to_remove
+                        if new_amount <= 0:
+                            items.pop(item)
                         else:
-                            if isinstance(it, dict):
-                                it["amount"] = str(new_val)
-                            else:
-                                it[2] = str(new_val)
+                            item["amount"] = new_amount
                         removed = True
-                    except Exception:
-                        items.pop(i)
-                        removed = True
-                    break
-                if removed:
+                    except Exception as e: logging.error(f"Error removing item: {e}")
+
                     break
 
             if removed:
                 self.save_data(data)
-                return f"(Lost {amount}x {target_name})."
-            return f"System: Could not find {target_name}."
-        except Exception:
-            logging.exception("InventoryPanel.autonomous_remove failed")
-            return f"Sorry, I had trouble finding {raw_args}."
-
-    def add_food(self, raw_args: str):
-        # Format: Type | Name | Desc | Amount | Value | Meals | SpoilDay | SpoilTime
-        try:
-            parts = [p.strip() for p in (raw_args or "").split("|")]
-            if len(parts) < 6:
-                return "Error: Missing Food Data."
-
-            category = parts[0].title()  # usually Food
-            name = parts[1]
-            desc = parts[2]
-            amount = parts[3]
-            value = parts[4]
-            meals = self._safe_int(parts[5] if len(parts) > 4 else 1)
-            spoil_day = parts[6] if len(parts) > 6 else "Day 99"
-            spoil_time = parts[7] if len(parts) > 7 else "11:59 PM"
-
-            meta = {
-                "type": "food",
-                "meals": meals,
-                "spoil_day": spoil_day,
-                "spoil_time": spoil_time
-            }
-            new_item = {"name": name, "desc": desc, "amount": amount, "value": value, "meta": meta}
-
-            data = self.load_data()
-            if category not in data or not isinstance(data.get(category), list):
-                data[category] = []
-            data[category].append(new_item)
-
-            self.save_data(data)
-            return
-        except Exception:
-            logging.exception("InventoryPanel.add_food failed")
-            return f"System Error adding food: {raw_args}"
-
-    def consume_food(self, name: str, current_day, current_time):
-        try:
-            data = self.load_data()
-            current_ticks = self._get_ticks(current_day, current_time)
-
-            for _category, items in data.items():
-                if not isinstance(items, list):
-                    continue
-                for i, item in enumerate(list(items)):
-                    if not isinstance(item, dict):
-                        continue
-                    if str(item.get("name", "")).lower() != str(name).lower():
-                        continue
-
-                    meta = item.get("meta") if isinstance(item.get("meta"), dict) else None
-                    if not meta:
-                        return self.autonomous_remove(f"{name}|1")
-
-                    spoil_ticks = self._get_ticks(meta.get("spoil_day", "Day 99"), meta.get("spoil_time", "12:00 AM"))
-
-                    if current_ticks >= spoil_ticks:
-                        items.pop(i)
-                        self.save_data(data)
-                        return (
-                            f"You cannot eat {name}. It smells rotten "
-                            f"(Spoiled on {meta.get('spoil_day')} at {meta.get('spoil_time')}. "
-                            f"You decide it's best to get rid of it.)[[REMOVE: {name} | 1]]."
-                        )
-
-                    # Consume one meal
-                    meta["meals"] = int(meta.get("meals", 1)) - 1
-                    remaining = int(meta.get("meals", 0))
-
-                    if remaining <= 0:
-                        items.pop(i)
-                        msg = f"(Ate the last of {name}. It is finished.)"
-                    else:
-                        msg = f"(Ate a meal of {name}. {remaining} meals remaining.)"
-
-                    self.save_data(data)
-                    return msg
-
-            return f"System: Could not find food '{name}'."
-        except Exception:
-            logging.exception("InventoryPanel.consume_food failed")
-            return f"System: Could not consume '{name}'."
+                logging.info(f"(Player lost {amount_to_remove}x {target_name}).")
+            else: logging.error(f"Error: Could not find {target_name}.")
+        except Exception as e:
+            logging.error(f"InventoryPanel.autonomous_remove failed: {e}")
+        self.refresh_display()

@@ -252,18 +252,21 @@ class Player:
     def perform_skill_check(self, skill_name):
         """
         Handles rolling, leveling up, and stat modifiers internally.
-        Returns a tuple: (total_roll, result_message_string)
         """
         clean_name = (skill_name or "").split("(")[0].strip().title()
         data = self.load_skills_data()
         
         skill_entry = next((item for item in data if str(item.get("Name", "")).lower() == clean_name.lower()), None)
         
-        #msg_lines = []
         if not skill_entry:
             skill_entry = {"Name": clean_name, "Level": 0, "XP": 0, "Threshold": 5}
             data.append(skill_entry)
             logging.info(f"Learned new skill: {clean_name}!")
+            
+        name = skill_entry["Name"]
+        level = int(skill_entry["Level"])
+        xp = int(skill_entry["XP"])
+        threshold = int(skill_entry["Threshold"])
 
         die_roll = random.randint(1, 20)
         try:
@@ -276,32 +279,18 @@ class Player:
             pass
 
         # Handle XP & Leveling
-        leveled_up = False
-        if skill_entry["Level"] < 5:
-            skill_entry["XP"] = int(skill_entry.get("XP", 0) or 0) + 1
-            xp = skill_entry["XP"]
-            th = int(skill_entry.get("Threshold", 5) or 5)
+        if level < 5:
+            skill_entry["XP"] = xp + 1
 
-            if xp >= th:
-                skill_entry["Level"] = int(skill_entry.get("Level", 0) or 0) + 1
+            if xp >= threshold:
+                skill_entry["Level"] = level + 1
                 skill_entry["XP"] = 0
-                skill_entry["Threshold"] = th + 2
-                leveled_up = True
+                skill_entry["Threshold"] = threshold + 2
+                logging.info(f"Leveled up {name} Skill from level {level} to {skill_entry["Level"]}!")
 
         self.save_skills_data(data)
         skill_bonus = int(skill_entry.get("Level", 0) or 0)
 
         total = die_roll + skill_bonus
         return total
-        """
-        msg_lines = []
-        msg_lines.append(f"Rolling {clean_name}: {die_roll} + ({skill_bonus} (Skill) = {total}")
-        
-        if leveled_up:
-            msg_lines.append(f"LEVEL UP! {clean_name} is now Level {skill_entry['Level']}!")
-        else:
-            msg_lines.append(f"{clean_name}: {skill_entry.get('XP', 0)} / {skill_entry.get('Threshold', 0)} XP towards next level up.")
-
-        return total, "\n".join(msg_lines)
-        """
         

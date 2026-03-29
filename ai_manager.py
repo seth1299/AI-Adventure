@@ -1,14 +1,10 @@
 from google import genai
 from google.genai import types
-import threading
-import re
-import os
-import logging
-import random
+import threading, re, os, logging, random, csv
 from config import GEMINI_API_KEY, MODEL
 from tabulate import tabulate
-import csv
 from rapidfuzz import process, fuzz
+from config import VALID_SOUND_FILE_NAMES
 
 class AIManager:
     def __init__(self, app):
@@ -24,13 +20,7 @@ class AIManager:
         return text.replace("‘", "'").replace("’", "'").replace("“", '"').replace("”", '"')
 
     def start_new_game_from_wizard(self, data):
-        """Compiles the wizard data into a one-shot prompt to generate the game start."""
-        if os.path.exists(self.app.creation_summary_path):
-            try:
-                os.remove(self.app.creation_summary_path)
-            except Exception as e:
-                logging.error(f"Error clearing creation summary: {e}")
-                
+        """Compiles the wizard data into a one-shot prompt to generate the game start."""                
         self.app.player.update_world_state(1, data['starting_location'] or "Unknown", 1, "7:00 A.M.")
         
         main_types = [
@@ -71,17 +61,15 @@ class AIManager:
         ai_setting = data['world']['setting'] or f"The main setting of the world must make sense for the {chosen_genre} genre."
         ai_tech = data['world']['tech'] or f"The technology level is strictly: {chosen_tech}."
         
-        logging.info(f"Chosen genre: {chosen_genre}\nChosen vibe: {chosen_vibe}\nAI Genre: {ai_genre}\nAI Setting {ai_setting}\nAI Tech: {ai_tech}")
-        
-        # Format skills, handling blank descriptions
         # Format focus
         focus_text = ', '.join(data['focus']) if data['focus'] else "AI, please pick a balanced focus for the game (e.g. any combination of Combat, Exploration, Trading/Economy, Social/Roleplay)."
         
+        # Format skills, handling blank descriptions
         skills_text = ""
-        for s in data['skills']:
-            name = s['name'] if len(s['name']) > 1 else f'AI, please invent a name for this skill; it must be relevant to a {ai_genre} type of game with a focus on {focus_text}.'
-            desc = s['desc'] if len(s['desc']) > 1 else f'AI, please invent a description for this {name} skill.'
-            skills_text += f"- Level {s['level']}: {name} ({desc})\n"
+        for skill in data['skills']:
+            name = skill['name'] if len(skill['name']) > 1 else f'AI, please invent a name for this skill; it must be relevant to a {ai_genre} type of game with a focus on {focus_text}.'
+            description = skill['description'] if len(skill['description']) > 1 else f'AI, please invent a description for this {name} skill.'
+            skills_text += f"- Level {skill['level']}: {name} ({description})\n"
             
         # If the player left EVERY skill blank:
         if not skills_text:
@@ -90,18 +78,19 @@ class AIManager:
         if data['currencies']:
             currencies_text = ", ".join([f"{c['name']} (Worth {c['value']} base units)" for c in data['currencies']])
         else:
-            currencies_text = f"No specific currencies were created. (AI, you MUST invent a localized currency system that would make sense for a {ai_genre} type of game. Output [[DEFINE_CURRENCY: Name | Value]] for each denomination of currency, starting with a base unit of 1.)"
+            currencies_text = f"No specific currencies were created. (AI, you MUST invent a localized currency system that would make sense for a {ai_genre} type of game.)"
         
         stats_text = ""
-        for st in data['stats']:
-            if st['enabled']:
-                stats_text += f"- {st['name']}: Starts at {st['value']} (Rules: {st['desc']})\n"
+        for stat in data['stats']:
+            if stat['enabled']:
+                stats_text += f"- {stat['name']}: Starts at {stat['value']} (Rules: {stat['description']})\n"
         if not stats_text: 
-            stats_text = f"No specific Stats were specified (AI, you MUST invent 2 to 3 tracked stats fitting the {ai_genre} genre, such as Health, Sanity, Mana, etc. Output [[DEFINE_STAT: Name | Starting Value | Description]] for each stat that you create.)"
-        
+            stats_text = f"No specific Stats were specified (AI, you MUST invent 2 to 3 tracked stats fitting the {ai_genre} genre, such as Health, Sanity, Mana, etc.)"
         
         random_gender = random.choice(["Male", "Female", "Non-Binary"])
         random_pronouns = "He/Him" if random_gender == "Male" else "She/Her" if random_gender == "Female" else "They/Them"
+        
+        logging.info(f"Creating a {ai_genre} genre game set in {ai_setting} with the tech level {ai_tech}...")
         # The prompt is now safely un-indented!
         prompt = f"""
 System: Initialize a new RPG adventure using the following parameters.
@@ -135,18 +124,16 @@ Starting Location: {data['starting_location'] or f"Start the Player off in a Loc
 Final Comments/Rules: {data['final_comments'] or ''}
 
 INSTRUCTIONS:
-Output the following SPECIAL TAGS to set up the game files based on this data. The World should have a lengthy description, as it is quite important because it is describing the entire World as a whole. The World's description should be at least 25 sentences at MINIMUM; as it should be describing EVERYTHING at a basic level (e.g. the basic Economy system, the common Species of the World, the known Geography of the World and any important locations of interest, any important NPCs and their descriptions, any tie-ins to the Player's Background that there might be, any interesting politics (if any), any religions/cults of significance, et cetera.) Please make sure to put new lines where appropriate, separating thoughts and ideas by paragraphs. 
+Output the following tags to set up the game files based on this data. The World should have a lengthy description, as it is quite important because it is describing the entire World as a whole. The World's description should be at least 25 sentences at MINIMUM; as it should be describing EVERYTHING at a basic level (e.g. the basic Economy system, the common Species of the World, the known Geography of the World and any important locations of interest, any important NPCs and their descriptions, any tie-ins to the Player's Background that there might be, any interesting politics (if any), any religions/cults of significance, et cetera.) Please make sure to put new lines where appropriate, separating thoughts and ideas by paragraphs. 
 [[WORLD_INFO: Write a summary of the game focus, world setting, tone, currency, and tech level here, following the instructions above.]]
 [[CHARACTER_INFO: Write the full character biography, appearance, and details here. Make sure to include the Player Character's Name, Age, Gender/Pronouns, Orientation, and Background.]]
-[[SKILL: Name | Description | Level]] (Output one for EACH skill. If there are Skills that the Player left blank, please invent a Skill Name and a Description for the Skill.
-[[ADD_FOOD: Type | Name | Desc | Amount | Value (MUST be an integer representing the number of smallest base currency units that this is worth) | Meals | SpoilDay | SpoilTime]] (Add logical starting food for the Player Character. Repeat this tag for EACH FOOD ITEM that the Player will start out with.)
-[[ADD: Type | Name | Description | Amount | Value (MUST be an integer representing the number of smallest base currency units that this is worth)]] (Add logical starting equipment/wealth. Repeat this tag for EACH NON-FOOD and NON-CURRENCY item that the Player will start out with.)
-[[DEFINE_CURRENCY: Name | Value]] (If no currencies were provided, output this for EACH invented denomination. Example: [[DEFINE_CURRENCY: Iron Bit | 1]]). THIS TAG MUST COME BEFORE [[GIVE_COIN]].
-[[DEFINE_STAT: Name | Value | Description]] (If NO tracked stats were provided, output this tag for EACH invented stat. Be as specific as possible for the description of each stat, including positive effects for having a high value of the stat, and/or negative effects for having a low value of the stat (and what happens if the stat hits 0). Example: [[DEFINE_STAT: Sanity | 100 | Represents your mental fortitude against the Eldritch. Depletes when seeing horrors; replenishes when taking time to rest and give your brain a break without witnessing Eldritch horrors. High sanity allows your character to have a clear head and more easily deal with Eldritch horrors. Low sanity means that your character will have issues with Eldritch horrors when encountering them. Max value: 100.]])
-[[GIVE_COIN: X]] (Give the player a logical amount of starting base currency for their background. Repeat this tag however many times you need to if you are adding different types of coins; e.g. "[[GIVE_COIN: 5 Copper Pieces]] [[GIVE_COIN: 5 Silver Pieces]] [[GIVE_COIN: 5 Gold Pieces]]". Please only use whatever currency you described previous in the "DEFINE_CURRENCY" tag from earlier.)
+[[SKILL: Name | Description | Level]] ({"Output one for EACH skill in " if skills_text else ""} If there are Skills or Descriptions that are blank, please invent a Skill Name and/or a Description for the Skill.)
+[[ADD: Type | Name | Description | Amount]] (Add logical starting equipment. Repeat this tag for each item that the Player will start out with.)
+[[DEFINE_CURRENCY: Name | Value]] ({f"Output this tag for EACH item in {currencies_text}." or "Invent a couple of your own currencies."} Example: [[DEFINE_CURRENCY: Iron Bit | 1]]).
+[[DEFINE_STAT: Name | Value | Description]] ( {f"Output this tag for EACH item in {stats_text}." or "Invent a couple of your own stats. Be as specific as possible for the description of each stat, including positive effects for having a high value of the stat, and/or negative effects for having a low value of the stat (and what happens if the stat hits 0)."} Example usage: [[DEFINE_STAT: Sanity | 100 | Represents your mental fortitude against the Eldritch. Depletes when seeing horrors; replenishes when taking time to rest and give your brain a break without witnessing Eldritch horrors. High sanity allows your character to have a clear head and more easily deal with Eldritch horrors. Low sanity means that your character will have issues with Eldritch horrors when encountering them. Max value: 100.]])
+[[GIVE_COIN: X]] (Give the player a logical amount of starting base currency for their background. Repeat this tag however many times you need to if you are adding different types of coins; e.g. "[[GIVE_COIN: 5 Copper Pieces]] [[GIVE_COIN: 5 Silver Pieces]] [[GIVE_COIN: 5 Gold Pieces]]". Please only use the currency listed in {currencies_text}.)
 [[STATUS: 1 | {data['starting_location'] or 'Unknown (Invent a starting location name)'} | 1 | 7:00 A.M.]]
-[[MUSIC: FILENAME_PLACEHOLDER.mp3]]
-[[START_GAME]]
+[[MUSIC: FILENAME_PLACEHOLDER.mp3]] (where FILENAME_PLACEHOLDER is the name of the music that you want to play, out of these specific files: {VALID_SOUND_FILE_NAMES})
 
 After outputting the tags, summarize the first starting turn, describe the surroundings vividly, and finish by asking "What do you do now?" and suggesting a few possible actions.
 """
@@ -157,11 +144,8 @@ After outputting the tags, summarize the first starting turn, describe the surro
     def handle_player_action(self, user_text):
         """Constructs the context and prompt, then threads the AI query."""
         self.app.story_tab.set_controls_state(False, "GM is thinking...")
-        #self.app.story_tab.print_text("\n")
         user_text = "> " + user_text
-        #self.app.story_tab.print_text("")
         self.app.story_tab.print_text(user_text)
-        #self.app.story_tab.print_text("")
 
         # 1. Gather Context from Tabs
         context_data = ""
@@ -169,10 +153,6 @@ After outputting the tags, summarize the first starting turn, describe the surro
             if name != "Story" and name != "Journal": 
                 if hasattr(widget, 'get_text'):
                     context_data += f"\n[{name.upper()}]:\n{widget.get_text().strip()}\n"
-                    
-        #for name, description in self.app.tracked_stats.items():
-            #if name != None and description != None:
-                #context_data += f"This is a stat that needs to be tracked; please review the description and see if it needs to be updated, and if so, then use the tag [[MODIFY_STAT: Name | SET Number]], with Number being the new value. {name}: {description}"
                     
         try:
             if os.path.exists(self.app.secret_path):
@@ -186,11 +166,11 @@ After outputting the tags, summarize the first starting turn, describe the surro
         # 2. Gather Status
         next_turn = self.app.player.turn + 1
         stats_str = ""
-        for st in self.app.player.tracked_stats:
-            if st.get("enabled", True):
+        for stat in self.app.player.tracked_stats:
+            if stat.get("enabled", True):
                 # Grab the description if it exists, otherwise leave it blank
-                desc_text = f" (Rules: {st.get('desc')})" if st.get('desc') else ""
-                stats_str += f"{st['name']}: {st['value']}{desc_text}\n"
+                desc_text = f" (Rules: {stat.get('description')})" if stat.get('description') else ""
+                stats_str += f"{stat['name']}: {stat['value']}{desc_text}\n"
         status_context = (
             f"\n[CURRENT STATUS]\n"
             f"Player's current Location: {self.app.player.location}\n"
@@ -233,14 +213,6 @@ After outputting the tags, summarize the first starting turn, describe the surro
             # 1. SETUP FOUNDATION FIRST (Creation Specific Tags)
             if is_startup:
                 self.app.story_tab.set_controls_state(False, "GM is thinking...")
-                summary_match = re.search(r"\[\[STEP_SUMMARY:\s*(.*?)\]\]", ai_text, re.DOTALL)
-                if summary_match:
-                    new_summary = summary_match.group(1).strip()
-                    try:
-                        with open(self.app.creation_summary_path, "a", encoding="utf-8") as f:
-                            f.write(f"- {new_summary}\n")
-                    except Exception as e:
-                        logging.error(f"Error writing creation summary: {e}")
                 
                 logging.info("Defining stats now...")
                 invented_stats = []
@@ -249,7 +221,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
                     s_name = match.group(1).strip()
                     s_val = int(match.group(2))
                     s_desc = match.group(3).strip()
-                    invented_stats.append({"name": s_name, "value": s_val, "enabled": True, "desc": s_desc})
+                    invented_stats.append({"name": s_name, "value": s_val, "enabled": True, "description": s_desc})
                 
                 if invented_stats:
                     self.app.player.tracked_stats.extend(invented_stats)
@@ -306,15 +278,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
             tag_parser.process_standard_tags(ai_text, is_startup=is_startup)    
 
             # 3. FINALIZE STARTUP & SAVE
-            if is_startup:
-                #self.app.story_tab.print_text("\n[System: Creation Complete. Saving Data...]\n", sender="System")
-                
-                if os.path.exists(self.app.creation_summary_path):
-                    try:
-                        os.remove(self.app.creation_summary_path)
-                    except Exception as e:
-                        logging.error(f"Error deleting creation summary: {e}")
-                
+            if is_startup:                
                 logging.info("Saving game now...")
                 self.app.save_game()
                 
@@ -323,7 +287,6 @@ After outputting the tags, summarize the first starting turn, describe the surro
                     self.app.after(0, lambda: self.app.notebook_widgets["Inventory"].refresh_display())
 
                 logging.info("Starting game now...")
-                ai_text = ai_text.replace("[[START_GAME]]", "")
                 clean_creation_text = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", ai_text, flags=re.DOTALL).strip()
                 self.app.conversation_history.append(f"{clean_creation_text}")
 
@@ -424,18 +387,10 @@ class TagParser:
                 time=status_match.group(4).strip()
             )
             self.app._sync_player_state_to_ui()
-            """
-            if not is_startup and "Processing" in self.app.notebook_widgets:
-                finished_items = self.app.notebook_widgets["Processing"].check_active_tasks(self.app.player.day, self.app.player.time)
-                if finished_items:
-                    sys_msg = f"System: Process completed - {', '.join(finished_items)}"
-                    self.app.story_tab.print_text(sys_msg, sender="System")
-                    self.app.conversation_history.append(sys_msg)
-            """
                     
         for match in re.finditer(r"\[\[RECIPE:\s*(.*?)\]\]", ai_text, re.DOTALL):
             res = self.app.notebook_widgets["Recipes"].add_recipe_from_tag(match.group(1))
-            #self.app.story_tab.print_text(res, sender="System")
+            if res: logging.info(res)
                     
         for match in re.finditer(r"\[\[START_PROCESS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL):
             p_name = match.group(1).strip()
@@ -443,11 +398,11 @@ class TagParser:
             p_slots = match.group(3).strip()
             p_yield = match.group(4).strip()
             res = self.app.notebook_widgets["Processing"].add_timed_process(p_name, p_desc, p_slots, self.app.player.day, self.app.player.time, p_yield)
-            #self.app.story_tab.print_text(res, sender="System")
+            if res: logging.info(res)
             
         for match in re.finditer(r"\[\[REMOVE_PROCESS:\s*(.*?)\]\]", ai_text, re.DOTALL):
             res = self.app.notebook_widgets["Processing"].remove_process(match.group(1).strip())
-            #if res: self.app.story_tab.print_text(res, sender="System")
+            if res: logging.info(res)
             
         for match in re.finditer(r"\[\[START_PROJECT:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL):
             p_name = match.group(1).strip()
@@ -457,7 +412,7 @@ class TagParser:
             p_yield = match.group(5).strip()
             lvl = self.app._get_skill_level(skill_name)
             res = self.app.notebook_widgets["Processing"].add_project(p_name, p_desc, work_required, skill_name, lvl, p_yield)
-            #if res: self.app.story_tab.print_text(res, sender="System")
+            if res: logging.info(res)
 
         for match in re.finditer(r"\[\[WORK:\s*(.*?)\s*\|\s*([\d.]+)\]\]", ai_text, re.DOTALL):
             project_name = match.group(1).strip()
@@ -465,33 +420,9 @@ class TagParser:
             req_skill = self.app.notebook_widgets["Processing"].get_required_skill(project_name) or ""
             lvl = self.app._get_skill_level(req_skill) if req_skill else 0
             res = self.app.notebook_widgets["Processing"].apply_work_hours(project_name, hours_worked, lvl)
-            
+            if res: logging.info(res)
             # Update time locally via Main App helper
             self.app._advance_time_hours(hours_worked)
-            """
-            completed = self.app.notebook_widgets["Processing"].check_active_tasks(self.app.player.day, self.app.player.time)
-            if completed:
-                sys_msg = f"System: Process completed - {', '.join(completed)}"
-                self.app.story_tab.print_text(sys_msg, sender="System")
-                self.app.conversation_history += f"\n{sys_msg}\n"
-            
-            if res: self.app.story_tab.print_text(res, sender="System")
-            """
-            
-        for match in re.finditer(r"\[\[ADD_FOOD:\s*(.*?)\]\]", ai_text, re.DOTALL):
-            res = self.app.notebook_widgets["Inventory"].add_food(match.group(1))
-            #self.app.story_tab.print_text(res, sender="GM")
-            
-        for match in re.finditer(r"\[\[CONSUME:\s*(.*?)\]\]", ai_text, re.DOTALL):
-            f_name = match.group(1).strip()
-            res = self.app.notebook_widgets["Inventory"].consume_food(f_name, self.app.player.day, self.app.player.time)
-            for match in re.finditer(r"\[\[MODIFY_STAT:\s*(.*?)\s*\|\s*(.*?)\]\]", res, re.DOTALL):
-                stat_name = match.group(1).strip()
-                stat_val = match.group(2).strip()
-                self.app.player.modify_stat(stat_name, stat_val)
-                self.app._sync_player_state_to_ui()
-                res = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", res).strip()
-            #self.app.story_tab.print_text(res, sender="System")
             
         for match in re.finditer(r"\[\[SECRET:\s*(.*?)\]\]", ai_text, re.DOTALL):
             try:
@@ -596,9 +527,9 @@ class TagParser:
             s_desc = match.group(3).strip()
             
             # Check if stat already exists before appending to prevent double-parsing
-            existing = next((s for s in self.app.player.tracked_stats if s.get("name", "").lower() == s_name.lower()), None)
+            existing = next((stat for stat in self.app.player.tracked_stats if stat.get("name", "").lower() == s_name.lower()), None)
             if not existing:
-                self.app.player.tracked_stats.append({"name": s_name, "value": s_val, "enabled": True, "desc": s_desc})
+                self.app.player.tracked_stats.append({"name": s_name, "value": s_val, "enabled": True, "description": s_desc})
                 
     def process_inline_tags(self, ai_text):
         """Processes tags that need to be replaced with actual text before displaying."""
@@ -633,7 +564,7 @@ class TagParser:
                 
                 if len(parts) >= 3:
                     name = parts[0]
-                    desc = parts[1]
+                    description = parts[1]
                     price_raw = parts[2]
                     
                     # Convert the raw base unit integer into nicely formatted currency
@@ -643,7 +574,7 @@ class TagParser:
                     except ValueError:
                         formatted_price = price_raw # Fallback if AI hallucinates text instead of an int
                         
-                    table_data.append([name, desc, formatted_price])
+                    table_data.append([name, description, formatted_price])
                 else:
                     # Fallback if the AI messes up the pipe formatting
                     table_data.append(parts + [""] * (3 - len(parts)))
