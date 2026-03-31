@@ -1,7 +1,8 @@
 # qt_ui/story_panel.py
 from __future__ import annotations
-
+import re
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtTextToSpeech import QTextToSpeech
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -12,8 +13,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QSizePolicy,
     QFrame,
-    QProgressBar # Added for visual stats
-    # QMenu removed as it's now handled by MainWindow
+    QProgressBar,
+    QCheckBox
 )
 
 class StoryPanel(QWidget):
@@ -30,6 +31,9 @@ class StoryPanel(QWidget):
             "time": "Morning",
             "dynamic_stats": []
         }
+        
+        self.tts = QTextToSpeech(self)
+        self.narrator_enabled = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -50,6 +54,11 @@ class StoryPanel(QWidget):
         self.stats_layout = QVBoxLayout()
         self.stats_layout.setSpacing(2)
         self.header_layout.addLayout(self.stats_layout)
+        
+        self.chk_narrator = QCheckBox("🔊 Enable Narrator")
+        self.chk_narrator.setStyleSheet("font-weight: bold;")
+        self.chk_narrator.toggled.connect(self._toggle_narrator)
+        self.header_layout.addWidget(self.chk_narrator)
 
         root.addLayout(self.header_layout)
 
@@ -89,6 +98,11 @@ class StoryPanel(QWidget):
 
         # Initial UI render
         self._update_status_ui()
+        
+    def _toggle_narrator(self, checked: bool):
+        self.narrator_enabled = checked
+        if not checked:
+            self.tts.stop()
 
     def append_text(self, text: str) -> None:
         #if not text:
@@ -185,15 +199,18 @@ class StoryPanel(QWidget):
                 self.txt_input.setPlaceholderText(status_text)
 
     def print_text(self, text: str, *, sender: str = "GM") -> None:
-        #if not text or text == "":
-        #    return
-        #prefix = f"{sender}: " if sender else ""
         self.append_text(f"{text}")
+        if self.narrator_enabled and not text.startswith("> "):
+            # Strip markdown formatting like **bold** or *italics* so it doesn't say "asterisk"
+            clean_text = re.sub(r'[*_~`#]', '', text, re.DOTALL)
+            self.tts.say(clean_text)
 
     def _emit_send(self) -> None:
         text = (self.txt_input.text() or "").strip()
         if not text:
             return
+        if self.narrator_enabled:
+            self.tts.stop()
         self.txt_input.clear()
         self.send_requested.emit(text)
 
