@@ -64,16 +64,31 @@ class AIManager:
         # Format focus
         focus_text = ', '.join(data['focus']) if data['focus'] else "AI, please pick a balanced focus for the game (e.g. any combination of Combat, Exploration, Trading/Economy, Social/Roleplay)."
         
-        # Format skills, handling blank descriptions
+        # Format skills, handling blank descriptions, and tracking missing skills
         skills_text = ""
+        
+        # This dictionary tracks the default amount of skills required for each level
+        expected_skills = {5: 1, 4: 2, 3: 3, 2: 4, 1: 6} 
+        
         for skill in data['skills']:
-            name = skill['name'] if len(skill['name']) > 1 else f'AI, please invent a name for this skill; it must be relevant to a {ai_genre} type of game with a focus on {focus_text}.'
-            description = skill['description'] if len(skill['description']) > 1 else f'AI, please invent a description for this {name} skill.'
+            name = skill['name']
+            
+            # Check if the player left the description blank (using the correct 'desc' key)
+            description = skill['desc'] if len(skill['desc']) >= 1 else f'AI, please invent a description for the {name} skill.'
+            
             skills_text += f"- Level {skill['level']}: {name} ({description})\n"
             
-        # If the player left EVERY skill blank:
-        if not skills_text:
-            skills_text = f"(Please invent 16 starting skills fitting the world following this exact level distribution: one Lvl 5, two Lvl 4, three Lvl 3, four Lvl 2, six Lvl 1. The Skills must be relevant to a {ai_genre} type of game with a focus on {focus_text}.)"
+            # Deduct from our expected count since the player provided this level
+            if skill['level'] in expected_skills:
+                expected_skills[skill['level']] -= 1
+                
+        # Check if the player left any of the 16 skills completely blank by finding numbers > 0
+        missing_skills = [f"{count} Lvl {lvl}" for lvl, count in expected_skills.items() if count > 0]
+        
+        # If there are missing skills, dynamically append an instruction for the AI to fill the gaps
+        if missing_skills:
+            missing_str = ", ".join(missing_skills)
+            skills_text += f"\n(AI, the Player left some skills blank. Please invent the remaining starting skills to fit the {ai_genre} world and {focus_text} focus. You MUST follow this exact missing level distribution to reach 16 total skills: {missing_str}.)\n"
             
         if data['currencies']:
             currencies_text = ", ".join([f"{c['name']} (Worth {c['value']} base units)" for c in data['currencies']])
@@ -83,15 +98,33 @@ class AIManager:
         stats_text = ""
         for stat in data['stats']:
             if stat['enabled']:
-                stats_text += f"- {stat['name']}: Starts at {stat['value']} (Rules: {stat['description']})\n"
+                stats_text += f"- {stat['name']}: " + f"Starts at {stat['value']}"
         if not stats_text: 
             stats_text = f"No specific Stats were specified (AI, you MUST invent 2 to 3 tracked stats fitting the {ai_genre} genre, such as Health, Sanity, Mana, etc.)"
         
         random_gender = random.choice(["Male", "Female", "Non-Binary"])
         random_pronouns = "He/Him" if random_gender == "Male" else "She/Her" if random_gender == "Female" else "They/Them"
         
+        # --- NEW: Extracting the fallback logic to variables before the f-string ---
+        
+        char_gender = data['character']['gender'] or random_gender
+        char_pronouns = data['character']['pronouns'] or random_pronouns
+        
+        char_name = data['character']['name'] or f"The Player Character's name was not specified, please create one for them (The Player Character is a {char_gender}). Use your imagination; please do not rely on just your training data."
+        char_age = data['character']['age'] or "The Player Character's age was not specified, please create one for them."
+        char_orientation = data['character']['orientation'] or "The Player Character's orientation was not specified, please create one for them."
+        char_bg = data['character']['background'] or f"The Player Character's background was not specified, please create one for them that would make sense for a character who grew up in this {ai_genre} type of world with a Skill List of {skills_text}."
+        
+        start_loc = data['starting_location'] or f"Start the Player off in a Location that would make sense for the {ai_genre}."
+        start_loc_status = data['starting_location'] or "Unknown (Invent a starting location name)"
+        
+        species = data['world']['species'] or f"No specific species were specified by the Player. Feel free to create however many species you think would make sense for a {ai_genre} type of game."
+        
+        final_comments = data['final_comments'] or ''
+        
         logging.info(f"Creating a {ai_genre} genre game set in {ai_setting} with the tech level {ai_tech}...")
-        # The prompt is now safely un-indented!
+        
+        # The prompt is now safely un-indented and variables are pre-computed!
         prompt = f"""
 System: Initialize a new RPG adventure using the following parameters.
 CRITICAL INSTRUCTION: If any parameter says "Not specified", you must creatively invent a fitting, unique value for it based on the rest of the context.
@@ -101,7 +134,7 @@ DO NOT use common AI fantasy names (e.g., Elara, Kael, Lyra, Aric, Seraphina, Or
 World Setting: {ai_setting}
 Genre/Tone: {ai_genre}
 Tech Level: {ai_tech}
-Species/Races: {data['world']['species'] if not (None or "") else f'No specific species were specified by the Player. Feel free to create however many species you think would make sense for a {ai_genre} type of game.'}
+Species/Races: {species}
 Game Focus: {focus_text}
 
 World Economy (Currencies):
@@ -111,28 +144,28 @@ Tracked Player Stats:
 {stats_text}
 
 Character Bio:
-Name: {data['character']['name'] or f'The Player Character\'s name was not specified, please create one for them (The Player Character is a {data['character']['gender'] or random_gender}). Use your imagination; please do not rely on just your training data.'}
-Age: {data['character']['age'] or 'The Player Character\'s age was not specified, please create one for them.'}
-Gender/Pronouns: {data['character']['gender'] or f'{random_gender}.'} / {data['character']['pronouns'] or random_pronouns}
-Orientation: {data['character']['orientation'] or 'The Player Character\'s orientation was not specified, please create one for them.'}
-Background: {data['character']['background'] or f'The Player Character\'s background was not specified, please create one for them that would make sense for a character who grew up in this {ai_genre} type of world with a Skill List of {skills_text}.'}
+Name: {char_name}
+Age: {char_age}
+Gender/Pronouns: {char_gender} / {char_pronouns}
+Orientation: {char_orientation}
+Background: {char_bg}
 
 Starting Skills:
 {skills_text}
 
-Starting Location: {data['starting_location'] or f"Start the Player off in a Location that would make sense for the {ai_genre}."}
-Final Comments/Rules: {data['final_comments'] or ''}
+Starting Location: {start_loc}
+Final Comments/Rules: {final_comments}
 
 INSTRUCTIONS:
 Output the following tags to set up the game files based on this data. The World should have a lengthy description, as it is quite important because it is describing the entire World as a whole. The World's description should be at least 25 sentences at MINIMUM; as it should be describing EVERYTHING at a basic level (e.g. the basic Economy system, the common Species of the World, the known Geography of the World and any important locations of interest, any important NPCs and their descriptions, any tie-ins to the Player's Background that there might be, any interesting politics (if any), any religions/cults of significance, et cetera.) Please make sure to put new lines where appropriate, separating thoughts and ideas by paragraphs. 
 [[WORLD_INFO: Write a summary of the game focus, world setting, tone, currency, and tech level here, following the instructions above.]]
 [[CHARACTER_INFO: Write the full character biography, appearance, and details here. Make sure to include the Player Character's Name, Age, Gender/Pronouns, Orientation, and Background.]]
-[[SKILL: Name | Description | Level]] ({"Output one for EACH skill in " if skills_text else ""} If there are Skills or Descriptions that are blank, please invent a Skill Name and/or a Description for the Skill.)
+[[SKILL: Skill Name | Description | Level]] (You MUST output this tag exactly 16 times. First, output one tag for EVERY skill already provided in the "Starting Skills" list above, preserving their exact Names, Descriptions, and Levels. Then, output tags for the remaining skills you were asked to invent.)
 [[ADD: Type | Name | Description | Amount]] (Add logical starting equipment. Repeat this tag for each item that the Player will start out with.)
-[[DEFINE_CURRENCY: Name | Value]] ({f"Output this tag for EACH item in {currencies_text}." or "Invent a couple of your own currencies."} Example: [[DEFINE_CURRENCY: Iron Bit | 1]]).
-[[DEFINE_STAT: Name | Value | Description]] ( {f"Output this tag for EACH item in {stats_text}." or "Invent a couple of your own stats. Be as specific as possible for the description of each stat, including positive effects for having a high value of the stat, and/or negative effects for having a low value of the stat (and what happens if the stat hits 0)."} Example usage: [[DEFINE_STAT: Sanity | 100 | Represents your mental fortitude against the Eldritch. Depletes when seeing horrors; replenishes when taking time to rest and give your brain a break without witnessing Eldritch horrors. High sanity allows your character to have a clear head and more easily deal with Eldritch horrors. Low sanity means that your character will have issues with Eldritch horrors when encountering them. Max value: 100.]])
+[[DEFINE_CURRENCY: Name | Value]] ({"Output this tag for EACH item in " + currencies_text if data['currencies'] else "Invent a couple of your own currencies."} Example: [[DEFINE_CURRENCY: Iron Bit | 1]]).
+[[DEFINE_STAT: Name | Value | Description]] ( {"Output this tag for EACH item in " + stats_text if data['stats'] else "Invent a couple of your own stats. Be as specific as possible for the description of each stat, including positive effects for having a high value of the stat, and/or negative effects for having a low value of the stat (and what happens if the stat hits 0)."} Example usage: [[DEFINE_STAT: Sanity | 100 | Represents your mental fortitude against the Eldritch. Depletes when seeing horrors; replenishes when taking time to rest and give your brain a break without witnessing Eldritch horrors. High sanity allows your character to have a clear head and more easily deal with Eldritch horrors. Low sanity means that your character will have issues with Eldritch horrors when encountering them. Max value: 100.]])
 [[GIVE_COIN: X]] (Give the player a logical amount of starting base currency for their background. Repeat this tag however many times you need to if you are adding different types of coins; e.g. "[[GIVE_COIN: 5 Copper Pieces]] [[GIVE_COIN: 5 Silver Pieces]] [[GIVE_COIN: 5 Gold Pieces]]". Please only use the currency listed in {currencies_text}.)
-[[STATUS: 1 | {data['starting_location'] or 'Unknown (Invent a starting location name)'} | 1 | 7:00 A.M.]]
+[[STATUS: 1 | {start_loc_status} | 1 | 7:00 A.M.]]
 [[MUSIC: FILENAME_PLACEHOLDER.mp3]] (where FILENAME_PLACEHOLDER is the name of the music that you want to play, out of these specific files: {VALID_SOUND_FILE_NAMES})
 
 After outputting the tags, summarize the first starting turn, describe the surroundings vividly, and finish by asking "What do you do now?" and suggesting a few possible actions.
@@ -192,14 +225,13 @@ After outputting the tags, summarize the first starting turn, describe the surro
     def query_ai(self, prompt, user_text, recursion_depth=0, is_startup=False):
         """Sends the prompt to Gemini and processes all resulting tags."""
         current_rules = self.app.load_rules()
-        ai_temp = 1.0 if is_startup else 0.7
             
         try:
             response = self.client.models.generate_content(
                 model=MODEL,
                 config=types.GenerateContentConfig(
                     system_instruction=current_rules,
-                    temperature=ai_temp
+                    temperature=0.9
                 ),
                 contents=prompt
             )

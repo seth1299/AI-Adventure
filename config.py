@@ -8,7 +8,7 @@ load_dotenv(dotenv_path)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise RuntimeError("GEMINI_API_KEY not found. Make sure it exists in your .env or environment variables.")
-MODEL = "gemini-3.1-flash-lite-preview"
+MODEL = "gemini-3.1-pro-preview"
 SAVES_DIR = "saves"
 APP_NAME = "AI_RPG_ADVENTURE"
 
@@ -96,7 +96,7 @@ Whenever a "[[WORD: ]]" is mentioned, it is assumed that "please output the foll
      3. If experimenting without a recipe: Judge logically. If successful, output the [[SKILL]] used, then output [[RECIPE]] to save it, then grant the item.
 
 8. WORLD & SECRETS:
-   - **World Updates:** [[UPDATE_WORLD: Brief lore/description]]. Output when discovering new locations, NPCs, or important mechanics.
+   - **World Updates:** [[UPDATE_WORLD: Brief lore/description]]. Output when discovering new locations, NPCs, or important mechanics. Please be as specific as possible, avoiding vague terms such as "tonight", instead saying "at night time on Day X", where X is the current day.
    - **Secrets:** [[SECRET: Hidden information]]. Use to permanently store GM-only knowledge (villain identities, hidden loot).
 
 9. MERCHANTS & CURRENCIES:

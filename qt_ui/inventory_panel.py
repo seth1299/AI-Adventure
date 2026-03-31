@@ -312,7 +312,13 @@ class InventoryPanel(QWidget):
         try:
             parts = [p.strip() for p in (raw_args or "").split("|")]
             target_name = parts[0] if parts else (raw_args or "UNKNOWN ITEM").strip()
-            amount_to_remove = parts[1] if len(parts) > 1 else 1
+            
+            # Safely cast the amount to remove to an integer
+            try:
+                amount_to_remove = int(parts[1]) if len(parts) > 1 else 1
+            except ValueError:
+                amount_to_remove = 1
+                
             data = self.load_data()
             removed = False
 
@@ -320,31 +326,49 @@ class InventoryPanel(QWidget):
                 if not isinstance(items, list):
                     continue
                 
-                for item in range(len(items) - 1):
-                    if not isinstance(item, dict): continue
-                    item = items[item]
-                    item_name = item.get("name", "UNKNOWN NAME")
-                    item_amount = item.get("amount", 1)
+                # Loop through using a standard index (so we can safely pop the item later)
+                for i in range(len(items)):
+                    item = items[i]
+                    if not isinstance(item, dict): 
+                        continue
+                        
+                    item_name = str(item.get("name", "UNKNOWN NAME"))
 
+                    # Ensure case-insensitive matching
                     if str(target_name).lower() not in item_name.lower():
                         continue
 
+                    # Safely cast current item amount to an integer
                     try:
-                        current_amount = item_amount
+                        current_amount = int(item.get("amount", 1))
+                    except ValueError:
+                        current_amount = 1
+
+                    try:
                         new_amount = current_amount - amount_to_remove
                         if new_amount <= 0:
-                            items.pop(item)
+                            items.pop(i) # Remove item completely if amount hits 0
                         else:
-                            item["amount"] = new_amount
+                            # Store it back as a string to maintain JSON formatting
+                            item["amount"] = str(new_amount) 
                         removed = True
-                    except Exception as e: logging.error(f"Error removing item: {e}")
+                    except Exception as e: 
+                        logging.error(f"Error removing item: {e}")
 
+                    # Break inner loop once we successfully process the target item
+                    break
+                
+                # Break outer loop if we found and removed the item
+                if removed:
                     break
 
             if removed:
                 self.save_data(data)
                 logging.info(f"(Player lost {amount_to_remove}x {target_name}).")
-            else: logging.error(f"Error: Could not find {target_name}.")
+            else: 
+                logging.error(f"Error: Could not find {target_name}.")
+                
         except Exception as e:
             logging.error(f"InventoryPanel.autonomous_remove failed: {e}")
+            
         self.refresh_display()
