@@ -297,22 +297,7 @@ class QtAppContext:
                 if line == "" or line == None: continue
                 self.story_tab.print_text(line, sender="")
                 self.story_tab.print_text("", sender="")
-            """
-            last_gm: str | None = ""
-            if isinstance(history, list):
-                for line in history:
-                    if isinstance(line, str) and line.strip().startswith("GM:") and len(line.strip()) > 8:
-                        last_gm += line.strip()[len("GM:"):].strip() + "\n"
-                    elif isinstance(line, str) and line.strip().startswith("> ") == False and len(line.strip()) > 8:
-                        last_gm += line.strip() + "\n"
-                    elif isinstance(line, str) and line.strip().startswith("Player"): break
 
-            if not last_gm:
-                self.story_tab.print_text("No GM message found in savegame.json.", sender="System")
-                return
-            
-            self.story_tab.print_text(last_gm[:-1:], sender="GM")
-            """
             self.story_tab.print_text(f"What do you do now?\n")
             
         except Exception:
@@ -423,6 +408,7 @@ def main() -> int:
         world_path = os.path.join(save_path, "world.md")
         if os.path.exists(savegame_path):
             app_ctx.load_savegame_state(save_path)
+            win._load_ui_state(save_path)
             app_ctx.generate_recap()
             return
         if not os.path.exists(creation_summary_path): 
