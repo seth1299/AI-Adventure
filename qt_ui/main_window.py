@@ -151,8 +151,6 @@ class MainWindow(QMainWindow):
         
         game_menu.addSeparator()
         action_help = game_menu.addAction("Help")
-        
-        action_help = game_menu.addAction("Help")
         action_help.triggered.connect(self.open_help_menu)
 
         # --- 2. View Menu (NEW) ---
@@ -290,30 +288,33 @@ class MainWindow(QMainWindow):
             if state:
                 self.restoreState(state)
                 
+            raw_volume = settings.value("volume_level", 100)
             try:
-                volume = settings.value("volume_level", 100, type=int)
-                if isinstance(volume, int): self.story_panel.set_music_volume(volume)
-                else: self.story_panel.set_music_volume(100)
+                self.story_panel.set_music_volume(int(float(raw_volume))) # type: ignore
+                #else: self.story_panel.set_music_volume(100)
             except (ValueError, TypeError):
-                pass
+                # Fallback to 100 and force signal emission if reading fails completely
+                self.story_panel.set_music_volume(100)
                 
+            raw_tts = settings.value("narrator_volume", 100)
             try:
-                tts_volume = settings.value("narrator_volume", 100, type=int)
-                if isinstance(tts_volume, int): self.story_panel.set_music_volume(tts_volume)
-                else: self.story_panel.set_tts_volume(100)
+                self.story_panel.set_tts_volume(int(raw_tts)) # type: ignore
+                #else: self.story_panel.set_tts_volume(int(100))
             except (ValueError, TypeError):
-                pass
+                self.story_panel.set_tts_volume(100)
                 
-            narrator_bool = settings.value("narrator_enabled", False, type=bool)
-            if isinstance(narrator_bool, bool): self.story_panel.set_music_volume(narrator_bool)
-            else: self.story_panel.set_narrator_enabled(True)
+            raw_narrator = settings.value("narrator_enabled", False)
+            # Handle the string "false" / "true" safely without relying on Qt
+            if isinstance(raw_narrator, str):
+                narrator_bool = raw_narrator.lower() == 'true'
+            else:
+                narrator_bool = bool(raw_narrator)
+                
+            self.story_panel.set_narrator_enabled(narrator_bool)
             
-            try:
-                saved_voice_name = settings.value("narrator_voice", "", type=str)
-                if saved_voice_name and isinstance(saved_voice_name, str):
-                    self.story_panel.set_voice_by_name(saved_voice_name)
-            except (ValueError, TypeError):
-                pass
+            raw_voice = settings.value("narrator_voice", "")
+            if raw_voice:
+                self.story_panel.set_voice_by_name(str(raw_voice))
 
     def open_currency_menu(self):
         try:
