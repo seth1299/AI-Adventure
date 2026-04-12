@@ -62,6 +62,39 @@ class StoryPanel(QWidget):
         self.chk_narrator.toggled.connect(self._toggle_narrator)
         self.header_layout.addWidget(self.chk_narrator)
         
+        self.lbl_tts_volume = QLabel("🗣️ Narrator:")
+        self.lbl_tts_volume.setStyleSheet("font-weight: bold; margin-left: 10px;")
+        self.header_layout.addWidget(self.lbl_tts_volume)
+        
+        self.slider_tts_volume = QSlider(Qt.Orientation.Horizontal)
+        self.slider_tts_volume.setRange(0, 100)
+        self.slider_tts_volume.setValue(100)
+        self.slider_tts_volume.setFixedWidth(100)
+        
+        # Explicit dark mode styling (using Blue to distinguish from the Green music slider)
+        self.slider_tts_volume.setStyleSheet("""
+            QSlider::groove:horizontal {
+                border: 1px solid #555;
+                height: 6px;
+                background: #333;
+                margin: 2px 0;
+                border-radius: 3px;
+            }
+            QSlider::sub-page:horizontal {
+                background: #2196F3; /* Blue fill */
+                border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: #E0E0E0;
+                border: 1px solid #777;
+                width: 14px;
+                margin: -4px 0; 
+                border-radius: 7px;
+            }
+        """)
+        
+        self.header_layout.addWidget(self.slider_tts_volume)
+        
         self.lbl_volume = QLabel("🎵 Music:")
         self.lbl_volume.setStyleSheet("font-weight: bold; margin-left: 10px;")
         self.header_layout.addWidget(self.lbl_volume)
@@ -138,6 +171,13 @@ class StoryPanel(QWidget):
     def _emit_volume(self, val: int) -> None:
         # Pygame uses 0.0 to 1.0 for volume, so we divide the 0-100 slider value by 100
         self.volume_changed.emit(val / 100.0)
+        
+    def _update_tts_volume(self, val: int) -> None:
+        """
+        Updates the QTextToSpeech engine volume.
+        PySide6 expects a float between 0.0 and 1.0.
+        """
+        self.tts.setVolume(val / 100.0)
         
     def _toggle_narrator(self, checked: bool):
         self.narrator_enabled = checked

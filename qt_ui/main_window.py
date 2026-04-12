@@ -37,7 +37,8 @@ class MainWindow(QMainWindow):
 
     def __init__(self, app_context=None) -> None:
         super().__init__()
-        self.setWindowTitle("AI RPG Adventure (Qt)")
+        self.setObjectName("AI_Adventure_Main_Window")
+        self.setWindowTitle("AI RPG Adventure")
 
         # Reasonable default size; user can resize.
         self.resize(1100, 750)
@@ -261,6 +262,9 @@ class MainWindow(QMainWindow):
             settings = QSettings(ini_path, QSettings.Format.IniFormat)
             settings.setValue("geometry", self.saveGeometry())
             settings.setValue("windowState", self.saveState())
+            settings.setValue("volume_level", self.story_panel.slider_volume.value())
+            settings.setValue("narrator_enabled", self.story_panel.chk_narrator.isChecked())
+            settings.setValue("narrator_volume", self.story_panel.slider_tts_volume.value())
 
     def _load_ui_state(self, save_path: str) -> None:
         """Restores the UI layout from the save folder if it exists."""
@@ -276,6 +280,37 @@ class MainWindow(QMainWindow):
                 self.restoreGeometry(geometry)
             if state:
                 self.restoreState(state)
+                
+            try:
+                raw_volume = settings.value("volume_level", 100)
+                
+                # Prove to the type checker that this is a valid number/string
+                if isinstance(raw_volume, (int, float, str)):
+                    # float() inside int() ensures it doesn't crash if the setting saved as "100.0"
+                    volume = int(float(raw_volume)) 
+                    self.story_panel.slider_volume.setValue(volume)
+            except (ValueError, TypeError) as e:
+                logging.error(f"Error enabling narrator: {e}")
+            
+            narrator_val = settings.value("narrator_enabled", False)
+            
+            # Handle PySide6 QSettings quirk where booleans are sometimes returned as lowercase strings
+            if isinstance(narrator_val, str):
+                narrator_bool = narrator_val.lower() == 'true'
+            else:
+                narrator_bool = bool(narrator_val)
+                
+            try:
+                tts_volume = settings.value("narrator_volume", 100, type=int)
+                if isinstance(tts_volume, int): self.story_panel.slider_tts_volume.setValue(tts_volume)
+                else: self.story_panel.slider_tts_volume.setValue(100)
+                # This will automatically trigger the _update_tts_volume method we added
+                
+            except (ValueError, TypeError) as e:
+                logging.error(f"Error with narrator volume slider: {e}")
+                
+            # Same here, setChecked will trigger _toggle_narrator automatically
+            self.story_panel.chk_narrator.setChecked(narrator_bool)
 
     def open_currency_menu(self):
         try:
