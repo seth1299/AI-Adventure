@@ -14,11 +14,13 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QFrame,
     QProgressBar,
-    QCheckBox
+    QCheckBox,
+    QSlider
 )
 
 class StoryPanel(QWidget):
     send_requested = Signal(str)
+    volume_changed = Signal(float)
     # Menu signals removed as MainWindow handles them via its MenuBar natively
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -59,6 +61,40 @@ class StoryPanel(QWidget):
         self.chk_narrator.setStyleSheet("font-weight: bold;")
         self.chk_narrator.toggled.connect(self._toggle_narrator)
         self.header_layout.addWidget(self.chk_narrator)
+        
+        self.lbl_volume = QLabel("🎵 Music:")
+        self.lbl_volume.setStyleSheet("font-weight: bold; margin-left: 10px;")
+        self.header_layout.addWidget(self.lbl_volume)
+        
+        self.slider_volume = QSlider(Qt.Orientation.Horizontal)
+        self.slider_volume.setRange(0, 100)
+        self.slider_volume.setValue(100)
+        self.slider_volume.setFixedWidth(100)
+        
+        # --- NEW: Explicit dark mode styling for the slider ---
+        self.slider_volume.setStyleSheet("""
+            QSlider::groove:horizontal {
+                border: 1px solid #555;
+                height: 6px;
+                background: #333;
+                margin: 2px 0;
+                border-radius: 3px;
+            }
+            QSlider::sub-page:horizontal {
+                background: #4CAF50; /* Green fill for the left side of the slider */
+                border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: #E0E0E0; /* Bright handle so it's easy to see */
+                border: 1px solid #777;
+                width: 14px;
+                margin: -4px 0; 
+                border-radius: 7px;
+            }
+        """)
+        
+        self.slider_volume.valueChanged.connect(self._emit_volume)
+        self.header_layout.addWidget(self.slider_volume)
 
         root.addLayout(self.header_layout)
 
@@ -98,6 +134,10 @@ class StoryPanel(QWidget):
 
         # Initial UI render
         self._update_status_ui()
+        
+    def _emit_volume(self, val: int) -> None:
+        # Pygame uses 0.0 to 1.0 for volume, so we divide the 0-100 slider value by 100
+        self.volume_changed.emit(val / 100.0)
         
     def _toggle_narrator(self, checked: bool):
         self.narrator_enabled = checked
@@ -200,7 +240,7 @@ class StoryPanel(QWidget):
 
     def print_text(self, text: str, *, sender: str = "GM") -> None:
         self.append_text(f"{text}")
-        if self.narrator_enabled and not text.startswith("> "):
+        if self.narrator_enabled and not text.startswith("> ") and text.strip():
             # Strip markdown formatting like **bold** or *italics* so it doesn't say "asterisk"
             clean_text = re.sub(r'[*_~`#]', '', text, re.DOTALL)
             self.tts.say(clean_text)
