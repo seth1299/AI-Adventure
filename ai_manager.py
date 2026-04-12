@@ -185,7 +185,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
         # 1. Gather Context from Tabs
         context_data = ""
         for name, widget in self.app.notebook_widgets.items():
-            if name != "Story" and name != "Journal": 
+            if name not in ["Story", "Journal", "History"]:
                 if hasattr(widget, 'get_text'):
                     context_data += f"\n[{name.upper()}]:\n{widget.get_text().strip()}\n"
                     

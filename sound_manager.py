@@ -13,6 +13,8 @@ class SoundManager:
         # Initialize Pygame Mixer (Frequency, Size, Channels, Buffer)
         try:
             pygame.mixer.init(44100, -16, 2, 2048)
+            # --- Reserve Channel 1 explicitly for the Narrator ---
+            pygame.mixer.set_reserved(1) 
             logging.info("Sound System Initialized.")
         except Exception as e:
             logging.error(f"Error initializing sound: {e}")

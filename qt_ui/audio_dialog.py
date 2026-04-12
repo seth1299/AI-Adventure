@@ -15,7 +15,7 @@ class AudioSettingsDialog(QDialog):
         self.orig_tts_vol = story_panel.tts_volume
         self.orig_tts_rate = story_panel.tts_rate
         self.orig_narrator_enabled = story_panel.narrator_enabled
-        self.orig_voice = story_panel.tts.voice().name() if story_panel.tts.voice() else ""
+        self.orig_voice = story_panel.tts_voice
 
         layout = QVBoxLayout(self)
 
@@ -83,11 +83,11 @@ class AudioSettingsDialog(QDialog):
 
         voice_row = QHBoxLayout()
         self.combo_voices = QComboBox()
-        available_voices = self.story_panel.get_available_voices()
-        for voice in available_voices:
-            self.combo_voices.addItem(voice.name(), voice.name())
-            if voice.name() == self.orig_voice:
-                self.combo_voices.setCurrentText(voice.name())
+        for display_name, voice_id in self.story_panel.AVAILABLE_VOICES.items():
+            # Add the item: Display Name is shown to user, Voice ID is stored in background data
+            self.combo_voices.addItem(display_name, voice_id) 
+            if voice_id == self.orig_voice:
+                self.combo_voices.setCurrentText(display_name)
                 
         self.lbl_voice_label = QLabel("Voice:")
         voice_row.addWidget(self.lbl_voice_label)
@@ -132,8 +132,8 @@ class AudioSettingsDialog(QDialog):
 
     def _play_sample(self):
         # Temporarily lock the voice in and test it
-        voice_name = self.combo_voices.currentText()
-        self.story_panel.set_voice_by_name(voice_name)
+        voice_id = self.combo_voices.currentData()
+        self.story_panel.set_voice_by_name(voice_id)
         
         orig = self.story_panel.narrator_enabled
         self.story_panel.narrator_enabled = True
@@ -151,7 +151,7 @@ class AudioSettingsDialog(QDialog):
     def accept(self):
         # Finalize
         self.story_panel.set_narrator_enabled(self.chk_enable.isChecked())
-        self.story_panel.set_voice_by_name(self.combo_voices.currentText())
+        self.story_panel.set_voice_by_name(self.combo_voices.currentData())
         super().accept()
         
     def _on_tts_speed_slider(self, val):

@@ -56,6 +56,7 @@ class MainWindow(QMainWindow):
         self._docks: dict[str, QDockWidget] = {}
         self.world_panel = MarkdownPanel("World")
         self.journal_panel = MarkdownPanel("Journal")
+        self.history_panel = MarkdownPanel("History")
         self.inventory_panel = InventoryPanel(app_context=self.app)
         self.skills_panel = SkillsPanel()
         self.processing_panel = ProcessingPanel()
@@ -68,6 +69,7 @@ class MainWindow(QMainWindow):
         self._add_dock("Processing", self.processing_panel, area=Qt.DockWidgetArea.BottomDockWidgetArea)
         self._add_dock("Recipes", self.recipes_panel, area=Qt.DockWidgetArea.BottomDockWidgetArea)
         self._add_dock("Character", self.character_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
+        self._add_dock("History", self.history_panel, Qt.DockWidgetArea.LeftDockWidgetArea)
 
         # Allow docks to tab together when dragged into same area
         self.setDockOptions(
@@ -270,9 +272,9 @@ class MainWindow(QMainWindow):
             settings.setValue("narrator_enabled", self.story_panel.narrator_enabled)
             settings.setValue("narrator_volume", self.story_panel.tts_volume)
             settings.setValue("narrator_rate", self.story_panel.tts_rate)
-            current_voice = self.story_panel.tts.voice()
+            current_voice = self.story_panel.tts_voice
             if current_voice:
-                settings.setValue("narrator_voice", current_voice.name())
+                settings.setValue("narrator_voice", current_voice)
 
     def _load_ui_state(self, save_path: str) -> None:
         """Restores the UI layout from the save folder if it exists."""

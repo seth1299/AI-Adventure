@@ -1,8 +1,7 @@
 # qt_ui/story_panel.py
 from __future__ import annotations
-import re
+import re, edge_tts, asyncio, threading, os, tempfile, pygame, uuid
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtTextToSpeech import QTextToSpeech
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -11,16 +10,24 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QLabel,
-    QSizePolicy,
     QFrame,
-    QProgressBar,
-    QCheckBox,
-    QSlider
+    QProgressBar
 )
 
 class StoryPanel(QWidget):
     send_requested = Signal(str)
     volume_changed = Signal(float)
+    
+    AVAILABLE_VOICES = {
+        "Aria (Female, US)": "en-US-AriaNeural",
+        "Guy (Male, US)": "en-US-GuyNeural",
+        "Jenny (Female, US)": "en-US-JennyNeural",
+        "Christopher (Male, US)": "en-US-ChristopherNeural",
+        "Sonia (Female, UK)": "en-GB-SoniaNeural",
+        "Ryan (Male, UK)": "en-GB-RyanNeural",
+        "Natasha (Female, AU)": "en-AU-NatashaNeural",
+        "William (Male, AU)": "en-AU-WilliamNeural"
+    }
     # Menu signals removed as MainWindow handles them via its MenuBar natively
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -34,12 +41,12 @@ class StoryPanel(QWidget):
             "dynamic_stats": []
         }
         
-        self.tts = QTextToSpeech(self)
         self.narrator_enabled = False
         self.music_volume = 100
         self.tts_volume = 100
         self.tts_rate = 0
-        self.narrator_enabled = False
+        self.tts_voice = "en-US-AriaNeural"
+        self.temp_dir = tempfile.gettempdir()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -103,18 +110,6 @@ class StoryPanel(QWidget):
     def _emit_volume(self, val: int) -> None:
         # Pygame uses 0.0 to 1.0 for volume, so we divide the 0-100 slider value by 100
         self.volume_changed.emit(val / 100.0)
-        
-    def _update_tts_volume(self, val: int) -> None:
-        """
-        Updates the QTextToSpeech engine volume.
-        PySide6 expects a float between 0.0 and 1.0.
-        """
-        self.tts.setVolume(val / 100.0)
-        
-    def _toggle_narrator(self, checked: bool):
-        self.narrator_enabled = checked
-        if not checked:
-            self.tts.stop()
 
     def append_text(self, text: str) -> None:
         #if not text:
@@ -215,70 +210,92 @@ class StoryPanel(QWidget):
         if self.narrator_enabled and not text.startswith("> ") and text.strip():
             # Strip markdown formatting like **bold** or *italics* so it doesn't say "asterisk"
             clean_text = re.sub(r'[*_~`#]', '', text, re.DOTALL)
-            self.tts.say(clean_text)
+            self._generate_and_play_tts(clean_text)
 
     def _emit_send(self) -> None:
         text = (self.txt_input.text() or "").strip()
         if not text:
             return
         if self.narrator_enabled:
-            self.tts.stop()
+            self.stop_tts()
         self.txt_input.clear()
         self.send_requested.emit(text)
-
-    def _scroll_to_bottom(self) -> None:
-        cursor = self.txt_log.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        self.txt_log.setTextCursor(cursor)
         
-    def get_available_voices(self) -> list:
-        """
-        Retrieves a list of QVoice objects installed on the user's operating system.
-        """
-        return self.tts.availableVoices()
+    def _generate_and_play_tts(self, text: str) -> None:
+        """Generates the audio file asynchronously so the UI doesn't freeze."""
+        def run_async():
+            # Convert UI slider (-10 to 10) to Edge-TTS percentage format (-50% to +50%)
+            unique_filename = f"ai_adventure_tts_{uuid.uuid4().hex}.mp3"
+            dynamic_tts_file = os.path.join(self.temp_dir, unique_filename)
+            rate_str = f"{self.tts_rate * 5}%"
+            if self.tts_rate >= 0: 
+                rate_str = f"+{rate_str}"
+                
+            try:
+                communicate = edge_tts.Communicate(text, self.tts_voice, rate=rate_str)
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                # Save to the unique file instead of the static one
+                loop.run_until_complete(communicate.save(dynamic_tts_file))
+                loop.close()
+                
+                self._play_generated_tts(dynamic_tts_file)
+            except Exception as e:
+                print(f"Edge-TTS Error: {e}")
 
-    def set_voice_by_name(self, voice_name: str) -> None:
-        """
-        Iterates through the system's available voices and sets the active TTS 
-        engine to match the requested name.
-        """
-        for voice in self.tts.availableVoices():
-            if voice.name() == voice_name:
-                self.tts.setVoice(voice)
-                break
+        # Start the generator in a background thread
+        threading.Thread(target=run_async, daemon=True).start()
+
+    def _play_generated_tts(self, filepath: str):
+        """Loads the generated file into Pygame and plays it on our reserved channel."""
+        try:
+            if pygame.mixer.get_init():
+                channel = pygame.mixer.Channel(1)
+                sound = pygame.mixer.Sound(filepath)
+                channel.set_volume(self.tts_volume / 100.0)
+                channel.play(sound)
+        except Exception as e:
+            print(f"Audio playback error: {e}")
+
+    def stop_tts(self):
+        try:
+            if pygame.mixer.get_init():
+                pygame.mixer.Channel(1).stop()
+        except:
+            pass
 
     def play_voice_sample(self) -> None:
-        """
-        Interrupts any current TTS speech to play a brief audio sample 
-        demonstrating the currently active voice.
-        """
-        if self.tts.state() == QTextToSpeech.State.Speaking:
-            self.tts.stop()
-            
-        # You must ensure the narrator isn't disabled before playing the preview!
+        self.stop_tts()
         original_state = self.narrator_enabled
         self.narrator_enabled = True
-        
-        # We call the TTS engine directly rather than print_text so we 
-        # don't clutter the actual game log with preview dialogue.
-        self.tts.say("This is a sample of my voice. How do I sound?")
-        
+        self._generate_and_play_tts("This is a sample of my voice. How do I sound?")
         self.narrator_enabled = original_state
         
+    def set_voice_by_name(self, voice_id: str) -> None:
+        # We now store the edge-tts string (e.g. "en-US-AriaNeural") directly
+        self.tts_voice = voice_id
+
     def set_music_volume(self, val: int) -> None:
         self.music_volume = val
         self.volume_changed.emit(val / 100.0)
 
     def set_tts_volume(self, val: int) -> None:
         self.tts_volume = val
-        self.tts.setVolume(val / 100.0)
+        # Dynamically update the Pygame channel volume if it's currently speaking
+        try:
+            if pygame.mixer.get_init():
+                pygame.mixer.Channel(1).set_volume(val / 100.0)
+        except: pass
 
     def set_narrator_enabled(self, enabled: bool) -> None:
         self.narrator_enabled = enabled
         if not enabled:
-            self.tts.stop()
+            self.stop_tts()
     
     def set_tts_rate(self, val: int) -> None:
         self.tts_rate = val
-        # QTextToSpeech rate is between -1.0 and 1.0
-        self.tts.setRate(val / 10.0)
+
+    def _scroll_to_bottom(self) -> None:
+        cursor = self.txt_log.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self.txt_log.setTextCursor(cursor)
