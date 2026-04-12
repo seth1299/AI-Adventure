@@ -270,9 +270,9 @@ class MainWindow(QMainWindow):
             settings.setValue("narrator_enabled", self.story_panel.narrator_enabled)
             settings.setValue("narrator_volume", self.story_panel.tts_volume)
             settings.setValue("narrator_rate", self.story_panel.tts_rate)
-            current_voice = self.story_panel.tts.voice()
+            current_voice = self.story_panel.tts_voice
             if current_voice:
-                settings.setValue("narrator_voice", current_voice.name())
+                settings.setValue("narrator_voice", current_voice)
 
     def _load_ui_state(self, save_path: str) -> None:
         """Restores the UI layout from the save folder if it exists."""
