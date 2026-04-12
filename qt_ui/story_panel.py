@@ -36,6 +36,9 @@ class StoryPanel(QWidget):
         
         self.tts = QTextToSpeech(self)
         self.narrator_enabled = False
+        self.music_volume = 100
+        self.tts_volume = 100
+        self.narrator_enabled = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -56,78 +59,6 @@ class StoryPanel(QWidget):
         self.stats_layout = QVBoxLayout()
         self.stats_layout.setSpacing(2)
         self.header_layout.addLayout(self.stats_layout)
-        
-        self.chk_narrator = QCheckBox("🔊 Enable Narrator")
-        self.chk_narrator.setStyleSheet("font-weight: bold;")
-        self.chk_narrator.toggled.connect(self._toggle_narrator)
-        self.header_layout.addWidget(self.chk_narrator)
-        
-        self.lbl_tts_volume = QLabel("🗣️ Narrator:")
-        self.lbl_tts_volume.setStyleSheet("font-weight: bold; margin-left: 10px;")
-        self.header_layout.addWidget(self.lbl_tts_volume)
-        
-        self.slider_tts_volume = QSlider(Qt.Orientation.Horizontal)
-        self.slider_tts_volume.setRange(0, 100)
-        self.slider_tts_volume.setValue(100)
-        self.slider_tts_volume.setFixedWidth(100)
-        
-        # Explicit dark mode styling (using Blue to distinguish from the Green music slider)
-        self.slider_tts_volume.setStyleSheet("""
-            QSlider::groove:horizontal {
-                border: 1px solid #555;
-                height: 6px;
-                background: #333;
-                margin: 2px 0;
-                border-radius: 3px;
-            }
-            QSlider::sub-page:horizontal {
-                background: #2196F3; /* Blue fill */
-                border-radius: 3px;
-            }
-            QSlider::handle:horizontal {
-                background: #E0E0E0;
-                border: 1px solid #777;
-                width: 14px;
-                margin: -4px 0; 
-                border-radius: 7px;
-            }
-        """)
-        
-        self.header_layout.addWidget(self.slider_tts_volume)
-        
-        self.lbl_volume = QLabel("🎵 Music:")
-        self.lbl_volume.setStyleSheet("font-weight: bold; margin-left: 10px;")
-        self.header_layout.addWidget(self.lbl_volume)
-        
-        self.slider_volume = QSlider(Qt.Orientation.Horizontal)
-        self.slider_volume.setRange(0, 100)
-        self.slider_volume.setValue(100)
-        self.slider_volume.setFixedWidth(100)
-        
-        # --- NEW: Explicit dark mode styling for the slider ---
-        self.slider_volume.setStyleSheet("""
-            QSlider::groove:horizontal {
-                border: 1px solid #555;
-                height: 6px;
-                background: #333;
-                margin: 2px 0;
-                border-radius: 3px;
-            }
-            QSlider::sub-page:horizontal {
-                background: #4CAF50; /* Green fill for the left side of the slider */
-                border-radius: 3px;
-            }
-            QSlider::handle:horizontal {
-                background: #E0E0E0; /* Bright handle so it's easy to see */
-                border: 1px solid #777;
-                width: 14px;
-                margin: -4px 0; 
-                border-radius: 7px;
-            }
-        """)
-        
-        self.slider_volume.valueChanged.connect(self._emit_volume)
-        self.header_layout.addWidget(self.slider_volume)
 
         root.addLayout(self.header_layout)
 
@@ -332,3 +263,16 @@ class StoryPanel(QWidget):
         self.tts.say("This is a sample of my voice. How do I sound?")
         
         self.narrator_enabled = original_state
+        
+    def set_music_volume(self, val: int) -> None:
+        self.music_volume = val
+        self.volume_changed.emit(val / 100.0)
+
+    def set_tts_volume(self, val: int) -> None:
+        self.tts_volume = val
+        self.tts.setVolume(val / 100.0)
+
+    def set_narrator_enabled(self, enabled: bool) -> None:
+        self.narrator_enabled = enabled
+        if not enabled:
+            self.tts.stop()
