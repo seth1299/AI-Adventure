@@ -8,7 +8,7 @@ from qt_ui.main_window import MainWindow
 from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt
 from player import Player
 from sound_manager import SoundManager
-from config import SAVES_DIR, SOUNDS_DIR
+from config import SAVES_DIR, SOUNDS_DIR, BASE_SOUNDS_DIR, VALID_SOUND_FILE_NAMES
 import random, re
 from qt_ui.main_menu_dialog import MainMenuDialog
 import threading
@@ -16,7 +16,6 @@ from PySide6.QtWidgets import QApplication, QDialog
 from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt, QThread
 from queue import Queue
 import time_utils
-from config import VALID_SOUND_FILE_NAMES
 
 class _UiDispatcher(QObject):
     run_now = Signal(object)          # callable
@@ -134,7 +133,7 @@ class QtAppContext:
         self.conversation_history = []
 
         self.player = Player()
-        self.sound_manager = SoundManager(SOUNDS_DIR)
+        self.sound_manager = SoundManager(BASE_SOUNDS_DIR)
 
         # API surface AIManager expects
         self.story_tab = QtStoryTabAdapter(win.story_panel, self.ui)
@@ -205,7 +204,8 @@ class QtAppContext:
             save_data = {
                 "Chat History": history_list,
                 "Status": status_data,
-                "karmic_streak": int(getattr(self.player, "karmic_streak", 0) or 0)
+                "karmic_streak": int(getattr(self.player, "karmic_streak", 0) or 0),
+                "current_music": self.sound_manager.current_music
             }
             history_path = os.path.join(self.current_adventure_path, "savegame.json")
             logging.info(f"Saved to {history_path}.")
@@ -253,6 +253,10 @@ class QtAppContext:
             self.player.karmic_streak = int(data.get("karmic_streak", 0) or 0)
         except Exception:
             self.player.karmic_streak = 0
+            
+        saved_music = data.get("current_music")
+        if saved_music:
+            self.sound_manager.play_music(saved_music)
             
         currencies = data.get("Currencies")
         if currencies:
@@ -406,6 +410,8 @@ def main() -> int:
     win.ai_manager = AIManager(app_ctx)
     win.setWindowTitle(f"{save_name}")
     win.show()
+    
+    win.story_panel.volume_changed.connect(app_ctx.sound_manager.set_volume)
 
     def _boot_selected_save() -> None:
         FileManager.update_logger_path(save_name)

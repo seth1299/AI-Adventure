@@ -122,6 +122,8 @@ class AIManager:
         
         final_comments = data['final_comments'] or ''
         
+        valid_sounds_str = ", ".join(VALID_SOUND_FILE_NAMES) if VALID_SOUND_FILE_NAMES else "No music available."
+        
         logging.info(f"Creating a {ai_genre} genre game set in {ai_setting} with the tech level {ai_tech}...")
         
         # The prompt is now safely un-indented and variables are pre-computed!
@@ -162,11 +164,11 @@ Output the following tags to set up the game files based on this data. The World
 [[CHARACTER_INFO: Write the full character biography, appearance, and details here. Make sure to include the Player Character's Name, Age, Gender/Pronouns, Orientation, and Background.]]
 [[SKILL: Skill Name | Description | Level]] (You MUST output this tag exactly 16 times. First, output one tag for EVERY skill already provided in the "Starting Skills" list above, preserving their exact Names, Descriptions, and Levels. Then, output tags for the remaining skills you were asked to invent.)
 [[ADD: Type | Name | Description | Amount]] (Add logical starting equipment. Repeat this tag for each item that the Player will start out with.)
-[[DEFINE_CURRENCY: Name | Value]] ({"Output this tag for EACH item in " + currencies_text if data['currencies'] else "Invent a couple of your own currencies."} Example: [[DEFINE_CURRENCY: Iron Bit | 1]]).
-[[DEFINE_STAT: Name | Value | Description]] ( {"Output this tag for EACH item in " + stats_text if data['stats'] else "Invent a couple of your own stats. Be as specific as possible for the description of each stat, including positive effects for having a high value of the stat, and/or negative effects for having a low value of the stat (and what happens if the stat hits 0)."} Example usage: [[DEFINE_STAT: Sanity | 100 | Represents your mental fortitude against the Eldritch. Depletes when seeing horrors; replenishes when taking time to rest and give your brain a break without witnessing Eldritch horrors. High sanity allows your character to have a clear head and more easily deal with Eldritch horrors. Low sanity means that your character will have issues with Eldritch horrors when encountering them. Max value: 100.]])
+[[DEFINE_CURRENCY: Name | Value]] (Repeat for each value in {currencies_text}, unless there is only one value. DO NOT DUPLICATE CURRENCIES.)
+[[DEFINE_STAT: Name | Value | Description]] (Repeat for each value in {stats_text}, unless there is only one value. DO NOT DUPLICATE STATS.)
 [[GIVE_COIN: X]] (Give the player a logical amount of starting base currency for their background. Repeat this tag however many times you need to if you are adding different types of coins; e.g. "[[GIVE_COIN: 5 Copper Pieces]] [[GIVE_COIN: 5 Silver Pieces]] [[GIVE_COIN: 5 Gold Pieces]]". Please only use the currency listed in {currencies_text}.)
 [[STATUS: 1 | {start_loc_status} | 1 | 7:00 A.M.]]
-[[MUSIC: FILENAME_PLACEHOLDER.mp3]] (where FILENAME_PLACEHOLDER is the name of the music that you want to play, out of these specific files: {VALID_SOUND_FILE_NAMES})
+[[MUSIC: FILENAME_PLACEHOLDER]] (You MUST output this tag to set the starting music. Replace FILENAME_PLACEHOLDER with exactly one of these options: {valid_sounds_str})
 
 After outputting the tags, summarize the first starting turn, describe the surroundings vividly, and finish by asking "What do you do now?" and suggesting a few possible actions.
 """
