@@ -298,3 +298,37 @@ class StoryPanel(QWidget):
         cursor = self.txt_log.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         self.txt_log.setTextCursor(cursor)
+        
+    def get_available_voices(self) -> list:
+        """
+        Retrieves a list of QVoice objects installed on the user's operating system.
+        """
+        return self.tts.availableVoices()
+
+    def set_voice_by_name(self, voice_name: str) -> None:
+        """
+        Iterates through the system's available voices and sets the active TTS 
+        engine to match the requested name.
+        """
+        for voice in self.tts.availableVoices():
+            if voice.name() == voice_name:
+                self.tts.setVoice(voice)
+                break
+
+    def play_voice_sample(self) -> None:
+        """
+        Interrupts any current TTS speech to play a brief audio sample 
+        demonstrating the currently active voice.
+        """
+        if self.tts.state() == QTextToSpeech.State.Speaking:
+            self.tts.stop()
+            
+        # You must ensure the narrator isn't disabled before playing the preview!
+        original_state = self.narrator_enabled
+        self.narrator_enabled = True
+        
+        # We call the TTS engine directly rather than print_text so we 
+        # don't clutter the actual game log with preview dialogue.
+        self.tts.say("This is a sample of my voice. How do I sound?")
+        
+        self.narrator_enabled = original_state

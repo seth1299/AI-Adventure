@@ -24,7 +24,7 @@ from .processing_panel import ProcessingPanel
 from .recipes_panel import RecipesPanel
 import logging
 from qt_ui.help_dialog import HelpDialog
-
+from PySide6.QtGui import QActionGroup
 
 class MainWindow(QMainWindow):
     """
@@ -146,6 +146,9 @@ class MainWindow(QMainWindow):
         
         game_menu.addSeparator()
         
+        self.narrator_menu = game_menu.addMenu("Narrator Voices")
+        self._populate_narrator_menu()
+        
         action_help = game_menu.addAction("Help")
         action_help.triggered.connect(self.open_help_menu)
 
@@ -155,6 +158,51 @@ class MainWindow(QMainWindow):
         # Qt's QDockWidget comes with a built-in toggle action that acts as a checkbox!
         for title, dock in self._docks.items():
             view_menu.addAction(dock.toggleViewAction())
+            
+    def _populate_narrator_menu(self):
+        """
+        Dynamically populates the Narrator sub-menu with available system voices.
+        Uses a QActionGroup to make them mutually exclusive (like radio buttons).
+        """
+        available_voices = self.story_panel.get_available_voices()
+        
+        # Fallback if the user's OS has no TTS engines installed
+        if not available_voices:
+            empty_action = self.narrator_menu.addAction("No voices found on OS")
+            empty_action.setEnabled(False)
+            return
+
+        # QActionGroup ensures only one voice can be "checked" at a time
+        self.voice_action_group = QActionGroup(self)
+        self.voice_action_group.setExclusive(True)
+
+        current_voice = self.story_panel.tts.voice()
+        current_voice_name = current_voice.name() if current_voice else ""
+
+        for voice in available_voices:
+            voice_name = voice.name()
+            action = self.narrator_menu.addAction(voice_name)
+            action.setCheckable(True)
+            
+            # Check the item if it matches our currently active engine
+            if voice_name == current_voice_name:
+                action.setChecked(True)
+                
+            self.voice_action_group.addAction(action)
+            
+            # We use a lambda to "bind" the specific voice_name to this iteration of the loop
+            action.triggered.connect(lambda checked=False, name=voice_name: self._on_voice_selected(name))
+
+    def _on_voice_selected(self, voice_name: str):
+        """
+        Triggered when a user clicks a voice in the dropdown menu.
+        Changes the engine voice, plays a sample, and saves the new setting.
+        """
+        self.story_panel.set_voice_by_name(voice_name)
+        self.story_panel.play_voice_sample()
+        
+        # Save immediately so the choice persists even if the game crashes
+        self._save_ui_state()
 
     def _add_dock(self, title: str, widget: QWidget, area: Qt.DockWidgetArea) -> None:
         dock = QDockWidget(title, self)
@@ -265,6 +313,9 @@ class MainWindow(QMainWindow):
             settings.setValue("volume_level", self.story_panel.slider_volume.value())
             settings.setValue("narrator_enabled", self.story_panel.chk_narrator.isChecked())
             settings.setValue("narrator_volume", self.story_panel.slider_tts_volume.value())
+            current_voice = self.story_panel.tts.voice()
+            if current_voice:
+                settings.setValue("narrator_voice", current_voice.name())
 
     def _load_ui_state(self, save_path: str) -> None:
         """Restores the UI layout from the save folder if it exists."""
@@ -301,13 +352,23 @@ class MainWindow(QMainWindow):
                 narrator_bool = bool(narrator_val)
                 
             try:
-                tts_volume = settings.value("narrator_volume", 100, type=int)
-                if isinstance(tts_volume, int): self.story_panel.slider_tts_volume.setValue(tts_volume)
-                else: self.story_panel.slider_tts_volume.setValue(100)
-                # This will automatically trigger the _update_tts_volume method we added
-                
-            except (ValueError, TypeError) as e:
-                logging.error(f"Error with narrator volume slider: {e}")
+                saved_voice_name = settings.value("narrator_voice", "", type=str)
+                if saved_voice_name and isinstance(saved_voice_name, str):
+                    # This safely ignores the request if the voice doesn't exist on the new PC
+                    self.story_panel.set_voice_by_name(saved_voice_name)
+                    
+                    # Instead of trusting the saved string, ask the engine what voice it is ACTUALLY using
+                    # (This handles the fallback perfectly if the saved voice was missing)
+                    if hasattr(self, 'voice_action_group'):
+                        actual_voice = self.story_panel.tts.voice()
+                        if actual_voice:
+                            actual_voice_name = actual_voice.name()
+                            for action in self.voice_action_group.actions():
+                                if action.text() == actual_voice_name:
+                                    action.setChecked(True)
+                                    break
+            except (ValueError, TypeError):
+                pass
                 
             # Same here, setChecked will trigger _toggle_narrator automatically
             self.story_panel.chk_narrator.setChecked(narrator_bool)
