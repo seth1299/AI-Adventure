@@ -307,10 +307,9 @@ class QtAppContext:
                 self.notebook_widgets["History"].set_text(history_text.strip())
                 
             if last_gm_message:
-                self.story_tab.print_text(last_gm_message, sender="")
-                self.story_tab.print_text("", sender="")
-
-            self.story_tab.print_text(f"What do you do now?\n")
+                self.story_tab.print_text(last_gm_message + "\n\nWhat do you do now?\n", sender="")
+            else:
+                self.story_tab.print_text(f"What do you do now?\n")
             
         except Exception:
             logging.exception("Generate recap failed")
