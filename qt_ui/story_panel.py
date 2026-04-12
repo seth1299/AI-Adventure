@@ -1,7 +1,8 @@
 # qt_ui/story_panel.py
 from __future__ import annotations
-import re, edge_tts, asyncio, threading, os, tempfile, pygame, uuid
-from PySide6.QtCore import Qt, Signal
+import re, edge_tts, asyncio, threading, os, tempfile, pygame, uuid, logging
+from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
 class StoryPanel(QWidget):
     send_requested = Signal(str)
     volume_changed = Signal(float)
+    start_typing_signal = Signal(str)
     
     AVAILABLE_VOICES = {
         "Aria (Female, US)": "en-US-AriaNeural",
@@ -47,6 +49,10 @@ class StoryPanel(QWidget):
         self.tts_rate = 0
         self.tts_voice = "en-US-AriaNeural"
         self.temp_dir = tempfile.gettempdir()
+        self.typing_timer = QTimer(self)
+        self.typing_timer.timeout.connect(self._type_next_word)
+        self.typing_buffer = [] 
+        self.start_typing_signal.connect(self._start_typing_effect)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -206,11 +212,21 @@ class StoryPanel(QWidget):
                 self.txt_input.setPlaceholderText(status_text)
 
     def print_text(self, text: str, *, sender: str = "GM") -> None:
-        self.append_text(f"{text}")
-        if self.narrator_enabled and not text.startswith("> ") and text.strip():
-            # Strip markdown formatting like **bold** or *italics* so it doesn't say "asterisk"
+        """Prints text to the story window, processing TTS and typing effects if enabled."""
+        if not text.strip(): 
+            return
+            
+        # Flush any ongoing typing so it doesn't overlap with a new incoming message
+        self._flush_typing_buffer()
+        
+        if self.narrator_enabled and not text.startswith("> "):
+            # Strip markdown formatting for the audio so it doesn't narrate "asterisk"
             clean_text = re.sub(r'[*_~`#]', '', text, re.DOTALL)
-            self._generate_and_play_tts(clean_text)
+            
+            # Pass BOTH clean_text (for audio) and original text (for UI display)
+            self._generate_and_play_tts(clean_text, original_text=text)
+        else:
+            self.append_text(f"{text}")
 
     def _emit_send(self) -> None:
         text = (self.txt_input.text() or "").strip()
@@ -221,7 +237,7 @@ class StoryPanel(QWidget):
         self.txt_input.clear()
         self.send_requested.emit(text)
         
-    def _generate_and_play_tts(self, text: str) -> None:
+    def _generate_and_play_tts(self, text: str, original_text: str | None = None) -> None:
         """Generates the audio file asynchronously so the UI doesn't freeze."""
         def run_async():
             # Convert UI slider (-10 to 10) to Edge-TTS percentage format (-50% to +50%)
@@ -240,11 +256,78 @@ class StoryPanel(QWidget):
                 loop.close()
                 
                 self._play_generated_tts(dynamic_tts_file)
+                # IMPORTANT: Fire the visual typing signal EXACTLY when audio starts playing
+                if original_text is not None:
+                    self.start_typing_signal.emit(original_text)
             except Exception as e:
                 print(f"Edge-TTS Error: {e}")
+                # Fallback: Just print the text normally if generation fails
+                if original_text is not None:
+                    self.start_typing_signal.emit(original_text)
 
         # Start the generator in a background thread
         threading.Thread(target=run_async, daemon=True).start()
+        
+    def _start_typing_effect(self, text: str) -> None:
+        """Prepares the buffer and calculates the WPM delay for typing."""
+        # Add spacing if the log isn't empty to distinguish paragraphs
+        if self.txt_log.toPlainText():
+            self.txt_log.append("")
+            
+        # Split text but retain spaces/newlines as separate tokens
+        self.typing_buffer = re.split(r'(\s+)', text)
+        self.typing_buffer = [w for w in self.typing_buffer if w] # Remove empty strings
+        
+        # Edge-TTS default WPM is approx 160. Calculate modified WPM based on slider.
+        base_wpm = 180
+        multiplier = 1.0 + (self.tts_rate * 0.05)
+        if multiplier < 0.1: multiplier = 0.1 # Prevent dividing by zero
+        
+        current_wpm = base_wpm * multiplier
+        
+        # Words per minute -> ms delay between words (60,000 ms per minute)
+        delay_ms = int(60000 / current_wpm)
+        
+        self.typing_timer.start(delay_ms)
+        
+    def _type_next_word(self) -> None:
+        """Pops the next word from the buffer and inserts it into the text edit inline."""
+        if not self.typing_buffer:
+            self.typing_timer.stop()
+            self._scroll_to_bottom()
+            return
+            
+        # Grab the next word token
+        word = self.typing_buffer.pop(0)
+        
+        # Use a cursor to insert inline text without appending new blocks/paragraphs
+        cursor = self.txt_log.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.txt_log.setTextCursor(cursor)
+        self.txt_log.insertPlainText(word)
+        
+        # If the token was a whitespace/newline, instantly grab and insert the next *actual* word.
+        # This guarantees the WPM delay calculates time between actual words, not spaces.
+        while self.typing_buffer and self.typing_buffer[0].isspace():
+            space = self.typing_buffer.pop(0)
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            self.txt_log.setTextCursor(cursor)
+            self.txt_log.insertPlainText(space)
+            
+        self._scroll_to_bottom()
+
+    def _flush_typing_buffer(self) -> None:
+        """Instantly prints the remainder of the typing buffer if interrupted or stopped."""
+        if self.typing_timer.isActive():
+            self.typing_timer.stop()
+            if self.typing_buffer:
+                rest_of_text = "".join(self.typing_buffer)
+                cursor = self.txt_log.textCursor()
+                cursor.movePosition(QTextCursor.MoveOperation.End)
+                self.txt_log.setTextCursor(cursor)
+                self.txt_log.insertPlainText(rest_of_text)
+                self.typing_buffer.clear()
+                self._scroll_to_bottom()
 
     def _play_generated_tts(self, filepath: str):
         """Loads the generated file into Pygame and plays it on our reserved channel."""
@@ -258,16 +341,18 @@ class StoryPanel(QWidget):
             print(f"Audio playback error: {e}")
 
     def stop_tts(self):
+        self._flush_typing_buffer()
         try:
             if pygame.mixer.get_init():
                 pygame.mixer.Channel(1).stop()
-        except:
-            pass
+        except Exception as e:
+            logging.error(f"Error stopping TTS: {e}")
 
     def play_voice_sample(self) -> None:
         self.stop_tts()
         original_state = self.narrator_enabled
         self.narrator_enabled = True
+        # Do not pass a second argument. This suppresses the visual printing for voice samples
         self._generate_and_play_tts("This is a sample of my voice. How do I sound?")
         self.narrator_enabled = original_state
         
