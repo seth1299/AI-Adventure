@@ -38,6 +38,7 @@ class StoryPanel(QWidget):
         self.narrator_enabled = False
         self.music_volume = 100
         self.tts_volume = 100
+        self.tts_rate = 0
         self.narrator_enabled = False
 
         root = QVBoxLayout(self)
@@ -276,3 +277,8 @@ class StoryPanel(QWidget):
         self.narrator_enabled = enabled
         if not enabled:
             self.tts.stop()
+    
+    def set_tts_rate(self, val: int) -> None:
+        self.tts_rate = val
+        # QTextToSpeech rate is between -1.0 and 1.0
+        self.tts.setRate(val / 10.0)

@@ -269,6 +269,7 @@ class MainWindow(QMainWindow):
             settings.setValue("volume_level", self.story_panel.music_volume)
             settings.setValue("narrator_enabled", self.story_panel.narrator_enabled)
             settings.setValue("narrator_volume", self.story_panel.tts_volume)
+            settings.setValue("narrator_rate", self.story_panel.tts_rate)
             current_voice = self.story_panel.tts.voice()
             if current_voice:
                 settings.setValue("narrator_voice", current_voice.name())
@@ -302,6 +303,12 @@ class MainWindow(QMainWindow):
                 #else: self.story_panel.set_tts_volume(int(100))
             except (ValueError, TypeError):
                 self.story_panel.set_tts_volume(100)
+            
+            raw_rate = settings.value("narrator_rate", 0)
+            try:
+                self.story_panel.set_tts_rate(int(float(raw_rate))) # type: ignore
+            except (ValueError, TypeError):
+                self.story_panel.set_tts_rate(0)
                 
             raw_narrator = settings.value("narrator_enabled", False)
             # Handle the string "false" / "true" safely without relying on Qt
