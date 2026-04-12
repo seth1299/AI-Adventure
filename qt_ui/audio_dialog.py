@@ -13,6 +13,7 @@ class AudioSettingsDialog(QDialog):
         # Cache original settings in case the user hits "Cancel"
         self.orig_music_vol = story_panel.music_volume
         self.orig_tts_vol = story_panel.tts_volume
+        self.orig_tts_rate = story_panel.tts_rate
         self.orig_narrator_enabled = story_panel.narrator_enabled
         self.orig_voice = story_panel.tts.voice().name() if story_panel.tts.voice() else ""
 
@@ -61,6 +62,24 @@ class AudioSettingsDialog(QDialog):
         tts_row.addWidget(self.slider_tts)
         tts_row.addWidget(self.lbl_tts_val)
         narrator_layout.addLayout(tts_row)
+        speed_row = QHBoxLayout()
+        
+        init_speed_str = "Normal" if self.orig_tts_rate == 0 else f"{'+' if self.orig_tts_rate > 0 else ''}{self.orig_tts_rate}"
+        self.lbl_tts_speed_val = QLabel(init_speed_str)
+        self.lbl_tts_speed_val.setFixedWidth(45)
+        
+        self.slider_tts_speed = QSlider(Qt.Orientation.Horizontal)
+        self.slider_tts_speed.setRange(-10, 10)
+        self.slider_tts_speed.setValue(self.orig_tts_rate)
+        self.slider_tts_speed.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.slider_tts_speed.setTickInterval(5)
+        self.slider_tts_speed.valueChanged.connect(self._on_tts_speed_slider)
+        
+        self.lbl_tts_speed_label = QLabel("Speed:")
+        speed_row.addWidget(self.lbl_tts_speed_label)
+        speed_row.addWidget(self.slider_tts_speed)
+        speed_row.addWidget(self.lbl_tts_speed_val)
+        narrator_layout.addLayout(speed_row)
 
         voice_row = QHBoxLayout()
         self.combo_voices = QComboBox()
@@ -103,6 +122,9 @@ class AudioSettingsDialog(QDialog):
         # Greys out all sub-options if disabled
         self.lbl_tts_label.setEnabled(checked)
         self.slider_tts.setEnabled(checked)
+        self.lbl_tts_speed_label.setEnabled(checked)
+        self.slider_tts_speed.setEnabled(checked)
+        self.lbl_tts_speed_val.setEnabled(checked)
         self.lbl_tts_val.setEnabled(checked)
         self.lbl_voice_label.setEnabled(checked)
         self.combo_voices.setEnabled(checked)
@@ -123,6 +145,7 @@ class AudioSettingsDialog(QDialog):
         self.story_panel.set_music_volume(self.orig_music_vol)
         self.story_panel.set_tts_volume(self.orig_tts_vol)
         self.story_panel.set_voice_by_name(self.orig_voice)
+        self.story_panel.set_tts_rate(self.orig_tts_rate) 
         super().reject()
 
     def accept(self):
@@ -130,3 +153,11 @@ class AudioSettingsDialog(QDialog):
         self.story_panel.set_narrator_enabled(self.chk_enable.isChecked())
         self.story_panel.set_voice_by_name(self.combo_voices.currentText())
         super().accept()
+        
+    def _on_tts_speed_slider(self, val):
+        if val == 0: display_str = "Normal"
+        elif val > 0: display_str = f"+{val}"
+        else: display_str = f"{val}"
+        
+        self.lbl_tts_speed_val.setText(display_str)
+        self.story_panel.set_tts_rate(val) # Live preview!
