@@ -1,6 +1,6 @@
 # qt_ui/story_panel.py
 from __future__ import annotations
-import re, edge_tts, asyncio, threading, os, tempfile, pygame
+import re, edge_tts, asyncio, threading, os, tempfile, pygame, uuid
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget,
@@ -47,7 +47,6 @@ class StoryPanel(QWidget):
         self.tts_rate = 0
         self.tts_voice = "en-US-AriaNeural"
         self.temp_dir = tempfile.gettempdir()
-        self.tts_file = os.path.join(self.temp_dir, "ai_adventure_tts.mp3")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -226,6 +225,8 @@ class StoryPanel(QWidget):
         """Generates the audio file asynchronously so the UI doesn't freeze."""
         def run_async():
             # Convert UI slider (-10 to 10) to Edge-TTS percentage format (-50% to +50%)
+            unique_filename = f"ai_adventure_tts_{uuid.uuid4().hex}.mp3"
+            dynamic_tts_file = os.path.join(self.temp_dir, unique_filename)
             rate_str = f"{self.tts_rate * 5}%"
             if self.tts_rate >= 0: 
                 rate_str = f"+{rate_str}"
@@ -234,22 +235,23 @@ class StoryPanel(QWidget):
                 communicate = edge_tts.Communicate(text, self.tts_voice, rate=rate_str)
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                loop.run_until_complete(communicate.save(self.tts_file))
+                # Save to the unique file instead of the static one
+                loop.run_until_complete(communicate.save(dynamic_tts_file))
                 loop.close()
                 
-                self._play_generated_tts()
+                self._play_generated_tts(dynamic_tts_file)
             except Exception as e:
                 print(f"Edge-TTS Error: {e}")
 
         # Start the generator in a background thread
         threading.Thread(target=run_async, daemon=True).start()
 
-    def _play_generated_tts(self):
+    def _play_generated_tts(self, filepath: str):
         """Loads the generated file into Pygame and plays it on our reserved channel."""
         try:
             if pygame.mixer.get_init():
                 channel = pygame.mixer.Channel(1)
-                sound = pygame.mixer.Sound(self.tts_file)
+                sound = pygame.mixer.Sound(filepath)
                 channel.set_volume(self.tts_volume / 100.0)
                 channel.play(sound)
         except Exception as e:

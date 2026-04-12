@@ -146,6 +146,7 @@ class QtAppContext:
                 "Character": QtPanelAdapter(win.character_panel, self.ui),
                 "World": QtPanelAdapter(win.world_panel, self.ui),
                 "Journal": QtPanelAdapter(win.journal_panel, self.ui),
+                "History": QtPanelAdapter(win.history_panel, self.ui),
             }
 
         self._sync_player_state_to_ui()
@@ -293,9 +294,20 @@ class QtAppContext:
 
             data = self.load_savegame_state(save_path)
             history = data.get("Chat History") or []
+            history_text = ""
+            last_gm_message = ""
             for line in history:
                 if line == "" or line == None: continue
-                self.story_tab.print_text(line, sender="")
+                # We do not print to story_tab here anymore!
+                history_text += line + "\n\n"
+                if not line.startswith("> "):
+                    last_gm_message = line
+                
+            if "History" in self.notebook_widgets:
+                self.notebook_widgets["History"].set_text(history_text.strip())
+                
+            if last_gm_message:
+                self.story_tab.print_text(last_gm_message, sender="")
                 self.story_tab.print_text("", sender="")
 
             self.story_tab.print_text(f"What do you do now?\n")
