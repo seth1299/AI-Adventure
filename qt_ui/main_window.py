@@ -146,8 +146,11 @@ class MainWindow(QMainWindow):
         
         game_menu.addSeparator()
         
-        self.narrator_menu = game_menu.addMenu("Narrator Voices")
-        self._populate_narrator_menu()
+        action_audio = game_menu.addAction("Audio Settings...")
+        action_audio.triggered.connect(self.open_audio_menu)
+        
+        game_menu.addSeparator()
+        action_help = game_menu.addAction("Help")
         
         action_help = game_menu.addAction("Help")
         action_help.triggered.connect(self.open_help_menu)
@@ -158,51 +161,6 @@ class MainWindow(QMainWindow):
         # Qt's QDockWidget comes with a built-in toggle action that acts as a checkbox!
         for title, dock in self._docks.items():
             view_menu.addAction(dock.toggleViewAction())
-            
-    def _populate_narrator_menu(self):
-        """
-        Dynamically populates the Narrator sub-menu with available system voices.
-        Uses a QActionGroup to make them mutually exclusive (like radio buttons).
-        """
-        available_voices = self.story_panel.get_available_voices()
-        
-        # Fallback if the user's OS has no TTS engines installed
-        if not available_voices:
-            empty_action = self.narrator_menu.addAction("No voices found on OS")
-            empty_action.setEnabled(False)
-            return
-
-        # QActionGroup ensures only one voice can be "checked" at a time
-        self.voice_action_group = QActionGroup(self)
-        self.voice_action_group.setExclusive(True)
-
-        current_voice = self.story_panel.tts.voice()
-        current_voice_name = current_voice.name() if current_voice else ""
-
-        for voice in available_voices:
-            voice_name = voice.name()
-            action = self.narrator_menu.addAction(voice_name)
-            action.setCheckable(True)
-            
-            # Check the item if it matches our currently active engine
-            if voice_name == current_voice_name:
-                action.setChecked(True)
-                
-            self.voice_action_group.addAction(action)
-            
-            # We use a lambda to "bind" the specific voice_name to this iteration of the loop
-            action.triggered.connect(lambda checked=False, name=voice_name: self._on_voice_selected(name))
-
-    def _on_voice_selected(self, voice_name: str):
-        """
-        Triggered when a user clicks a voice in the dropdown menu.
-        Changes the engine voice, plays a sample, and saves the new setting.
-        """
-        self.story_panel.set_voice_by_name(voice_name)
-        self.story_panel.play_voice_sample()
-        
-        # Save immediately so the choice persists even if the game crashes
-        self._save_ui_state()
 
     def _add_dock(self, title: str, widget: QWidget, area: Qt.DockWidgetArea) -> None:
         dock = QDockWidget(title, self)
@@ -310,9 +268,9 @@ class MainWindow(QMainWindow):
             settings = QSettings(ini_path, QSettings.Format.IniFormat)
             settings.setValue("geometry", self.saveGeometry())
             settings.setValue("windowState", self.saveState())
-            settings.setValue("volume_level", self.story_panel.slider_volume.value())
-            settings.setValue("narrator_enabled", self.story_panel.chk_narrator.isChecked())
-            settings.setValue("narrator_volume", self.story_panel.slider_tts_volume.value())
+            settings.setValue("volume_level", self.story_panel.music_volume)
+            settings.setValue("narrator_enabled", self.story_panel.narrator_enabled)
+            settings.setValue("narrator_volume", self.story_panel.tts_volume)
             current_voice = self.story_panel.tts.voice()
             if current_voice:
                 settings.setValue("narrator_voice", current_voice.name())
@@ -333,45 +291,29 @@ class MainWindow(QMainWindow):
                 self.restoreState(state)
                 
             try:
-                raw_volume = settings.value("volume_level", 100)
-                
-                # Prove to the type checker that this is a valid number/string
-                if isinstance(raw_volume, (int, float, str)):
-                    # float() inside int() ensures it doesn't crash if the setting saved as "100.0"
-                    volume = int(float(raw_volume)) 
-                    self.story_panel.slider_volume.setValue(volume)
-            except (ValueError, TypeError) as e:
-                logging.error(f"Error enabling narrator: {e}")
-            
-            narrator_val = settings.value("narrator_enabled", False)
-            
-            # Handle PySide6 QSettings quirk where booleans are sometimes returned as lowercase strings
-            if isinstance(narrator_val, str):
-                narrator_bool = narrator_val.lower() == 'true'
-            else:
-                narrator_bool = bool(narrator_val)
-                
-            try:
-                saved_voice_name = settings.value("narrator_voice", "", type=str)
-                if saved_voice_name and isinstance(saved_voice_name, str):
-                    # This safely ignores the request if the voice doesn't exist on the new PC
-                    self.story_panel.set_voice_by_name(saved_voice_name)
-                    
-                    # Instead of trusting the saved string, ask the engine what voice it is ACTUALLY using
-                    # (This handles the fallback perfectly if the saved voice was missing)
-                    if hasattr(self, 'voice_action_group'):
-                        actual_voice = self.story_panel.tts.voice()
-                        if actual_voice:
-                            actual_voice_name = actual_voice.name()
-                            for action in self.voice_action_group.actions():
-                                if action.text() == actual_voice_name:
-                                    action.setChecked(True)
-                                    break
+                volume = settings.value("volume_level", 100, type=int)
+                if isinstance(volume, int): self.story_panel.set_music_volume(volume)
+                else: self.story_panel.set_music_volume(100)
             except (ValueError, TypeError):
                 pass
                 
-            # Same here, setChecked will trigger _toggle_narrator automatically
-            self.story_panel.chk_narrator.setChecked(narrator_bool)
+            try:
+                tts_volume = settings.value("narrator_volume", 100, type=int)
+                if isinstance(tts_volume, int): self.story_panel.set_music_volume(tts_volume)
+                else: self.story_panel.set_tts_volume(100)
+            except (ValueError, TypeError):
+                pass
+                
+            narrator_bool = settings.value("narrator_enabled", False, type=bool)
+            if isinstance(narrator_bool, bool): self.story_panel.set_music_volume(narrator_bool)
+            else: self.story_panel.set_narrator_enabled(True)
+            
+            try:
+                saved_voice_name = settings.value("narrator_voice", "", type=str)
+                if saved_voice_name and isinstance(saved_voice_name, str):
+                    self.story_panel.set_voice_by_name(saved_voice_name)
+            except (ValueError, TypeError):
+                pass
 
     def open_currency_menu(self):
         try:
@@ -390,12 +332,6 @@ class MainWindow(QMainWindow):
                 
                 sorted_for_msg = sorted(saved_currencies, key=lambda x: int(x.get("value", 1)), reverse=True)
                 lowest_coin_name = sorted_for_msg[-1].get("name", "base units") if sorted_for_msg else "base units"
-                
-                #msg = f"Currencies successfully updated ({len(saved_currencies)} total):\n"
-                #for cur in saved_currencies:
-                #    msg += f" • {cur['name']} (Worth: {cur['value']} {lowest_coin_name})\n"
-                
-                #self.story_panel.print_text(msg, sender="System")
                 
                 # 3. Refresh the inventory UI to use the new math
                 if hasattr(self.inventory_panel, "refresh_display"):
@@ -425,22 +361,19 @@ class MainWindow(QMainWindow):
             dialog = StatsManagerDialog(self, existing_stats=self.app.player.tracked_stats)
             if dialog.exec(): 
                 saved_stats = dialog.final_stats_data
-                
-                # Update player and save
                 self.app.player.tracked_stats = saved_stats
                 self.app.save_game()
                 self.app._sync_player_state_to_ui()
-                
-                # Feedback loop
-                """
-                msg = f"Tracked Stats successfully updated:\n"
-                for st in saved_stats:
-                    status = "Enabled" if st['enabled'] else "Disabled"
-                    msg += f" • {st['name']} ({status}): {st['value']}\n"
-                
-                self.story_panel.print_text(msg, sender="System")
-                """
+
         except Exception as e:
             error_msg = f"Error opening stats menu: {str(e)}"
             logging.exception(error_msg)
             self.story_panel.print_text(error_msg, sender="System Error")
+            
+    def open_audio_menu(self):
+        if not self.app: return
+        from qt_ui.audio_dialog import AudioSettingsDialog
+        dialog = AudioSettingsDialog(self, self.story_panel)
+        if dialog.exec(): 
+            # Save the new layout values immediately if "OK" is clicked
+            self._save_ui_state()
