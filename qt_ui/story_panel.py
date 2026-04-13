@@ -53,6 +53,7 @@ class StoryPanel(QWidget):
         self.typing_timer.timeout.connect(self._type_next_word)
         self.typing_buffer = [] 
         self.start_typing_signal.connect(self._start_typing_effect)
+        self._unlock_queued = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -102,6 +103,12 @@ class StoryPanel(QWidget):
         self.txt_input.setPlaceholderText("What do you do next?")
         self.txt_input.returnPressed.connect(self._emit_send)
         input_row.addWidget(self.txt_input, stretch=1)
+        
+        self.btn_skip = QPushButton("Skip/Stop")
+        self.btn_skip.setFixedWidth(100)
+        self.btn_skip.clicked.connect(self.stop_tts)
+        self.btn_skip.setVisible(False)
+        input_row.addWidget(self.btn_skip)
 
         self.btn_send = QPushButton("Send")
         self.btn_send.setFixedWidth(100)
@@ -201,12 +208,16 @@ class StoryPanel(QWidget):
         
     def set_controls_state(self, enabled: bool, status_text: str | None = None) -> None:
         """Enable/disable input controls. Optionally updates placeholder text."""
+        if enabled and self.typing_timer.isActive():
+            self._unlock_queued = True
+            return
+        self._unlock_queued = False
         self.txt_input.setEnabled(enabled)
         self.btn_send.setEnabled(enabled)
-        # self.btn_menu removed
 
         if enabled:
             self.txt_input.setPlaceholderText("What do you do next?")
+            self.txt_input.setFocus()
         else:
             if status_text is not None:
                 self.txt_input.setPlaceholderText(status_text)
@@ -287,6 +298,8 @@ class StoryPanel(QWidget):
         
         # Words per minute -> ms delay between words (60,000 ms per minute)
         delay_ms = int(60000 / current_wpm)
+        self.btn_send.setVisible(False)
+        self.btn_skip.setVisible(True)
         
         self.typing_timer.start(delay_ms)
         
@@ -295,6 +308,10 @@ class StoryPanel(QWidget):
         if not self.typing_buffer:
             self.typing_timer.stop()
             self._scroll_to_bottom()
+            self.btn_skip.setVisible(False)
+            self.btn_send.setVisible(True)
+            #if self._unlock_queued:
+            #    self.set_controls_state(True)
             return
             
         # Grab the next word token
@@ -347,6 +364,13 @@ class StoryPanel(QWidget):
                 pygame.mixer.Channel(1).stop()
         except Exception as e:
             logging.error(f"Error stopping TTS: {e}")
+            
+        self.btn_skip.setVisible(False)
+        self.btn_send.setVisible(True)
+        
+        # Execute queued unlock if AI generation finished while speaking
+        #if self._unlock_queued:
+        #    self.set_controls_state(True)
 
     def play_voice_sample(self) -> None:
         self.stop_tts()
