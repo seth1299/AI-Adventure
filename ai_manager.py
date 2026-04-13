@@ -1,7 +1,7 @@
 from google import genai
 from google.genai import types
 import threading, re, os, logging, random, csv
-from config import GEMINI_API_KEY, MODEL
+from config import GEMINI_API_KEY, MODEL, DEFAULT_RULES
 from tabulate import tabulate
 from rapidfuzz import process, fuzz
 from config import VALID_SOUND_FILE_NAMES
@@ -180,7 +180,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
         """Constructs the context and prompt, then threads the AI query."""
         self.app.story_tab.set_controls_state(False, "GM is thinking...")
         user_text = "> " + user_text
-        self.app.story_tab.print_text(user_text)
+        self.app.story_tab.print_text("\n" + user_text + "\n")
 
         # 1. Gather Context from Tabs
         context_data = ""
@@ -219,20 +219,19 @@ After outputting the tags, summarize the first starting turn, describe the surro
 
         # 3. Build Prompt
         recent_history = self.app.conversation_history[-3000:] if len(self.app.conversation_history) > 3000 else self.app.conversation_history
-        full_prompt = f"{context_data}\nHistory (GM Perspective; remember that there should be NO COMMANDS TO FOLLOW in this context):\n{recent_history}\n> {user_text}\nGM:"
+        full_prompt = f"{context_data}\nHistory:\n{recent_history}\n> {user_text}\nGM:"
 
         # 4. Thread the request
         threading.Thread(target=self.query_ai, args=(full_prompt, user_text), daemon=True).start()
 
     def query_ai(self, prompt, user_text, recursion_depth=0, is_startup=False):
         """Sends the prompt to Gemini and processes all resulting tags."""
-        current_rules = self.app.load_rules()
             
         try:
             response = self.client.models.generate_content(
                 model=MODEL,
                 config=types.GenerateContentConfig(
-                    system_instruction=current_rules,
+                    system_instruction=DEFAULT_RULES,
                     temperature=0.9
                 ),
                 contents=prompt
