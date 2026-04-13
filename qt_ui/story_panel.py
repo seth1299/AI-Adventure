@@ -114,6 +114,21 @@ class StoryPanel(QWidget):
         self.btn_send.setFixedWidth(100)
         self.btn_send.clicked.connect(self._emit_send)
         input_row.addWidget(self.btn_send)
+        
+        try:
+            self.progress_bar = QProgressBar()
+            self.progress_bar.setRange(0, 0) 
+            self.progress_bar.setTextVisible(False) # Hides the '0%' text
+            self.progress_bar.setFixedHeight(4)     # Makes it a thin, modern-looking bar
+            self.progress_bar.hide()                # Hidden by default until the AI starts thinking
+
+            # IMPORTANT: You must add self.progress_bar to your layout here!
+            # Example: self.main_layout.addWidget(self.progress_bar) 
+            # (I recommend putting it right above or below your text input field)
+        except Exception as e:
+            logging.error(f"Failed to initialize progress bar in StoryPanel: {e}")
+            
+        input_row.addWidget(self.progress_bar)
 
         root.addLayout(input_row)
 
@@ -206,7 +221,7 @@ class StoryPanel(QWidget):
         self.txt_log.setPlainText(text or "")
         self._scroll_to_bottom()
         
-    def set_controls_state(self, enabled: bool, status_text: str | None = None) -> None:
+    def set_controls_state(self, enabled: bool, status_text: str = "GM is thinking...") -> None:
         """Enable/disable input controls. Optionally updates placeholder text."""
         if enabled and self.typing_timer.isActive():
             self._unlock_queued = True
@@ -214,7 +229,25 @@ class StoryPanel(QWidget):
         self._unlock_queued = False
         self.txt_input.setEnabled(enabled)
         self.btn_send.setEnabled(enabled)
-
+        
+        try:
+            if not enabled:
+                self.txt_input.setPlaceholderText(status_text)
+                    
+                # Show the animated loading bar
+                if hasattr(self, 'progress_bar'):
+                    self.progress_bar.show()
+            else:
+                default_prompt = "What do you do now?"
+                self.txt_input.setPlaceholderText(status_text if status_text else default_prompt)
+                self.txt_input.setFocus()
+                    
+                # Hide the loading bar
+                if hasattr(self, 'progress_bar'):
+                    self.progress_bar.hide()
+        except Exception as e:
+            logging.error(f"Error updating controls state and progress bar: {e}")
+        
         if enabled:
             self.txt_input.setPlaceholderText("What do you do next?")
             self.txt_input.setFocus()
