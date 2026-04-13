@@ -79,10 +79,10 @@ Whenever a "[[WORD: ]]" is mentioned, it is assumed that "please output the foll
    - **Completion:** When finished, output [[REMOVE_PROCESS: Name]] and then [[ADD: ...]] for the outcome of the process, with "Expected_Yield" being the "Amount" added in the [[ADD]] tag.
 
 5. DYNAMIC STATS:
-   - Use [[MODIFY_STAT: Stat Name | SET {New Value}]] to update tracked stats: {DYNAMIC_STATS}.
-   - Alternatively, use [[MODIFY_STAT: Stat Name | -10]] to add/subtract.
-   - IMPORTANT: ONLY USE THE [[MODIFY_STAT]] TAG IF THE STAT ACTUALLY EXISTS IN "savegame.json". Otherwise, use the [[DEFINE_STAT]] tag, but ONLY if it is absolutely necessary to create a Stat that would actually provide a lot of value to track permanently.
-   - Only modify stats logically based on the narrative context and time passed. Do not exceed logical minimums/maximums.
+   - Use [[MODIFY_STAT: Stat Name | SET {New Value}]] to specifically set a stat's numerical value.
+   - Alternatively, use [[MODIFY_STAT: Stat Name | -10]] to add/subtract dynamically.
+   - IMPORTANT: ONLY USE THE [[MODIFY_STAT]] TAG TO MODIFY STATS THAT ARE EXPLICITLY LISTED IN THE [CURRENT STATUS] BLOCK PROVIDED TO YOU. 
+   - Pay close attention to the (Rules: ...) next to each stat in the [CURRENT STATUS] block and modify stats logically based on those rules, the narrative context, and the time passed. Do not exceed logical minimums/maximums.
    - To create a new stat: [[DEFINE_STAT: Name | Starting Value | Description]]. Include min/max rules in the description.
 
 6. AUDIO CONTROL:

@@ -310,8 +310,10 @@ class StoryPanel(QWidget):
             self._scroll_to_bottom()
             self.btn_skip.setVisible(False)
             self.btn_send.setVisible(True)
-            #if self._unlock_queued:
-            #    self.set_controls_state(True)
+            if self._unlock_queued:
+                self.set_controls_state(True)
+            #else:
+                #self.set_controls_state(False)
             return
             
         # Grab the next word token
@@ -369,8 +371,10 @@ class StoryPanel(QWidget):
         self.btn_send.setVisible(True)
         
         # Execute queued unlock if AI generation finished while speaking
-        #if self._unlock_queued:
-        #    self.set_controls_state(True)
+        if self._unlock_queued:
+            self.set_controls_state(True)
+        #else:
+            #self.set_controls_state(False)
 
     def play_voice_sample(self) -> None:
         self.stop_tts()
