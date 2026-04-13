@@ -212,7 +212,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
             f"Current in-game Day: {self.app.player.day}\n"
             f"Current in-game Time: {self.app.player.time}\n"
             f"Current in-game Turn: {self.app.player.turn}\n"
-            f"{stats_str}"
+            f"Stats: {stats_str}"
             f"UPCOMING TURN: {next_turn} (You MUST use this number in the [[STATUS]] tag)"
         )
         context_data += status_context
