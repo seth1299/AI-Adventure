@@ -228,10 +228,12 @@ After outputting the tags, summarize the first starting turn, describe the surro
         """Sends the prompt to Gemini and processes all resulting tags."""
             
         try:
+            system_struction_temp = self.app.load_rules()
+            logging.info(f"\n\nPrompt: \n\n{system_struction_temp}")
             response = self.client.models.generate_content(
                 model=MODEL,
                 config=types.GenerateContentConfig(
-                    system_instruction=DEFAULT_RULES,
+                    system_instruction=system_struction_temp,
                     temperature=0.9
                 ),
                 contents=prompt
