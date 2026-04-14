@@ -1,8 +1,6 @@
 # qt_ui/story_panel.py
 from __future__ import annotations
-from config import TTS_MODELS_DIR
-import re, wave, threading, os, sys, tempfile, pygame, uuid, logging, platform
-from piper.voice import PiperVoice
+import re, edge_tts, asyncio, threading, os, tempfile, pygame, uuid, logging
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
@@ -23,7 +21,14 @@ class StoryPanel(QWidget):
     start_typing_signal = Signal(str)
     
     AVAILABLE_VOICES = {
-        "American Female": os.path.join(TTS_MODELS_DIR,"en_US-hfc_female-medium.onnx")
+        "Aria (Female, US)": "en-US-AriaNeural",
+        "Guy (Male, US)": "en-US-GuyNeural",
+        "Jenny (Female, US)": "en-US-JennyNeural",
+        "Christopher (Male, US)": "en-US-ChristopherNeural",
+        "Sonia (Female, UK)": "en-GB-SoniaNeural",
+        "Ryan (Male, UK)": "en-GB-RyanNeural",
+        "Natasha (Female, AU)": "en-AU-NatashaNeural",
+        "William (Male, AU)": "en-AU-WilliamNeural"
     }
     # Menu signals removed as MainWindow handles them via its MenuBar natively
 
@@ -38,51 +43,45 @@ class StoryPanel(QWidget):
             "dynamic_stats": []
         }
         
-        try:
-        
-            self.narrator_enabled = False
-            self.music_volume = 100
-            self.tts_volume = 100
-            self.tts_rate = 0
-            self.tts_voice = list(self.AVAILABLE_VOICES.values())[0]
-            self._piper_voice_cache = None
-            self._cached_voice_path = None
-            self.temp_dir = tempfile.gettempdir()
-            self.typing_timer = QTimer(self)
-            self.typing_timer.timeout.connect(self._type_next_word)
-            self.typing_buffer = [] 
-            self.start_typing_signal.connect(self._start_typing_effect)
-            self._unlock_queued = False
+        self.narrator_enabled = False
+        self.music_volume = 100
+        self.tts_volume = 100
+        self.tts_rate = 0
+        self.tts_voice = "en-US-AriaNeural"
+        self.temp_dir = tempfile.gettempdir()
+        self.typing_timer = QTimer(self)
+        self.typing_timer.timeout.connect(self._type_next_word)
+        self.typing_buffer = [] 
+        self.start_typing_signal.connect(self._start_typing_effect)
+        self._unlock_queued = False
 
-            root = QVBoxLayout(self)
-            root.setContentsMargins(10, 10, 10, 10)
-            root.setSpacing(8)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
 
-            # ---- Header (Status + Progress Bars on newlines) ----
-            self.header_layout = QVBoxLayout()
-            self.header_layout.setSpacing(4)
+        # ---- Header (Status + Progress Bars on newlines) ----
+        self.header_layout = QVBoxLayout()
+        self.header_layout.setSpacing(4)
 
-            # Base Status text (Turn, Location, Time)
-            self.lbl_base_status = QLabel()
-            self.lbl_base_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            # Style it to stand out slightly from the progress bars below it
-            self.lbl_base_status.setStyleSheet("font-weight: bold; margin-bottom: 5px;")
-            self.header_layout.addWidget(self.lbl_base_status)
+        # Base Status text (Turn, Location, Time)
+        self.lbl_base_status = QLabel()
+        self.lbl_base_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        # Style it to stand out slightly from the progress bars below it
+        self.lbl_base_status.setStyleSheet("font-weight: bold; margin-bottom: 5px;")
+        self.header_layout.addWidget(self.lbl_base_status)
 
-            # Container for the dynamically generated progress bars
-            self.stats_layout = QVBoxLayout()
-            self.stats_layout.setSpacing(2)
-            self.header_layout.addLayout(self.stats_layout)
+        # Container for the dynamically generated progress bars
+        self.stats_layout = QVBoxLayout()
+        self.stats_layout.setSpacing(2)
+        self.header_layout.addLayout(self.stats_layout)
 
-            root.addLayout(self.header_layout)
+        root.addLayout(self.header_layout)
 
-            # Separator line
-            line = QFrame()
-            line.setFrameShape(QFrame.Shape.HLine)
-            line.setFrameShadow(QFrame.Shadow.Sunken)
-            root.addWidget(line)
-        except Exception as e:
-            logging.error(f"Error while creating Story Panel variables: {e}")
+        # Separator line
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        root.addWidget(line)
 
         # ---- Output log ----
         self.txt_log = QTextEdit()
@@ -115,21 +114,6 @@ class StoryPanel(QWidget):
         self.btn_send.setFixedWidth(100)
         self.btn_send.clicked.connect(self._emit_send)
         input_row.addWidget(self.btn_send)
-        
-        try:
-            self.progress_bar = QProgressBar()
-            self.progress_bar.setRange(0, 0) 
-            self.progress_bar.setTextVisible(False) # Hides the '0%' text
-            self.progress_bar.setFixedHeight(4)     # Makes it a thin, modern-looking bar
-            self.progress_bar.hide()                # Hidden by default until the AI starts thinking
-
-            # IMPORTANT: You must add self.progress_bar to your layout here!
-            # Example: self.main_layout.addWidget(self.progress_bar) 
-            # (I recommend putting it right above or below your text input field)
-        except Exception as e:
-            logging.error(f"Failed to initialize progress bar in StoryPanel: {e}")
-            
-        input_row.addWidget(self.progress_bar)
 
         root.addLayout(input_row)
 
@@ -157,66 +141,63 @@ class StoryPanel(QWidget):
 
     def _update_status_ui(self) -> None:
         """Rebuilds the status text and dynamically creates progress bars for stats."""
-        try:
-            s = self._status_cache
-            if not "Day" in s['day']: s['day'] = "Day: " + s['day']
-            
-            # 1. Update the top standard text
-            base_str = f"Turn: {s['turn']} \nLocation: {s['location']} \n{s['day']} \n{s['time']}"
-            self.lbl_base_status.setText(base_str)
-            
-            # 2. Safely clear old progress bars
-            while self.stats_layout.count() > 0:
-                item = self.stats_layout.takeAt(0)
-                if item is not None:
-                    widget = item.widget()
-                    if widget is not None:
-                        widget.deleteLater()
+        s = self._status_cache
+        if not "Day" in s['day']: s['day'] = "Day: " + s['day']
+        
+        # 1. Update the top standard text
+        base_str = f"Turn: {s['turn']} \nLocation: {s['location']} \n{s['day']} \n{s['time']}"
+        self.lbl_base_status.setText(base_str)
+        
+        # 2. Safely clear old progress bars
+        while self.stats_layout.count() > 0:
+            item = self.stats_layout.takeAt(0)
+            if item is not None:
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+                
+        # 3. Create new progress bars for each enabled stat
+        for st in s.get("dynamic_stats", []):
+            if st.get("enabled", True):
+                pb = QProgressBar()
+                pb.setRange(0, 100) # Assumes stats are max 100 as per your previous design
+                
+                # Safely parse the value
+                try:
+                    val = int(st['value'])
+                except ValueError:
+                    val = 0
                     
-            # 3. Create new progress bars for each enabled stat
-            for st in s.get("dynamic_stats", []):
-                if st.get("enabled", True):
-                    pb = QProgressBar()
-                    pb.setRange(0, 100) # Assumes stats are max 100 as per your previous design
+                pb.setValue(val)
+                # Formats text as: "Stat Name: 75%" 
+                pb.setFormat(f"{st['name']}: %p%") 
+                pb.setTextVisible(True)
+                pb.setFixedHeight(18) # Keeps the bars sleek
+                
+                if val > 50:
+                    bar_color = "#4CAF50" # Green
+                elif val > 25:
+                    bar_color = "#FF9800" # Orange/Yellow
+                else:
+                    bar_color = "#F44336" # Red
                     
-                    # Safely parse the value
-                    try:
-                        val = int(st['value'])
-                    except ValueError:
-                        val = 0
-                        
-                    pb.setValue(val)
-                    # Formats text as: "Stat Name: 75%" 
-                    pb.setFormat(f"{st['name']}: %p%") 
-                    pb.setTextVisible(True)
-                    pb.setFixedHeight(18) # Keeps the bars sleek
-                    
-                    if val > 50:
-                        bar_color = "#4CAF50" # Green
-                    elif val > 25:
-                        bar_color = "#FF9800" # Orange/Yellow
-                    else:
-                        bar_color = "#F44336" # Red
-                        
-                    # Apply a custom stylesheet to this specific progress bar
-                    pb.setStyleSheet(f"""
-                        QProgressBar {{
-                            border: 1px solid #555;
-                            border-radius: 4px;
-                            text-align: center;
-                            background-color: #333; /* Dark background for the empty track */
-                            color: white; /* Text color */
-                            font-weight: bold;
-                        }}
-                        QProgressBar::chunk {{
-                            background-color: {bar_color};
-                            border-radius: 3px;
-                        }}
-                    """)
-                    
-                    self.stats_layout.addWidget(pb)
-        except Exception as e:
-            logging.error(f"Error while updating status UI: {e}")
+                # Apply a custom stylesheet to this specific progress bar
+                pb.setStyleSheet(f"""
+                    QProgressBar {{
+                        border: 1px solid #555;
+                        border-radius: 4px;
+                        text-align: center;
+                        background-color: #333; /* Dark background for the empty track */
+                        color: white; /* Text color */
+                        font-weight: bold;
+                    }}
+                    QProgressBar::chunk {{
+                        background-color: {bar_color};
+                        border-radius: 3px;
+                    }}
+                """)
+                
+                self.stats_layout.addWidget(pb)
 
     def get_log_text(self) -> str:
         return self.txt_log.toPlainText()
@@ -225,7 +206,7 @@ class StoryPanel(QWidget):
         self.txt_log.setPlainText(text or "")
         self._scroll_to_bottom()
         
-    def set_controls_state(self, enabled: bool, status_text: str = "GM is thinking...") -> None:
+    def set_controls_state(self, enabled: bool, status_text: str | None = None) -> None:
         """Enable/disable input controls. Optionally updates placeholder text."""
         if enabled and self.typing_timer.isActive():
             self._unlock_queued = True
@@ -233,25 +214,7 @@ class StoryPanel(QWidget):
         self._unlock_queued = False
         self.txt_input.setEnabled(enabled)
         self.btn_send.setEnabled(enabled)
-        
-        try:
-            if not enabled:
-                self.txt_input.setPlaceholderText(status_text)
-                    
-                # Show the animated loading bar
-                if hasattr(self, 'progress_bar'):
-                    self.progress_bar.show()
-            else:
-                default_prompt = "What do you do now?"
-                self.txt_input.setPlaceholderText(status_text if status_text else default_prompt)
-                self.txt_input.setFocus()
-                    
-                # Hide the loading bar
-                if hasattr(self, 'progress_bar'):
-                    self.progress_bar.hide()
-        except Exception as e:
-            logging.error(f"Error updating controls state and progress bar: {e}")
-        
+
         if enabled:
             self.txt_input.setPlaceholderText("What do you do next?")
             self.txt_input.setFocus()
@@ -263,104 +226,81 @@ class StoryPanel(QWidget):
         """Prints text to the story window, processing TTS and typing effects if enabled."""
         if not text.strip(): 
             return
-        
-        try:
-            # Flush any ongoing typing so it doesn't overlap with a new incoming message
-            self._flush_typing_buffer()
             
-            if self.narrator_enabled and not text.startswith("> "):
-                # Strip markdown formatting for the audio so it doesn't narrate "asterisk"
-                clean_text = re.sub(r'[*_~`#]', '', text, re.DOTALL)
-                
-                # Pass BOTH clean_text (for audio) and original text (for UI display)
-                self._generate_and_play_tts(clean_text, original_text=text)
-            else:
-                self.append_text(f"{text}")
-        except Exception as e:
-            logging.error(f"Error while flushing typing buffer: {e}")
+        # Flush any ongoing typing so it doesn't overlap with a new incoming message
+        self._flush_typing_buffer()
+        
+        if self.narrator_enabled and not text.startswith("> "):
+            # Strip markdown formatting for the audio so it doesn't narrate "asterisk"
+            clean_text = re.sub(r'[*_~`#]', '', text, re.DOTALL)
+            
+            # Pass BOTH clean_text (for audio) and original text (for UI display)
+            self._generate_and_play_tts(clean_text, original_text=text)
+        else:
+            self.append_text(f"{text}")
 
     def _emit_send(self) -> None:
-        try:
-            text = (self.txt_input.text() or "").strip()
-            if not text:
-                return
-            if self.narrator_enabled:
-                self.stop_tts()
-            self.txt_input.clear()
-            self.send_requested.emit(text)
-        except Exception as e:
-            logging.error(f"Error while emitting send: {e}")
+        text = (self.txt_input.text() or "").strip()
+        if not text:
+            return
+        if self.narrator_enabled:
+            self.stop_tts()
+        self.txt_input.clear()
+        self.send_requested.emit(text)
         
     def _generate_and_play_tts(self, text: str, original_text: str | None = None) -> None:
-        """
-        Generates TTS audio using a local Piper ONNX model and plays it asynchronously.
-        
-        Args:
-            text (str): The clean plaintext to be read aloud.
-            original_text (str | None): The original text with markdown formatting (used for UI typing).
-        """
-        def run_tts():
+        """Generates the audio file asynchronously so the UI doesn't freeze."""
+        def run_async():
+            # Convert UI slider (-10 to 10) to Edge-TTS percentage format (-50% to +50%)
+            unique_filename = f"ai_adventure_tts_{uuid.uuid4().hex}.mp3"
+            dynamic_tts_file = os.path.join(self.temp_dir, unique_filename)
+            rate_str = f"{self.tts_rate * 5}%"
+            if self.tts_rate >= 0: 
+                rate_str = f"+{rate_str}"
                 
             try:
-                # Piper TTS generates WAV files natively
-                unique_filename = f"ai_adventure_tts_{uuid.uuid4().hex}.wav"
-                dynamic_tts_file = os.path.join(self.temp_dir, unique_filename)# Cache the model so we don't reload the large .onnx file on every single message
-                if self._piper_voice_cache is None or self._cached_voice_path != self.tts_voice:
-                    logging.info(f"Loading Piper TTS model: {self.tts_voice}")
-                    if not os.path.exists(self.tts_voice):
-                        raise FileNotFoundError(f"Piper model not found at path: {self.tts_voice}")
-                    
-                    self._piper_voice_cache = PiperVoice.load(self.tts_voice)
-                    self._cached_voice_path = self.tts_voice
-
-                # Piper controls speed via length_scale: 1.0 is normal, < 1.0 is faster, > 1.0 is slower.
-                # Assuming your UI slider is -10 (slow) to +10 (fast).
-                length_scale = 1.0 - (self.tts_rate * 0.02)
-                
-                # Clamp the scale to prevent the audio from becoming completely distorted/crashing
-                length_scale = max(0.6, min(1.5, length_scale)) 
-                
-                # Update the speed multiplier on the voice's internal config directly
-                if hasattr(self._piper_voice_cache, 'config'):
-                    self._piper_voice_cache.config.length_scale = length_scale
-                
-                # Synthesize the audio and save to the dynamic temporary file (Removed the kwarg!)
-                with wave.open(dynamic_tts_file, "wb") as wav_file:
-                    self._piper_voice_cache.synthesize_wav(text, wav_file)
+                communicate = edge_tts.Communicate(text, self.tts_voice, rate=rate_str)
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                # Save to the unique file instead of the static one
+                loop.run_until_complete(communicate.save(dynamic_tts_file))
+                loop.close()
                 
                 self._play_generated_tts(dynamic_tts_file)
-                
-                # Fire the visual typing signal EXACTLY when audio starts playing
+                # IMPORTANT: Fire the visual typing signal EXACTLY when audio starts playing
                 if original_text is not None:
                     self.start_typing_signal.emit(original_text)
-                    
             except Exception as e:
-                logging.error(f"Piper TTS Error: {e}")
+                print(f"Edge-TTS Error: {e}")
                 # Fallback: Just print the text normally if generation fails
                 if original_text is not None:
                     self.start_typing_signal.emit(original_text)
 
-        # Start the generation in a background thread so the UI doesn't freeze
-        threading.Thread(target=run_tts, daemon=True).start()
+        # Start the generator in a background thread
+        threading.Thread(target=run_async, daemon=True).start()
         
     def _start_typing_effect(self, text: str) -> None:
         """Prepares the buffer and calculates the WPM delay for typing."""
+        # Add spacing if the log isn't empty to distinguish paragraphs
         if self.txt_log.toPlainText():
             self.txt_log.append("")
             
+        # Split text but retain spaces/newlines as separate tokens
         self.typing_buffer = re.split(r'(\s+)', text)
-        self.typing_buffer = [w for w in self.typing_buffer if w]
+        self.typing_buffer = [w for w in self.typing_buffer if w] # Remove empty strings
         
-        # Base WPM changed slightly from Edge-TTS to reflect average local TTS pacing
-        base_wpm = 160
+        # Edge-TTS default WPM is approx 160. Calculate modified WPM based on slider.
+        base_wpm = 180
         multiplier = 1.0 + (self.tts_rate * 0.05)
-        if multiplier < 0.1: multiplier = 0.1 
+        if multiplier < 0.1: multiplier = 0.1 # Prevent dividing by zero
         
         current_wpm = base_wpm * multiplier
-        delay_ms = int(60000 / current_wpm)
         
+        # Words per minute -> ms delay between words (60,000 ms per minute)
+        delay_ms = int(60000 / current_wpm)
         self.btn_send.setVisible(False)
         self.btn_skip.setVisible(True)
+        
         self.typing_timer.start(delay_ms)
         
     def _type_next_word(self) -> None:
@@ -445,10 +385,7 @@ class StoryPanel(QWidget):
         self.narrator_enabled = original_state
         
     def set_voice_by_name(self, voice_id: str) -> None:
-        """
-        Updates the selected voice. 
-        Note: The actual Piper model is lazily loaded on the next generation request.
-        """
+        # We now store the edge-tts string (e.g. "en-US-AriaNeural") directly
         self.tts_voice = voice_id
 
     def set_music_volume(self, val: int) -> None:

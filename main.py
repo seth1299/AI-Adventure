@@ -237,21 +237,17 @@ class QtAppContext:
                     best_mtime = mtime
                     best_path = p
             return best_path
-        except Exception as e:
-            logging.exception(f"Failed to resolve save path for recap: {e}")
+        except Exception:
+            logging.exception("Failed to resolve save path for recap")
             return None
         
     def load_savegame_state(self, save_path: str) -> dict:
         """Load savegame.json and hydrate Player + app flags, then sync status UI."""
-        
-        try:
-            self.current_adventure_path = save_path
-            self.player.set_save_path(save_path)
+        self.current_adventure_path = save_path
+        self.player.set_save_path(save_path)
 
-            sg_path = os.path.join(save_path, "savegame.json")
-            data = FileManager.load_json_data(sg_path) or {}
-        except Exception as e:
-            logging.error(f"Error while attempting to read file save path: {e}")
+        sg_path = os.path.join(save_path, "savegame.json")
+        data = FileManager.load_json_data(sg_path) or {}
 
         # Player meta
         try:
@@ -315,8 +311,9 @@ class QtAppContext:
             else:
                 self.story_tab.print_text(f"What do you do now?\n")
             
-        except Exception as e:
-            logging.exception(f"Generate recap failed: {e}")
+        except Exception:
+            logging.exception("Generate recap failed")
+            self.story_tab.print_text("Recap failed (see logs).", sender="System")
 
     def _format_recap_text(self, text):
         if not text: return ""
@@ -362,22 +359,19 @@ class QtAppContext:
 
     def _sync_player_state_to_ui(self) -> None:
         """Thread-safe push of Player status into the Qt status header."""
-        try:
-            s = self.player.get_status_dict()
+        s = self.player.get_status_dict()
 
-            def _apply():
-                self.win.story_panel.set_status(
-                    turn=s.get("turn") or 1,
-                    location=s.get("location") or "Character Creation",
-                    day=f"{s.get('day')}" or "Day 1",
-                    time=s.get("time") or "12:00 A.M.",
-                    dynamic_stats=s.get("tracked_stats", [])
-                )
+        def _apply():
+            self.win.story_panel.set_status(
+                turn=s.get("turn") or 1,
+                location=s.get("location") or "Character Creation",
+                day=f"{s.get('day')}" or "Day 1",
+                time=s.get("time") or "12:00 A.M.",
+                dynamic_stats=s.get("tracked_stats", [])
+            )
 
-            # AIManager calls this from worker threads; dispatch to UI thread.
-            self.ui.run_now.emit(_apply)
-        except Exception as e:
-            logging.error(f"Error syncing state to UI: {e}")
+        # AIManager calls this from worker threads; dispatch to UI thread.
+        self.ui.run_now.emit(_apply)
 
 def main() -> int:
     FileManager.setup_initial_logging()
@@ -416,46 +410,40 @@ def main() -> int:
     win.story_panel.volume_changed.connect(app_ctx.sound_manager.set_volume)
 
     def _boot_selected_save() -> None:
-        try:
-            FileManager.update_logger_path(save_name)
-            app_ctx.player.set_save_path(save_path)
+        FileManager.update_logger_path(save_name)
+        app_ctx.player.set_save_path(save_path)
 
-            savegame_path = os.path.join(save_path, "savegame.json")
-            creation_summary_path = os.path.join(save_path, "creation_summary.txt")
-            secret_path = os.path.join(save_path, "secret.txt")
-            world_path = os.path.join(save_path, "world.md")
-            if os.path.exists(savegame_path):
-                app_ctx.load_savegame_state(save_path)
-                win._load_ui_state(save_path)
-                app_ctx.generate_recap()
-                return
-            if not os.path.exists(creation_summary_path): 
-                with open(creation_summary_path, "w", encoding="utf-8") as f: f.write("")
-            if not os.path.exists(secret_path): 
-                with open(secret_path, "w", encoding="utf-8") as f: f.write("")
-            if not os.path.exists(world_path): 
-                with open(world_path, "w", encoding="utf-8") as f: f.write("")
+        savegame_path = os.path.join(save_path, "savegame.json")
+        creation_summary_path = os.path.join(save_path, "creation_summary.txt")
+        secret_path = os.path.join(save_path, "secret.txt")
+        world_path = os.path.join(save_path, "world.md")
+        if os.path.exists(savegame_path):
+            app_ctx.load_savegame_state(save_path)
+            win._load_ui_state(save_path)
+            app_ctx.generate_recap()
+            return
+        if not os.path.exists(creation_summary_path): 
+            with open(creation_summary_path, "w", encoding="utf-8") as f: f.write("")
+        if not os.path.exists(secret_path): 
+            with open(secret_path, "w", encoding="utf-8") as f: f.write("")
+        if not os.path.exists(world_path): 
+            with open(world_path, "w", encoding="utf-8") as f: f.write("")
 
-            app_ctx.current_adventure_path = save_path
-            app_ctx.conversation_history = []
-        except Exception as e:
-            logging.error(f"Error booting selected save: {e}")
+        app_ctx.current_adventure_path = save_path
+        app_ctx.conversation_history = []
         try:
             for w in app_ctx.notebook_widgets.values():
                 w.set_base_path(save_path)
-        except Exception as e:
-            logging.exception(f"Failed to set base path for panels: {e}")
+        except Exception:
+            logging.exception("Failed to set base path for panels")
 
         from qt_ui.creation_wizard import CreationWizard
         wizard = CreationWizard(win)
         if wizard.exec() == QDialog.DialogCode.Accepted:
-            try:
-                wizard_data = wizard.get_wizard_data()
-                app_ctx.player.world_currencies = wizard_data["currencies"]
-                app_ctx.player.tracked_stats = wizard_data["stats"]
-                app_ctx._sync_player_state_to_ui()
-            except Exception as e:
-                logging.error(f"Error getting wizard data: {e}")
+            wizard_data = wizard.get_wizard_data()
+            app_ctx.player.world_currencies = wizard_data["currencies"]
+            app_ctx.player.tracked_stats = wizard_data["stats"]
+            app_ctx._sync_player_state_to_ui()
             
             if win.ai_manager != None:
                 threading.Thread(target=win.ai_manager.start_new_game_from_wizard, args=(wizard_data,), daemon=True).start()
@@ -468,6 +456,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    main()
-    pass
-    #raise SystemExit(main())
+    raise SystemExit(main())

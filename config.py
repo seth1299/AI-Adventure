@@ -12,17 +12,12 @@ MODEL = "gemini-3.1-flash-lite-preview"
 SAVES_DIR = "saves"
 APP_NAME = "AI_RPG_ADVENTURE"
 
-
 if platform.system() == "Windows":
     # C:\Users\YourName\AppData\Roaming\AI_RPG_Adventure
     base_dir = os.getenv('APPDATA') or os.path.expanduser("~")
 else:
     # Mac/Linux support (just in case)
     base_dir = os.path.expanduser("~/.local/share")
-
-TTS_MODELS_DIR = os.path.join(base_dir, APP_NAME, "tts_models")
-if not os.path.exists(TTS_MODELS_DIR):
-    os.makedirs(TTS_MODELS_DIR)
     
 SAVES_DIR = os.path.join(base_dir, APP_NAME, "saves")
 if not os.path.exists(SAVES_DIR):
