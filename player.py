@@ -48,32 +48,19 @@ class Player:
         else: return ""
 
     def update_world_state(self, location: str, minutes_to_add: int) -> None:
-        """Updates the tracking variables."""
+        """Updates the tracking variables and automatically rolls over time/days."""
         self.turn += 1
 
         if location and str(location).strip().upper() != "AUTO": 
             self.location = location
         
-        current_time_as_a_list = self.time[0:4].split(":")
-        logging.info(f"Current time as a list: {current_time_as_a_list}")
-        original_hour = int(current_time_as_a_list[0])
-        modified_hour = original_hour
-        modified_minutes = minutes_to_add
-        if "P.M." in self.time:
-            original_hour += 12
-        
-        while modified_minutes > 0:
-            modified_hour += 1
-            modified_minutes -= 60
-            
-        while modified_hour >= 24:
-            self.day += 1
-            modified_hour -= 24
-            
-        if modified_hour >= 0 and modified_hour <= 12:
-            self.time = str(modified_hour) + ":" + str(modified_minutes) + " A.M."
-        else:
-            self.time = str(modified_hour - 12) + ":" + str(modified_minutes) + " P.M."
+        import time_utils
+        try:
+            # Replaces string slicing with our safe 24-hour wrap-around utility
+            self.day, self.time = time_utils.advance_time(self.day, self.time, minutes_to_add)
+            logging.info(f"Time successfully advanced to Day {self.day}, {self.time}")
+        except Exception as error:
+            logging.error(f"Failed to update world time: {error}")
 
     def modify_stat(self, stat_name, raw_value):
         """

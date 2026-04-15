@@ -18,8 +18,6 @@ from PySide6.QtWidgets import (
 from tabulate import tabulate
 
 from file_manager import FileManager
-from time_utils import to_abs_minutes, from_abs_minutes
-
 
 class ProcessingPanel(QWidget):
     """Qt Processing panel (processes + projects) backed by processing.json."""
@@ -104,32 +102,56 @@ class ProcessingPanel(QWidget):
 
     # ---- AI helpers (mirrors ProcessingTab API) ----
 
-    def add_timed_process(self, name, desc, duration_minutes, current_day, current_time_str, expected_yield):
+    def add_timed_process(self, name, description, duration_minutes, current_day, current_time_str, expected_yield):
+        """Adds a process with a calculated target day and target time."""
         data = self.load_data()
-        # Intending to take off the "AM/PM" and then split based on the colon separator, so the Minutes should be the 1st index and the Hours should be the 0th index
-        current_minute = int(current_time_str[:-3].split(":")[1])
-        current_hour = int(current_time_str[:-3].split(":")[0])
-        target_minutes = current_minute + duration_minutes
-        target_day = current_day
-        while target_minutes >= 60:
-            target_hour += 1
-            target_minutes -= 60
-            if target_hour >= 24:
-                target_day += 1
-                target_hour = 0
-                
-        target_time = str(target_hour) + ":" + str(target_minutes) + " " + "A.M." if target_hour < 12 else "P.M."
+        
+        # Safely advance the time using our clean utility
+        from time_utils import advance_time
+        target_day, target_time_str = advance_time(current_day, current_time_str, duration_minutes)
 
         entry = {
             "name": name,
-            "desc": desc,
+            "desc": description,
             "type": "process",
             "yield": expected_yield,
             "status": "In Progress",
-            "ready_on": target_time
+            "ready_on_day": target_day,    # Track the day separately
+            "ready_on_time": target_time_str # Track the string representation
         }
         data.append(entry)
         self.save_data(data)
+
+    def check_active_tasks(self, current_day, current_time_str):
+        """Checks if ongoing tasks have passed their target completion time."""
+        data = self.load_data()
+        if not data:
+            return []
+
+        completed = []
+        changed = False
+
+        from time_utils import is_time_passed
+
+        for item in data:
+            if item.get("status") != "In Progress" or item.get("type") != "process":
+                continue
+            
+            # Grab the targets from the dictionary we made in add_timed_process
+            target_day = item.get("ready_on_day", 1)
+            target_time_str = item.get("ready_on_time", "12:00 A.M.")
+            
+            # Use our utility to see if the current time is greater than or equal to the target time
+            if is_time_passed(current_day, current_time_str, target_day, target_time_str):
+                item["status"] = "COMPLETED"
+                expected_yield = item.get("yield", "Unknown")
+                completed.append(f"{item.get('name', 'Unknown')} (Yield: {expected_yield})")
+                changed = True
+
+        if changed:
+            self.save_data(data)
+
+        return completed
 
     def add_project(self, name, desc, work_required, skill_name, skill_level_at_start, expected_yield):
         data = self.load_data()
@@ -185,37 +207,6 @@ class ProcessingPanel(QWidget):
             if str(item.get("name", "")).lower() == str(name).lower() and item.get("type") == "project":
                 return item.get("skill")
         return None
-
-    def check_active_tasks(self, current_day, current_time_str):
-        data = self.load_data()
-        if not data:
-            return []
-
-        current_abs = to_abs_minutes(current_day, current_time_str)
-        completed = []
-        changed = False
-
-        for item in data:
-            if item.get("status") != "In Progress":
-                continue
-            if item.get("type") != "process":
-                continue
-            
-            # TODO: Figure out how to figure out the current day and time compare to the "ready_on" data entry.
-            
-            """
-            tgt = int(item.get("target_abs_minutes", 0))
-            if current_abs >= tgt:
-                item["status"] = "COMPLETED"
-                y = item.get("yield", "Unknown")
-                completed.append(f"{item.get('name', 'Unknown')} (Yield: {y})")
-                changed = True
-            """
-
-        if changed:
-            self.save_data(data)
-
-        return completed
 
     def apply_work_hours(self, name, hours_worked, skill_level):
         data = self.load_data()
@@ -283,8 +274,12 @@ class ProcessingPanel(QWidget):
                 if status == "COMPLETED":
                     prog = "DONE (collect)"
                 else:
-                    tgt = from_abs_minutes(int(item.get("target_abs_minutes", 0)))
-                    prog = f"Due: Day {tgt.as_day_string()} at {tgt.as_time_string()}"
+                    # --- NEW ADDITION START ---
+                    # We look for the new string-based keys instead of target_abs_minutes
+                    target_day = item.get("ready_on_day", "Unknown")
+                    target_time = item.get("ready_on_time", "Unknown")
+                    prog = f"Due: Day {target_day} at {target_time}"
+                    # --- NEW ADDITION END ---
                 rows.append([item.get("name", ""), "PROCESS", status, prog, y, desc])
             else:
                 req = float(item.get("work_required", 0.0) or 0.0)
@@ -300,6 +295,7 @@ class ProcessingPanel(QWidget):
                     prog = f"{done:.1f}/{req:.1f} WA (Skill: {skill}) ~{hrs_left:.1f} hrs left"
                 rows.append([item.get("name", ""), "PROJECT", status, prog, y, desc])
 
+        from tabulate import tabulate
         txt = "ONGOING TASKS\n" + tabulate(rows, headers, tablefmt="rounded_grid") + "\n"
         self.display.setPlainText(txt)
         self._set_state("")
