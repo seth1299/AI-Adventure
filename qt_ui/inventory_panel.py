@@ -295,12 +295,14 @@ class InventoryPanel(QWidget):
                         cur_amt = item.get("amount", 0)
                         item["amount"] = str(cur_amt + amount)
                         found = True
+                        
                     except Exception as e:
                         logging.error(f"InventoryPanel.autonomous_add: stacking failed: {e}")
                     break
 
             if not found:
                 data[category].append(new_item)
+                logging.info(f"Successfully added {item.get("amount", "")}x {item.get("name", "")} to the Player's inventory.")
 
             self.save_data(data)
         except Exception as e:

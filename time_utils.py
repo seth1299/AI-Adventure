@@ -148,6 +148,10 @@ def add_hours(day_str: str, time_str: str, delta_hours: float) -> GameTime:
     delta_minutes = int(round(float(delta_hours) * 60))
     return from_abs_minutes(start + delta_minutes)
 
+def add_minutes(day_str: str, time_str: str, delta_minutes: int) -> GameTime:
+    start = to_abs_minutes(day_str, time_str)
+    return from_abs_minutes(start + delta_minutes)
+
 
 def normalize_day_time(day_str: str, time_str: str):
     d = parse_day(day_str)

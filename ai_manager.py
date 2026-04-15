@@ -1,7 +1,7 @@
 from google import genai
 from google.genai import types
 import threading, re, os, logging, random, csv
-from config import GEMINI_API_KEY, MODEL, DEFAULT_RULES
+from config import GEMINI_API_KEY, MODEL
 from tabulate import tabulate
 from rapidfuzz import process, fuzz
 from config import VALID_SOUND_FILE_NAMES
@@ -180,7 +180,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
         """Constructs the context and prompt, then threads the AI query."""
         self.app.story_tab.set_controls_state(False, "GM is thinking...")
         user_text = "> " + user_text
-        self.app.story_tab.print_text("\n" + user_text + "\n")
+        self.app.story_tab.print_text(user_text)
 
         # 1. Gather Context from Tabs
         context_data = ""
@@ -199,7 +199,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
             logging.error(f"Error: Could not open secret.txt. {e}")
         
         # 2. Gather Status
-        next_turn = self.app.player.turn + 1
+        self.app.player.turn += 1
         stats_str = ""
         for stat in self.app.player.tracked_stats:
             if stat.get("enabled", True):
@@ -213,27 +213,25 @@ After outputting the tags, summarize the first starting turn, describe the surro
             f"Current in-game Time: {self.app.player.time}\n"
             f"Current in-game Turn: {self.app.player.turn}\n"
             f"Stats: {stats_str}"
-            f"UPCOMING TURN: {next_turn} (You MUST use this number in the [[STATUS]] tag)"
         )
         context_data += status_context
 
         # 3. Build Prompt
         recent_history = self.app.conversation_history[-3000:] if len(self.app.conversation_history) > 3000 else self.app.conversation_history
-        full_prompt = f"{context_data}\nHistory:\n{recent_history}\n> {user_text}\nGM:"
+        full_prompt = f"\nPast Conversation History:\n{recent_history}\nUser's request: {user_text}\nPlease remember to consider the following in your response: {context_data}"
 
         # 4. Thread the request
         threading.Thread(target=self.query_ai, args=(full_prompt, user_text), daemon=True).start()
 
     def query_ai(self, prompt, user_text, recursion_depth=0, is_startup=False):
         """Sends the prompt to Gemini and processes all resulting tags."""
+        current_rules = self.app.load_rules()
             
         try:
-            system_struction_temp = self.app.load_rules()
-            logging.info(f"\n\nPrompt: \n\n{system_struction_temp}")
             response = self.client.models.generate_content(
                 model=MODEL,
                 config=types.GenerateContentConfig(
-                    system_instruction=system_struction_temp,
+                    system_instruction=current_rules,
                     temperature=0.9
                 ),
                 contents=prompt
@@ -413,13 +411,11 @@ class TagParser:
             sfx = match.group(1).strip()
             self.app.after(0, lambda s=sfx: self.app.sound_manager.play_sfx(s))
 
-        status_match = re.search(r"\[\[STATUS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL)
+        status_match = re.search(r"\[\[STATUS:\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL)
         if status_match:
             self.app.player.update_world_state(
-                turn=status_match.group(1).strip(),
-                location=status_match.group(2).strip(),
-                day=status_match.group(3).strip(),
-                time=status_match.group(4).strip()
+                location=status_match.group(1).strip(),
+                time=status_match.group(2).strip()
             )
             self.app._sync_player_state_to_ui()
                     

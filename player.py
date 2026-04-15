@@ -1,5 +1,6 @@
 import logging, random, os
 from file_manager import FileManager
+import time_utils
 
 class Player:
     def __init__(self):
@@ -13,14 +14,14 @@ class Player:
         # World State (often tied to the player in single-player RPGs)
         self.location = "Unknown"
         self.turn = 1
-        self.day = "1"
-        self.time = "Start"
+        self.day = 1
+        self.time = "12:00 PM"
 
     def load_from_dict(self, data):
         """Loads state from the Status dictionary in savegame.json."""
         self.location = data.get("location", "Unknown")
         self.turn = int(data.get("turn", 1))
-        self.day = data.get("day", "1")
+        self.day = data.get("day", 1)
         self.time = data.get("time", "Start")
         self.base_currency = int(data.get("base_currency", 0))
         
@@ -35,7 +36,7 @@ class Player:
         return {
             "location": self.location,
             "turn": str(self.turn),
-            "day": str(self.day),
+            "day": self.day,
             "time": self.time,
             "base_currency": self.base_currency,
             "tracked_stats": self.tracked_stats,
@@ -46,22 +47,33 @@ class Player:
         if self.world_currencies: return self.world_currencies
         else: return ""
 
-    def update_world_state(self, turn, location, day, time):
+    def update_world_state(self, location: str, minutes_to_add: int) -> None:
         """Updates the tracking variables."""
-        if turn is not None and str(turn).strip().upper() != "AUTO": 
-            try:
-                self.turn = int(turn)
-            except:
-                logging.error(f"Error converting turn to integer: {turn}")
-                self.turn = -1
+        self.turn += 1
+
         if location and str(location).strip().upper() != "AUTO": 
             self.location = location
+        
+        current_time_as_a_list = self.time[0:4].split(":")
+        logging.info(f"Current time as a list: {current_time_as_a_list}")
+        original_hour = int(current_time_as_a_list[0])
+        modified_hour = original_hour
+        modified_minutes = minutes_to_add
+        if "P.M." in self.time:
+            original_hour += 12
+        
+        while modified_minutes > 0:
+            modified_hour += 1
+            modified_minutes -= 60
             
-        if day and str(day).strip().upper() != "AUTO": 
-            self.day = day
+        while modified_hour >= 24:
+            self.day += 1
+            modified_hour -= 24
             
-        if time and str(time).strip().upper() != "AUTO": 
-            self.time = time
+        if modified_hour >= 0 and modified_hour <= 12:
+            self.time = str(modified_hour) + ":" + str(modified_minutes) + " A.M."
+        else:
+            self.time = str(modified_hour - 12) + ":" + str(modified_minutes) + " P.M."
 
     def modify_stat(self, stat_name, raw_value):
         """
