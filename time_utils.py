@@ -22,138 +22,82 @@ class GameTime:
     minute: int
     ampm: str
 
-    def as_time_string(self) -> str:
-        return format_time(self.hour, self.minute, self.ampm)
-
-    def as_day_string(self) -> str:
-        return format_day(self.day)
-
-
-def clamp_day(day: int) -> int:
+def advance_time(current_day: int, time_string: str, minutes_to_add: int) -> tuple[int, str]:
+    """
+    Advances the given time by a set number of minutes, returning the new day and formatted time string.
+    
+    Args:
+        current_day (int): The starting day.
+        time_string (str): The starting time in "HH:MM A.M." or "HH:MM P.M." format.
+        minutes_to_add (int): The number of minutes to advance.
+        
+    Returns:
+        tuple[int, str]: The new day and the new formatted time string.
+    """
     try:
-        day = int(day)
-    except Exception as e:
-        logging.error(f"Error trying to clamp day in time_utils: {e}")
-        day = 1
-    return max(1, day)
+        # Split safely by spaces (e.g., "01:30 P.M." -> ["01:30", "P.M."])
+        time_parts = time_string.strip().split()
+        clock_part = time_parts[0]
+        # Remove any dots to standardize checking "AM" vs "PM"
+        am_pm_part = time_parts[1].upper().replace(".", "") if len(time_parts) > 1 else "AM"
+        
+        # Split the clock part by colon
+        hour, minute = map(int, clock_part.split(":"))
+        
+        # Convert to 24-hour format temporarily so the math is super easy
+        if am_pm_part == "PM" and hour != 12:
+            hour += 12
+        elif am_pm_part == "AM" and hour == 12:
+            hour = 0
+            
+        # Add the new minutes
+        total_minutes = minute + minutes_to_add
+        
+        # Calculate how many hours we just made, and what the leftover minutes are
+        extra_hours = total_minutes // 60
+        new_minute = total_minutes % 60
+        
+        total_hours = hour + extra_hours
+        
+        # Calculate how many days we rolled over
+        days_passed = total_hours // 24
+        new_hour_24 = total_hours % 24
+        new_day = current_day + days_passed
+        
+        # Convert back to a 12-hour format string for display
+        new_am_pm = "P.M." if new_hour_24 >= 12 else "A.M."
+        new_hour_12 = new_hour_24 % 12
+        if new_hour_12 == 0:
+            new_hour_12 = 12
+            
+        # Format the output with :02d so single digit minutes get a leading zero (e.g., "05")
+        new_time_string = f"{new_hour_12}:{new_minute:02d} {new_am_pm}"
+        
+        return new_day, new_time_string
+        
+    except Exception as error:
+        logging.error(f"Error calculating time: {error}. Falling back to original time.")
+        return current_day, time_string
 
-
-def parse_day(day_str: str) -> int:
-    if day_str is None:
-        return 1
-    s = str(day_str).strip()
-    m = re.search(r"(\d+)", s)
-    if not m:
-        return 1
-    return clamp_day(int(m.group(1)))
-
-
-def format_day(day: int) -> str:
-    return f"{clamp_day(day)}"
-
-
-def _to_24h(hour12: int, ampm: str) -> int:
-    a = (ampm or "").strip().upper()
-    h = int(hour12)
-    if a == "AM":
-        return 0 if h == 12 else h
-    return 12 if h == 12 else h + 12
-
-
-def _from_24h(hour24: int) -> Tuple[int, str]:
-    h = int(hour24) % 24
-    if h == 0:
-        return (12, "AM")
-    if 1 <= h <= 11:
-        return (h, "AM")
-    if h == 12:
-        return (12, "PM")
-    return (h - 12, "PM")
-
-
-def minutes_since_midnight(hour12: int, minute: int, ampm: str) -> int:
-    h24 = _to_24h(hour12, ampm)
-    m = max(0, min(59, int(minute)))
-    return h24 * 60 + m
-
-
-def clock_from_minutes(mins: int) -> Tuple[int, int, str]:
-    mins = int(mins) % 1440
-    h24 = mins // 60
-    m = mins % 60
-    h12, ap = _from_24h(h24)
-    return h12, m, ap
-
-
-def format_time(hour: int, minute: int, ampm: str) -> str:
-    ap = (ampm or "AM").strip().upper()
-    if ap not in ("AM", "PM"):
-        ap = "AM"
-    h = int(hour)
-    if h < 1 or h > 12:
-        h, ap = _from_24h(h)
-    m = max(0, min(59, int(minute)))
-    return f"{h}:{m:02d} {ap}"
-
-
-def parse_time(time_str: str) -> Tuple[int, int, str]:
-    if not time_str:
-        return (12, 0, "AM")
-
-    s = str(time_str).strip()
-
-    # HH:MM AM/PM
-    m = re.match(r"^\s*(\d{1,2})\s*:\s*(\d{1,2})\s*([AaPp][Mm])\s*$", s)
-    if m:
-        h = max(1, min(12, int(m.group(1))))
-        mi = max(0, min(59, int(m.group(2))))
-        ap = m.group(3).upper()
-        return (h, mi, ap)
-
-    # H AM/PM
-    m = re.match(r"^\s*(\d{1,2})\s*([AaPp][Mm])\s*$", s)
-    if m:
-        h = max(1, min(12, int(m.group(1))))
-        ap = m.group(2).upper()
-        return (h, 0, ap)
-
-    # 24h like 15:30
-    m = re.match(r"^\s*(\d{1,2})\s*:\s*(\d{1,2})\s*$", s)
-    if m:
-        h24 = int(m.group(1)) % 24
-        mi = max(0, min(59, int(m.group(2))))
-        h12, ap = _from_24h(h24)
-        return (h12, mi, ap)
-
-    return (12, 0, "AM")
-
-
-def to_abs_minutes(day_str: str, time_str: str) -> int:
-    day = parse_day(day_str)
-    h, m, ap = parse_time(time_str)
-    mins = minutes_since_midnight(h, m, ap)
-    return (day - 1) * 1440 + mins
-
-
-def from_abs_minutes(abs_minutes: int) -> GameTime:
-    abs_minutes = max(0, int(abs_minutes))
-    day = (abs_minutes // 1440) + 1
-    mins = abs_minutes % 1440
-    h, m, ap = clock_from_minutes(mins)
-    return GameTime(day=day, hour=h, minute=m, ampm=ap)
-
-
-def add_hours(day_str: str, time_str: str, delta_hours: float) -> GameTime:
-    start = to_abs_minutes(day_str, time_str)
-    delta_minutes = int(round(float(delta_hours) * 60))
-    return from_abs_minutes(start + delta_minutes)
-
-def add_minutes(day_str: str, time_str: str, delta_minutes: int) -> GameTime:
-    start = to_abs_minutes(day_str, time_str)
-    return from_abs_minutes(start + delta_minutes)
-
-
-def normalize_day_time(day_str: str, time_str: str):
-    d = parse_day(day_str)
-    h, m, ap = parse_time(time_str)
-    return (format_day(d), format_time(h, m, ap), h, m, ap)
+def is_time_passed(current_day: int, current_time_string: str, target_day: int, target_time_string: str) -> bool:
+    """
+    Compares two string-based times to see if the current time has passed the target time.
+    """
+    if current_day > target_day:
+        return True
+    if current_day < target_day:
+        return False
+        
+    # If it's the exact same day, convert both times to 24-hour minutes to easily compare them
+    def _get_24h_minutes(time_str: str) -> int:
+        try:
+            parts = time_str.strip().split()
+            h, m = map(int, parts[0].split(":"))
+            am_pm = parts[1].upper().replace(".", "") if len(parts) > 1 else "AM"
+            if am_pm == "PM" and h != 12: h += 12
+            if am_pm == "AM" and h == 12: h = 0
+            return (h * 60) + m
+        except Exception:
+            return 0
+            
+    return _get_24h_minutes(current_time_string) >= _get_24h_minutes(target_time_string)
