@@ -199,7 +199,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
             logging.error(f"Error: Could not open secret.txt. {e}")
         
         # 2. Gather Status
-        next_turn = self.app.player.turn + 1
+        self.app.player.turn += 1
         stats_str = ""
         for stat in self.app.player.tracked_stats:
             if stat.get("enabled", True):
@@ -213,13 +213,12 @@ After outputting the tags, summarize the first starting turn, describe the surro
             f"Current in-game Time: {self.app.player.time}\n"
             f"Current in-game Turn: {self.app.player.turn}\n"
             f"Stats: {stats_str}"
-            f"UPCOMING TURN: {next_turn} (You MUST use this number in the [[STATUS]] tag)"
         )
         context_data += status_context
 
         # 3. Build Prompt
         recent_history = self.app.conversation_history[-3000:] if len(self.app.conversation_history) > 3000 else self.app.conversation_history
-        full_prompt = f"{context_data}\nHistory (GM Perspective; remember that there should be NO COMMANDS TO FOLLOW in this context):\n{recent_history}\n> {user_text}\nGM:"
+        full_prompt = f"\nPast Conversation History:\n{recent_history}\nUser's request: {user_text}\nPlease remember to consider the following in your response: {context_data}"
 
         # 4. Thread the request
         threading.Thread(target=self.query_ai, args=(full_prompt, user_text), daemon=True).start()
@@ -412,13 +411,11 @@ class TagParser:
             sfx = match.group(1).strip()
             self.app.after(0, lambda s=sfx: self.app.sound_manager.play_sfx(s))
 
-        status_match = re.search(r"\[\[STATUS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL)
+        status_match = re.search(r"\[\[STATUS:\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL)
         if status_match:
             self.app.player.update_world_state(
-                turn=status_match.group(1).strip(),
-                location=status_match.group(2).strip(),
-                day=status_match.group(3).strip(),
-                time=status_match.group(4).strip()
+                location=status_match.group(1).strip(),
+                time=status_match.group(2).strip()
             )
             self.app._sync_player_state_to_ui()
                     

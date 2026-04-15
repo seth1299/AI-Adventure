@@ -68,13 +68,13 @@ Whenever a "[[WORD: ]]" is mentioned, it is assumed that "please output the foll
    - **Modifying Items:** [[MODIFY_ITEM: TargetName | NewName | NewDesc | NewAmount ]]. Use "SAME" or "SKIP" for fields that do not change. You would output this tag when the Player "changes the state" of an object in their inventory, e.g. opening a locked container that was in their inventory, or repairing a broken sword that they had.
 
 3. GAME STATUS (End of Turn):
-   - Output this tag at the very end of every one of your responses (unless the Player is asking an Out-Of-Game or OOG question/clarification): [[STATUS: {Upcoming Turn Number} | Current Location | Current Day | Current Time]]
-   - Time format: "H:MM AM/PM". Day must be an integer. Use "AUTO" to keep current values.
-   - Example: [[STATUS: 5 | The Dark Forest | AUTO | AUTO]]
+   - Output this tag at the very end of every one of your responses (unless the Player is asking an Out-Of-Game or OOG question/clarification), where "Location" is the (potentially new) Location that the Player is in (or moved to), "Day" is the current Day number in-game, and "MinutesPassed" is an integer of how many minutes just passed in-game due to the Player's last action: [[STATUS: Location | Day | MinutesPassed]]
+   - Use "AUTO" to keep current values.
+   - Example: [[STATUS: Forest | AUTO | AUTO]] would 
 
 4. TIME-SENSITIVE PROJECTS:
-   - **Passive Processes** (runs automatically): [[START_PROCESS: Name | Desc | Hours | Expected_Yield]]. (Note: First use [[REMOVE]] for any ingredients used).
-   - **Active Projects** (requires labor): [[START_PROJECT: Name | Desc | Work_Amount | SkillName | Expected_Yield]]. (Work_Amount: 10 units = ~1 hour of labor).
+   - **Passive Processes** (runs automatically): [[START_PROCESS: Name | Description | How_Many_Minutes_It_Is_Expected_To_Take | Expected_Yield]]. (Note: First use [[REMOVE]] for any ingredients used). Make sure to make the description of the process as detailed as possible, including how the Player can finish the process (e.g. collect a drying pelt, go to a merchant to pick up a commission, etc).
+   - **Active Projects** (requires labor): [[START_PROJECT: Name | Description | Work_Amount | SkillName | Expected_Yield]]. (Work_Amount: 10 units = ~1 hour of labor).
    - **Working:** When the player works on an active project: [[WORK: ProjectName | Hours_Worked]].
    - **Completion:** When finished, output [[REMOVE_PROCESS: Name]] and then [[ADD: ...]] for the outcome of the process, with "Expected_Yield" being the "Amount" added in the [[ADD]] tag.
 
@@ -86,8 +86,7 @@ Whenever a "[[WORD: ]]" is mentioned, it is assumed that "please output the foll
    - To create a new stat: [[DEFINE_STAT: Name | Starting Value | Description]]. Include min/max rules in the description.
 
 6. AUDIO CONTROL:
-   **Music:** [[MUSIC: filename.mp3]] (Loops automatically. Only change on mood shifts).
-   **SFX:** [[SOUND: filename.wav]] (Momentary sounds).
+   **Music:** [[MUSIC: filename.mp3]] (Only change on mood shifts).
    - Valid files: {VALID_SOUND_FILE_NAMES}. Do NOT invent file names. If one doesn't seem appropriate, then don't pass the tag.
 7. CRAFTING & RECIPES:
    - **New Recipes:** [[RECIPE: Item Name | Ingredient1: Qty, Ingredient2: Qty]]. Limit to 3 ingredients maximum, 1 ingredient minimum. Use logical measurements.

@@ -8,7 +8,7 @@ from qt_ui.main_window import MainWindow
 from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt
 from player import Player
 from sound_manager import SoundManager
-from config import SAVES_DIR, SOUNDS_DIR, BASE_SOUNDS_DIR, VALID_SOUND_FILE_NAMES
+from config import SAVES_DIR, SOUNDS_DIR, BASE_SOUNDS_DIR, VALID_SOUND_FILE_NAMES, DEFAULT_RULES
 import random, re
 from qt_ui.main_menu_dialog import MainMenuDialog
 import threading
@@ -156,7 +156,7 @@ class QtAppContext:
 
     def load_rules(self) -> str:
         # 1. Fetch the raw rules string from the file manager
-        base_rules = FileManager.get_rules(self.current_adventure_path)
+        base_rules = DEFAULT_RULES
         
         # 2. Get the current currencies
         currency_list = self.player.get_world_currencies()
@@ -338,24 +338,6 @@ class QtAppContext:
         total = self.player.perform_skill_check(skill_name)
         #self.story_tab.print_text(msg, sender="System")
         return total
-
-    def _advance_time_hours(self, _hours: float) -> None:
-        try:
-            # 1. Calculate the new time using your existing utility function
-            new_game_time = time_utils.add_hours(self.player.day, self.player.time, _hours)
-            
-            # 2. Update the player's internal state
-            self.player.day = new_game_time.as_day_string()
-            self.player.time = new_game_time.as_time_string()
-            
-            # 3. Force the UI status bar to update so the player sees the change immediately
-            self._sync_player_state_to_ui()
-            
-            # 4. Save the game to lock in the time skip
-            self.save_game()
-            
-        except Exception as e:
-            logging.error(f"Error advancing time: {e}")
 
     def _sync_player_state_to_ui(self) -> None:
         """Thread-safe push of Player status into the Qt status header."""

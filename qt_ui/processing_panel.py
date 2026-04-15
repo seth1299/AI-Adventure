@@ -104,12 +104,21 @@ class ProcessingPanel(QWidget):
 
     # ---- AI helpers (mirrors ProcessingTab API) ----
 
-    def add_timed_process(self, name, desc, duration_hours, current_day, current_time_str, expected_yield):
+    def add_timed_process(self, name, desc, duration_minutes, current_day, current_time_str, expected_yield):
         data = self.load_data()
-
-        start_abs = to_abs_minutes(current_day, current_time_str)
-        dur_minutes = int(round(float(duration_hours) * 60))
-        dur_minutes = max(0, dur_minutes)
+        # Intending to take off the "AM/PM" and then split based on the colon separator, so the Minutes should be the 1st index and the Hours should be the 0th index
+        current_minute = int(current_time_str[:-3].split(":")[1])
+        current_hour = int(current_time_str[:-3].split(":")[0])
+        target_minutes = current_minute + duration_minutes
+        target_day = current_day
+        while target_minutes >= 60:
+            target_hour += 1
+            target_minutes -= 60
+            if target_hour >= 24:
+                target_day += 1
+                target_hour = 0
+                
+        target_time = str(target_hour) + ":" + str(target_minutes) + " " + "A.M." if target_hour < 12 else "P.M."
 
         entry = {
             "name": name,
@@ -117,15 +126,10 @@ class ProcessingPanel(QWidget):
             "type": "process",
             "yield": expected_yield,
             "status": "In Progress",
-            "duration_hours": float(duration_hours),
-            "start_abs_minutes": start_abs,
-            "target_abs_minutes": start_abs + dur_minutes,
+            "ready_on": target_time
         }
         data.append(entry)
         self.save_data(data)
-
-        finish = from_abs_minutes(entry["target_abs_minutes"])
-        return f"(Started Process: {name}. Yields: {expected_yield}. Finishes {finish.as_day_string()} at {finish.as_time_string()})"
 
     def add_project(self, name, desc, work_required, skill_name, skill_level_at_start, expected_yield):
         data = self.load_data()
@@ -196,13 +200,17 @@ class ProcessingPanel(QWidget):
                 continue
             if item.get("type") != "process":
                 continue
-
+            
+            # TODO: Figure out how to figure out the current day and time compare to the "ready_on" data entry.
+            
+            """
             tgt = int(item.get("target_abs_minutes", 0))
             if current_abs >= tgt:
                 item["status"] = "COMPLETED"
                 y = item.get("yield", "Unknown")
                 completed.append(f"{item.get('name', 'Unknown')} (Yield: {y})")
                 changed = True
+            """
 
         if changed:
             self.save_data(data)
@@ -226,7 +234,7 @@ class ProcessingPanel(QWidget):
             lvl = 0
         lvl = max(0, lvl)
 
-        speed = 10 + (10 * lvl)
+        speed = (10 + (10 * lvl)) if lvl > 0 else 10
         completed_amt = speed * hrs
 
         for item in data:
