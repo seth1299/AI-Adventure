@@ -10,17 +10,8 @@ Internal canonical representation:
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
-from typing import Tuple
 import logging
-
-@dataclass(frozen=True)
-class GameTime:
-    day: int
-    hour: int
-    minute: int
-    ampm: str
 
 def advance_time(current_day: int, time_string: str, minutes_to_add: int) -> tuple[int, str]:
     """

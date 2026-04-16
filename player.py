@@ -54,7 +54,6 @@ class Player:
         if location and str(location).strip().upper() != "AUTO": 
             self.location = location
         
-        import time_utils
         try:
             # Replaces string slicing with our safe 24-hour wrap-around utility
             self.day, self.time = time_utils.advance_time(self.day, self.time, minutes_to_add)

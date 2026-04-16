@@ -296,7 +296,6 @@ class ProcessingPanel(QWidget):
                     
                 rows.append([item.get("name", ""), "PROJECT", status, prog, y, desc])
 
-        from tabulate import tabulate
         txt = "ONGOING TASKS\n" + tabulate(rows, headers, tablefmt="rounded_grid") + "\n"
         self.display.setPlainText(txt)
         self._set_state("")
