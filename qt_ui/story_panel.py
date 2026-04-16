@@ -131,7 +131,6 @@ class StoryPanel(QWidget):
         self._scroll_to_bottom()
 
     def set_status(self, *, turn=None, location=None, day=None, time=None, dynamic_stats=None):
-        if day is not None and day[0] == "0": day = "12" + day[1:]
         if turn is not None: self._status_cache["turn"] = str(turn)
         if location is not None: self._status_cache["location"] = str(location)
         if day is not None: self._status_cache["day"] = str(day)

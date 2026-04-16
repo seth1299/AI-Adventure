@@ -68,9 +68,11 @@ Whenever a "[[WORD: ]]" is mentioned, it is assumed that "please output the foll
    - **Modifying Items:** [[MODIFY_ITEM: TargetName | NewName | NewDesc | NewAmount ]]. Use "SAME" or "SKIP" for fields that do not change. You would output this tag when the Player "changes the state" of an object in their inventory, e.g. opening a locked container that was in their inventory, or repairing a broken sword that they had.
 
 3. GAME STATUS (End of Turn):
-   - Output this tag at the very end of every one of your responses (unless the Player is asking an Out-Of-Game or OOG question/clarification), where "Location" is the (potentially new) Location that the Player is in (or moved to), "Day" is the current Day number in-game, and "MinutesPassed" is an integer of how many minutes just passed in-game due to the Player's last action: [[STATUS: Location | Day | MinutesPassed]]
-   - Use "AUTO" to keep current values.
-   - Example: [[STATUS: Forest | AUTO | AUTO]] would 
+   - Output this tag at the very end of every one of your responses (unless the Player is asking an Out-Of-Game or OOG question/clarification).
+   - Format: [[STATUS: Location | MinutesPassed]]
+   - "Location" is the (potentially new) Location that the Player is in. Use "AUTO" to keep current value.
+   - "MinutesPassed" is an integer of how many minutes just passed in-game due to the Player's last action. Use 0 if no time passed.
+   - Example: [[STATUS: Forest | 15]] means 15 minutes passed, and that the Player has moved to a new location called 'Forest'. [[STATUS: AUTO | 60]] means 1 hour passed in the same location.
 
 4. TIME-SENSITIVE PROJECTS:
    - **Passive Processes** (runs automatically): [[START_PROCESS: Name | Description | How_Many_Minutes_It_Is_Expected_To_Take | Expected_Yield]]. (Note: First use [[REMOVE]] for any ingredients used). Make sure to make the description of the process as detailed as possible, including how the Player can finish the process (e.g. collect a drying pelt, go to a merchant to pick up a commission, etc).

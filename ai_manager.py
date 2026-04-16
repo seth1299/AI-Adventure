@@ -21,7 +21,10 @@ class AIManager:
 
     def start_new_game_from_wizard(self, data):
         """Compiles the wizard data into a one-shot prompt to generate the game start."""                
-        self.app.player.update_world_state(1, data['starting_location'] or "Unknown", 1, "7:00 A.M.")
+        self.app.player.location = data['starting_location'] or "Unknown"
+        self.app.player.day = 1
+        self.app.player.time = "7:00 A.M."
+        self.app.player.turn = 1
         
         main_types = [
             "Cyberpunk", "Steampunk", "Modern Urban", "Futuristic Sci-Fi", 
@@ -167,7 +170,7 @@ Output the following tags to set up the game files based on this data. The World
 [[DEFINE_CURRENCY: Name | Value]] (Repeat for each value in {currencies_text}, unless there is only one value. DO NOT DUPLICATE CURRENCIES.)
 [[DEFINE_STAT: Name | Value | Description]] (Repeat for each value in {stats_text}, unless there is only one value. DO NOT DUPLICATE STATS.)
 [[GIVE_COIN: X]] (Give the player a logical amount of starting base currency for their background. Repeat this tag however many times you need to if you are adding different types of coins; e.g. "[[GIVE_COIN: 5 Copper Pieces]] [[GIVE_COIN: 5 Silver Pieces]] [[GIVE_COIN: 5 Gold Pieces]]". Please only use the currency listed in {currencies_text}.)
-[[STATUS: 1 | {start_loc_status} | 1 | 7:00 A.M.]]
+[[STATUS: {start_loc_status} | 0]]
 [[MUSIC: FILENAME_PLACEHOLDER]] (You MUST output this tag to set the starting music. Replace FILENAME_PLACEHOLDER with exactly one of these options: {valid_sounds_str})
 
 After outputting the tags, summarize the first starting turn, describe the surroundings vividly, and finish by asking "What do you do now?" and suggesting a few possible actions.
@@ -413,9 +416,19 @@ class TagParser:
 
         status_match = re.search(r"\[\[STATUS:\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL)
         if status_match:
+            loc = status_match.group(1).strip()
+            mins_str = status_match.group(2).strip()
+            
+            try:
+                # If the AI hallucinates "AUTO" for minutes, default to 0
+                mins_to_add = 0 if mins_str.upper() == "AUTO" else int(float(mins_str))
+            except ValueError:
+                logging.error(f"AI passed invalid minutes: {mins_str}")
+                mins_to_add = 0
+                
             self.app.player.update_world_state(
-                location=status_match.group(1).strip(),
-                time=status_match.group(2).strip()
+                location=loc,
+                minutes_to_add=mins_to_add
             )
             self.app._sync_player_state_to_ui()
                     
@@ -426,7 +439,13 @@ class TagParser:
         for match in re.finditer(r"\[\[START_PROCESS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL):
             p_name = match.group(1).strip()
             p_desc = match.group(2).strip()
-            p_slots = match.group(3).strip()
+            
+            try:
+                p_slots = int(float(match.group(3).strip()))
+            except ValueError:
+                logging.error(f"AI passed invalid time for process: {match.group(3)}")
+                p_slots = 60 # Fallback to 1 hour
+                
             p_yield = match.group(4).strip()
             res = self.app.notebook_widgets["Processing"].add_timed_process(p_name, p_desc, p_slots, self.app.player.day, self.app.player.time, p_yield)
             if res: logging.info(res)
