@@ -7,8 +7,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QDockWidget,
     QWidget,
-    QDialog,
-    QMenuBar
+    QDialog
 )
 from .markdown_panel import MarkdownPanel
 from .story_panel import StoryPanel
@@ -24,7 +23,6 @@ from .processing_panel import ProcessingPanel
 from .recipes_panel import RecipesPanel
 import logging
 from qt_ui.help_dialog import HelpDialog
-from PySide6.QtGui import QActionGroup
 
 class MainWindow(QMainWindow):
     """
@@ -256,8 +254,6 @@ class MainWindow(QMainWindow):
                 ).start()
         else:
             self.story_panel.print_text("System: New game creation cancelled.", sender="System")
-            
-    from qt_ui.currency_dialog import CurrencyManagerDialog
     
     def _save_ui_state(self) -> None:
         """Saves the exact layout, dock positions, window size, and panel visibility."""

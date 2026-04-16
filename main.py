@@ -8,14 +8,12 @@ from qt_ui.main_window import MainWindow
 from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt
 from player import Player
 from sound_manager import SoundManager
-from config import SAVES_DIR, SOUNDS_DIR, BASE_SOUNDS_DIR, VALID_SOUND_FILE_NAMES, DEFAULT_RULES
-import random, re
+from config import SAVES_DIR, BASE_SOUNDS_DIR, VALID_SOUND_FILE_NAMES, DEFAULT_RULES
 from qt_ui.main_menu_dialog import MainMenuDialog
 import threading
 from PySide6.QtWidgets import QApplication, QDialog
 from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt, QThread
 from queue import Queue
-import time_utils
 
 class _UiDispatcher(QObject):
     run_now = Signal(object)          # callable
