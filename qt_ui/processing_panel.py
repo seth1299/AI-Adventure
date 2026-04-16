@@ -178,55 +178,45 @@ class ProcessingPanel(QWidget):
             "status": "In Progress",
             "skill": skill_name,
             "skill_level_at_start": lvl,
-            "work_required": req,
+            "work_required": req, # Now tracks base minutes!
             "work_done": 0.0,
         }
         data.append(entry)
         self.save_data(data)
 
-        speed = 10 + (10 * lvl)
+        # Base multiplier is 1.0. Each skill level adds 50% speed.
+        speed_multiplier = 1.0 + (0.5 * lvl)
         est = "Unknown"
-        if speed > 0:
-            est_hours = (req / speed) if req else 0.0
-            est = f"~{est_hours:.1f} hrs"
+        if speed_multiplier > 0:
+            est_minutes = req / speed_multiplier
+            if est_minutes >= 60:
+                est = f"~{est_minutes/60:.1f} hrs"
+            else:
+                est = f"~{int(est_minutes)} mins"
 
-        return f"(Started Project: {name} (Skill: {skill_name}). Work Amount: {req}. Yields: {expected_yield}. Est: {est}.)"
+        return f"(Started Project: {name} (Skill: {skill_name}). Base Time: {req} mins. Yields: {expected_yield}. Est. Player Time: {est}.)"
 
-    def remove_process(self, name):
-        data = self.load_data()
-        for i, item in enumerate(list(data)):
-            if str(item.get("name", "")).lower() == str(name).lower():
-                data.pop(i)
-                self.save_data(data)
-                return None
-        return None
-
-    def get_required_skill(self, name):
-        data = self.load_data()
-        for item in data:
-            if str(item.get("name", "")).lower() == str(name).lower() and item.get("type") == "project":
-                return item.get("skill")
-        return None
-
-    def apply_work_hours(self, name, hours_worked, skill_level):
+    def apply_work_minutes(self, name, minutes_worked, skill_level):
+        """Applies labor to a project, using skill level as a speed multiplier."""
         data = self.load_data()
 
         try:
-            hrs = float(hours_worked)
+            mins = float(minutes_worked)
         except Exception as e:
-            logging.error(f"ProcessingPanel.apply_work_hours: bad hrs: {e}")
-            hrs = 0.0
-        hrs = max(0.0, hrs)
+            logging.error(f"ProcessingPanel.apply_work_minutes: bad mins: {e}")
+            mins = 0.0
+        mins = max(0.0, mins)
 
         try:
             lvl = int(skill_level)
         except Exception as e:
-            logging.error(f"ProcessingPanel.apply_work_hours: bad lvl: {e}")
+            logging.error(f"ProcessingPanel.apply_work_minutes: bad lvl: {e}")
             lvl = 0
         lvl = max(0, lvl)
 
-        speed = (10 + (10 * lvl)) if lvl > 0 else 10
-        completed_amt = speed * hrs
+        # Level 0 = 1x speed. Level 2 = 2x speed.
+        speed_multiplier = 1.0 + (0.5 * lvl)
+        completed_amt = speed_multiplier * mins
 
         for item in data:
             if str(item.get("name", "")).lower() == str(name).lower() and item.get("type") == "project":
@@ -243,13 +233,18 @@ class ProcessingPanel(QWidget):
                     self.save_data(data)
                     return f"(Work Complete! {name} is finished. Yield: {item.get('yield', 'Unknown')})"
 
-                remaining = max(0.0, req - done)
+                remaining_base_mins = max(0.0, req - done)
                 self.save_data(data)
-                return f"(Worked on {name} for {hrs:g} hrs. Remaining Work Amount: {remaining:.1f}.)"
+                
+                # Format a nice string to let the AI know how close it is
+                if remaining_base_mins >= 60:
+                    rem_str = f"{remaining_base_mins/60:.1f} hrs"
+                else:
+                    rem_str = f"{int(remaining_base_mins)} mins"
+                    
+                return f"(Worked on {name} for {mins:g} mins. Remaining Base Labor: {rem_str}.)"
 
         return f"System: Could not find project '{name}'."
-
-    # ---- Display ----
 
     def refresh_display(self) -> None:
         if not self.data_path:
@@ -274,12 +269,9 @@ class ProcessingPanel(QWidget):
                 if status == "COMPLETED":
                     prog = "DONE (collect)"
                 else:
-                    # --- NEW ADDITION START ---
-                    # We look for the new string-based keys instead of target_abs_minutes
                     target_day = item.get("ready_on_day", "Unknown")
                     target_time = item.get("ready_on_time", "Unknown")
                     prog = f"Due: Day {target_day} at {target_time}"
-                    # --- NEW ADDITION END ---
                 rows.append([item.get("name", ""), "PROCESS", status, prog, y, desc])
             else:
                 req = float(item.get("work_required", 0.0) or 0.0)
@@ -290,15 +282,40 @@ class ProcessingPanel(QWidget):
                 else:
                     remaining = max(0.0, req - done)
                     lvl = int(item.get("skill_level_at_start", 0) or 0)
-                    speed = 10 + (10 * lvl)
-                    hrs_left = (remaining / speed) if speed > 0 else 0.0
-                    prog = f"{done:.1f}/{req:.1f} WA (Skill: {skill}) ~{hrs_left:.1f} hrs left"
+                    
+                    speed_multiplier = 1.0 + (0.5 * lvl)
+                    mins_left = (remaining / speed_multiplier) if speed_multiplier > 0 else 0.0
+                    
+                    # Convert raw minutes into a readable hours/minutes string for the UI table
+                    if mins_left >= 60:
+                        time_str = f"~{mins_left/60:.1f} hrs left"
+                    else:
+                        time_str = f"~{int(mins_left)} mins left"
+                        
+                    prog = f"{done:.0f}/{req:.0f} Mins (Skill: {skill}) {time_str}"
+                    
                 rows.append([item.get("name", ""), "PROJECT", status, prog, y, desc])
 
         from tabulate import tabulate
         txt = "ONGOING TASKS\n" + tabulate(rows, headers, tablefmt="rounded_grid") + "\n"
         self.display.setPlainText(txt)
         self._set_state("")
+
+    def remove_process(self, name):
+        data = self.load_data()
+        for i, item in enumerate(list(data)):
+            if str(item.get("name", "")).lower() == str(name).lower():
+                data.pop(i)
+                self.save_data(data)
+                return None
+        return None
+
+    def get_required_skill(self, name):
+        data = self.load_data()
+        for item in data:
+            if str(item.get("name", "")).lower() == str(name).lower() and item.get("type") == "project":
+                return item.get("skill")
+        return None
 
     def _set_state(self, text: str) -> None:
         self.lbl_state.setText(text or "")
