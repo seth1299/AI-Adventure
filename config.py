@@ -76,8 +76,9 @@ Whenever a "[[WORD: ]]" is mentioned, it is assumed that "please output the foll
 
 4. TIME-SENSITIVE PROJECTS:
    - **Passive Processes** (runs automatically): [[START_PROCESS: Name | Description | How_Many_Minutes_It_Is_Expected_To_Take | Expected_Yield]]. (Note: First use [[REMOVE]] for any ingredients used). Make sure to make the description of the process as detailed as possible, including how the Player can finish the process (e.g. collect a drying pelt, go to a merchant to pick up a commission, etc).
-   - **Active Projects** (requires labor): [[START_PROJECT: Name | Description | Work_Amount | SkillName | Expected_Yield]]. (Work_Amount: 10 units = ~1 hour of labor).
-   - **Working:** When the player works on an active project: [[WORK: ProjectName | Hours_Worked]].
+   - **Active Projects** (requires labor): [[START_PROJECT: Name | Description | Total_Minutes_Required | SkillName | Expected_Yield]]. ("Total_Minutes_Required" is the base number of minutes it would take a novice to finish).
+   - **Working:** When the player works on an active project: [[WORK: ProjectName | Minutes_Worked]].
+   - **CRITICAL TIME RULE:** If you output a [[WORK]] tag, you MUST include those minutes worked in your final [[STATUS]] tag. Do not add time for passive processes, as they run in the background.
    - **Completion:** When finished, output [[REMOVE_PROCESS: Name]] and then [[ADD: ...]] for the outcome of the process, with "Expected_Yield" being the "Amount" added in the [[ADD]] tag.
 
 5. DYNAMIC STATS:

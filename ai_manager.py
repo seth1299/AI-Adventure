@@ -420,7 +420,6 @@ class TagParser:
             mins_str = status_match.group(2).strip()
             
             try:
-                # If the AI hallucinates "AUTO" for minutes, default to 0
                 mins_to_add = 0 if mins_str.upper() == "AUTO" else int(float(mins_str))
             except ValueError:
                 logging.error(f"AI passed invalid minutes: {mins_str}")
@@ -430,6 +429,18 @@ class TagParser:
                 location=loc,
                 minutes_to_add=mins_to_add
             )
+            
+            # --- NEW: Check if any tasks finished due to the time jump! ---
+            if "Processing" in self.app.notebook_widgets:
+                completed_tasks = self.app.notebook_widgets["Processing"].check_active_tasks(
+                    self.app.player.day, 
+                    self.app.player.time
+                )
+                
+                # Automatically notify the player in the chat!
+                for task in completed_tasks:
+                    self.app.story_tab.print_text(f"*(System: {task} is now complete!)*", sender="")
+                    
             self.app._sync_player_state_to_ui()
                     
         for match in re.finditer(r"\[\[RECIPE:\s*(.*?)\]\]", ai_text, re.DOTALL):
@@ -466,13 +477,14 @@ class TagParser:
 
         for match in re.finditer(r"\[\[WORK:\s*(.*?)\s*\|\s*([\d.]+)\]\]", ai_text, re.DOTALL):
             project_name = match.group(1).strip()
-            hours_worked = float(match.group(2).strip())
+            # Changed variable name to reflect minutes
+            minutes_worked = float(match.group(2).strip())
             req_skill = self.app.notebook_widgets["Processing"].get_required_skill(project_name) or ""
             lvl = self.app._get_skill_level(req_skill) if req_skill else 0
-            res = self.app.notebook_widgets["Processing"].apply_work_hours(project_name, hours_worked, lvl)
+            
+            # Call the newly renamed method
+            res = self.app.notebook_widgets["Processing"].apply_work_minutes(project_name, minutes_worked, lvl)
             if res: logging.info(res)
-            # Update time locally via Main App helper
-            self.app._advance_time_hours(hours_worked)
             
         for match in re.finditer(r"\[\[SECRET:\s*(.*?)\]\]", ai_text, re.DOTALL):
             try:
