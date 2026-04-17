@@ -418,6 +418,26 @@ class TagParser:
         for match in re.finditer(r"\[\[SOUND:\s*(.*?)\]\]", ai_text, re.DOTALL):
             sfx = match.group(1).strip()
             self.app.after(0, lambda s=sfx: self.app.sound_manager.play_sfx(s))
+            
+        # Add quests
+        for match in re.finditer(r"\[\[QUEST:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL):
+            q_name = match.group(1).strip()
+            q_giver = match.group(2).strip()
+            q_desc = match.group(3).strip()
+            q_turn_in = match.group(4).strip()
+            q_reward = match.group(5).strip()
+            
+            if "Quests" in self.app.notebook_widgets:
+                self.app.notebook_widgets["Quests"].add_quest(q_name, q_giver, q_desc, q_turn_in, q_reward)
+                logging.info(f"Added quest: {q_name}")
+                
+        # Complete/Remove quests
+        for match in re.finditer(r"\[\[COMPLETE_QUEST:\s*(.*?)\]\]", ai_text, re.DOTALL):
+            q_name = match.group(1).strip()
+            
+            if "Quests" in self.app.notebook_widgets:
+                self.app.notebook_widgets["Quests"].complete_quest(q_name)
+                logging.info(f"Completed quest: {q_name}")
 
         status_match = re.search(r"\[\[STATUS:\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL)
         if status_match:

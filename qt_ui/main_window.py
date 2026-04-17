@@ -23,6 +23,7 @@ from .processing_panel import ProcessingPanel
 from .recipes_panel import RecipesPanel
 import logging
 from qt_ui.help_dialog import HelpDialog
+from qt_ui.quest_panel import QuestsPanel
 
 class MainWindow(QMainWindow):
     """
@@ -60,6 +61,8 @@ class MainWindow(QMainWindow):
         self.processing_panel = ProcessingPanel()
         self.recipes_panel = RecipesPanel()
         self.character_panel = MarkdownPanel("Character")
+        self.quests_panel = QuestsPanel(self)
+        self._add_dock("Quests", self.quests_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
         self._add_dock("World", self.world_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
         self._add_dock("Journal", self.journal_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
         self._add_dock("Inventory", self.inventory_panel, area=Qt.DockWidgetArea.RightDockWidgetArea)

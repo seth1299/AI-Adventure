@@ -145,6 +145,7 @@ class QtAppContext:
                 "World": QtPanelAdapter(win.world_panel, self.ui),
                 "Journal": QtPanelAdapter(win.journal_panel, self.ui),
                 "History": QtPanelAdapter(win.history_panel, self.ui),
+                "Quests": QtPanelAdapter(win.quests_panel, self.ui)
             }
 
         self._sync_player_state_to_ui()
