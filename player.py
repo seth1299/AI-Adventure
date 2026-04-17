@@ -16,6 +16,7 @@ class Player:
         self.turn = 1
         self.day = 1
         self.time = "12:00 PM"
+        self.quests = []
 
     def load_from_dict(self, data):
         """Loads state from the Status dictionary in savegame.json."""
@@ -24,6 +25,7 @@ class Player:
         self.day = data.get("day", 1)
         self.time = data.get("time", "Start")
         self.base_currency = int(data.get("base_currency", 0))
+        self.quests = data.get("quests", [])
         
         if "world_currencies" in data:
             self.world_currencies = data["world_currencies"]
@@ -40,7 +42,8 @@ class Player:
             "time": self.time,
             "base_currency": self.base_currency,
             "tracked_stats": self.tracked_stats,
-            "world_currencies": self.world_currencies
+            "world_currencies": self.world_currencies,
+            "quests": self.quests
         }
     
     def get_world_currencies(self):

@@ -108,6 +108,16 @@ Whenever a "[[WORD: ]]" is mentioned, it is assumed that "please output the foll
 
 10. OUT-OF-GAME:
    - If the Player specifies "OOG" or "Out-Of-Game", then please do NOT output a [[STATUS]] tag, since time would not logically be advancing in-game.
+   
+11. ASSIGNING A QUEST:
+   - When an NPC gives the player a specific task, mission, or job, you MUST output this tag to put the quest into their UI log.
+   - [[QUEST: Name of Quest | Quest Giver Name | Description of the Quest | How to Complete/Turn-In | Quest Reward]]
+   - *Example: [[QUEST: Rat Exterminator | John the Barkeep | There are rats in the tavern basement that need to be killed. | Kill the rats and return to John at the tavern during the evening. | 5 Gold Coins]]*
+
+12. COMPLETING A QUEST:
+   - When the player fulfills the conditions of a quest and receives their reward, you MUST remove the quest from their UI log using this tag. Be sure to use the exact Name of the Quest!
+   - [[COMPLETE_QUEST: Name of Quest]]
+   - *Example: [[COMPLETE_QUEST: Rat Exterminator]]*
 
 </game_mechanics>
 """
