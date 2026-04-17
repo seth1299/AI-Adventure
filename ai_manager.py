@@ -227,6 +227,8 @@ After outputting the tags, summarize the first starting turn, describe the surro
         # 4. Thread the request
         threading.Thread(target=self.query_ai, args=(full_prompt, user_text), daemon=True).start()
 
+    # ai_manager.py
+
     def query_ai(self, prompt, user_text, recursion_depth=0, is_startup=False):
         """Sends the prompt to Gemini and processes all resulting tags."""
         current_rules = self.app.load_rules()
@@ -243,7 +245,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
             ai_text = self.clean_quotes(response.text or "")
             if not ai_text: raise ValueError("Empty response")
             
-           # --- TAG PARSING ---
+            # --- TAG PARSING ---
             tag_parser = TagParser(self.app)
             ai_text = tag_parser.process_inline_tags(ai_text)
             
@@ -253,13 +255,11 @@ After outputting the tags, summarize the first starting turn, describe the surro
                 
                 logging.info("Defining stats now...")
                 invented_stats = []
-                # Allow for multi-line and negative numbers just in case
                 for match in re.finditer(r"\[\[DEFINE_STAT:\s*(.*?)\s*\|\s*(-?\d+)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL):
                     s_name = match.group(1).strip()
                     s_val = int(match.group(2))
                     s_desc = match.group(3).strip()
                     s_ = {"name": s_name, "value": s_val, "enabled": True, "description": s_desc}
-                    logging.info(f"TRACKED STAT: {s_}")
                     invented_stats.append(s_)
                 
                 if invented_stats:
@@ -284,7 +284,6 @@ After outputting the tags, summarize the first starting turn, describe the surro
                     content = content.replace(". ", ".\n\n")
                     formatted_char = f"Character Biography\n\n{content}"
                     self.app.notebook_widgets["Character"].set_text(formatted_char)
-                    
                     if getattr(self.app, 'current_adventure_path', None):
                         char_file = os.path.join(self.app.current_adventure_path, "character.md")
                         with open(char_file, "w", encoding="utf-8") as f:
@@ -293,15 +292,11 @@ After outputting the tags, summarize the first starting turn, describe the surro
                 logging.info("Creating Skills now...")
                 for match in re.finditer(r"\[\[SKILL:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text, re.DOTALL):
                     s_name = match.group(1).strip()
-                    # Group 2 is now the description string
                     s_desc = match.group(2).strip() if match.group(2).strip() else "No description provided."
-                    # Group 3 is now the level integer
                     s_lvl = int(match.group(3))
-                    
                     self.app.notebook_widgets["Skills"].force_learn_skill(s_name, s_desc, s_lvl)
                     
                 logging.info("Defining currencies now...")
-                # Parse Invented Currencies BEFORE standard tags run!
                 invented_currencies = []
                 for match in re.finditer(r"\[\[DEFINE_CURRENCY:\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text, re.DOTALL):
                     c_name = match.group(1).strip()
@@ -313,13 +308,14 @@ After outputting the tags, summarize the first starting turn, describe the surro
                     
                 self.app.story_tab.set_controls_state(True, "What do you do now?")
 
-                
+            # 2. PROCESS STANDARD TAGS
+            # Placed outside the if/else block so that tags are never skipped, even if a Roll occurs!
+            tag_parser.process_standard_tags(ai_text, is_startup=is_startup)
 
             # 3. FINALIZE STARTUP & SAVE
             if is_startup:                
                 logging.info("Saving game now...")
                 self.app.save_game()
-                
                 self.app.after(0, lambda: self.app._sync_player_state_to_ui())
                 if "Inventory" in self.app.notebook_widgets:
                     self.app.after(0, lambda: self.app.notebook_widgets["Inventory"].refresh_display())
@@ -333,55 +329,60 @@ After outputting the tags, summarize the first starting turn, describe the surro
 
             if roll_match and recursion_depth < 2:
                 skill = roll_match.group(1).strip()
-                # Call back to main app for mechanic logic
                 result = self.app.perform_skill_check(skill)
                 
                 if "Skills" in self.app.notebook_widgets:
-                    # Note: If your Reload button uses a differently named method (like .load_data() or .reload_skills()), 
-                    # change .refresh_display() to match it!
                     skills_tab = self.app.notebook_widgets["Skills"]
-                    
                     if hasattr(skills_tab, 'refresh_display'):
                         self.app.after(0, lambda: skills_tab.refresh_display())
                     elif hasattr(skills_tab, 'load_data'):
                         self.app.after(0, lambda: skills_tab.load_data())
                 
-                clean_prev = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", ai_text).strip()
+                # Added flags=re.DOTALL to prevent multi-line tags from sneaking through
+                clean_prev = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", ai_text, flags=re.DOTALL).strip()
                 logging.info(f"[System: Player rolled {result} for {skill}]")
-                follow_up = f"{prompt}\nGM: {clean_prev}\n[System: Player rolled {result} for {skill}. Please determine what degree of success/failure that is, then narate the outcome. Do NOT mention the die roll at all in the diegetic context.]"
+                
+                # Instructing the AI not to repeat previous tags stops the duplication
+                follow_up = (
+                    f"{prompt}\nGM: {clean_prev}\n"
+                    f"[System: Player rolled {result} for {skill}. Please determine what degree of success/failure that is, "
+                    f"then narrate the outcome. Do NOT mention the die roll at all in the diegetic context. "
+                    f"CRITICAL: You have already executed the background actions for this turn. Do NOT output any standard tags (like [[ADD:]], [[GIVE_COIN:]], etc.) that you can read from the prompt that was just given to you!]"
+                )
                 
                 # Recursive call
                 self.query_ai(follow_up, user_text, recursion_depth + 1)
-            else:
-                tag_parser.process_standard_tags(ai_text, is_startup=is_startup)
-                logging.info(f"AI text: {ai_text}")
-                # Clean tags for final display
-                clean_pattern = re.compile(r"\[\[[A-Z_]+:.*?\]\]", re.DOTALL)
-                final_text = clean_pattern.sub("", ai_text)
-                final_text = re.sub(r'\n{3,}', '\n\n', final_text)
-                final_text = final_text.strip()
-                #final_text = "\n" + final_text
                 
-                if final_text and len(final_text) > 8:
-                    self.app.story_tab.print_text(" ")
-                    self.app.story_tab.print_text(final_text, sender="")
-                    self.app.story_tab.print_text(" ")
-                    
-                    text_to_save = final_text
-                    # Trim potential actions from history
-                    trim_markers = ["Possible Actions:", "Suggested Actions:", "### Actions", "What would you like to do?", "What do you do?", "What do you do now?"]
-                    for marker in trim_markers:
-                        if marker in text_to_save:
-                            text_to_save = text_to_save.split(marker)[0].strip()
-                            break
-                    if not is_startup:
-                        self.app.conversation_history.append(f"{user_text}")
-                        self.app.conversation_history.append(f"{text_to_save.strip()}")
-                    # --- Auto-save after each completed turn (Qt + CTk) ---
-                    try:
-                        self.app.save_game()
-                    except Exception as e:
-                        logging.error(f"Auto-save failed: {e}")
+                # Added return so the Pass 1 block terminates here and doesn't double-append to UI history!
+                return 
+
+            # 5. FINALIZE AND PRINT
+            logging.info(f"AI text: {ai_text}")
+            clean_pattern = re.compile(r"\[\[[A-Z_]+:.*?\]\]", re.DOTALL)
+            final_text = clean_pattern.sub("", ai_text)
+            final_text = re.sub(r'\n{3,}', '\n\n', final_text)
+            final_text = final_text.strip()
+            
+            if final_text and len(final_text) > 8:
+                self.app.story_tab.print_text(" ")
+                self.app.story_tab.print_text(final_text, sender="")
+                self.app.story_tab.print_text(" ")
+                
+                text_to_save = final_text
+                trim_markers = ["Possible Actions:", "Suggested Actions:", "### Actions", "What would you like to do?", "What do you do?", "What do you do now?"]
+                for marker in trim_markers:
+                    if marker in text_to_save:
+                        text_to_save = text_to_save.split(marker)[0].strip()
+                        break
+                
+                if not is_startup:
+                    self.app.conversation_history.append(f"{user_text}")
+                    self.app.conversation_history.append(f"{text_to_save.strip()}")
+                
+                try:
+                    self.app.save_game()
+                except Exception as e:
+                    logging.error(f"Auto-save failed: {e}")
 
         except Exception as e:
             logging.error(f"AI Error: {e}")
