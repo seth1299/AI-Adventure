@@ -302,7 +302,7 @@ class InventoryPanel(QWidget):
 
             if not found:
                 data[category].append(new_item)
-                logging.info(f"Successfully added {item.get("amount", "")}x {item.get("name", "")} to the Player's inventory.")
+                logging.info(f"Successfully added {new_item.get("amount", "")}x {new_item.get("name", "")} to the Player's inventory.")
 
             self.save_data(data)
         except Exception as e:

@@ -75,7 +75,7 @@ class StatRow(QFrame):
             "min": self.min_input.value(), # Grab the minimum value
             "max": self.max_input.value(), # Grab the maximum value
             "enabled": self.cb_enabled.isChecked(),
-            "desc": self.desc_input.text().strip()
+            "description": self.desc_input.text().strip()
         }
 class StatsManagerDialog(QDialog):
     def __init__(self, parent=None, existing_stats=None):
@@ -115,17 +115,18 @@ class StatsManagerDialog(QDialog):
                     stat.get("name", ""), 
                     stat.get("value", 100), 
                     stat.get("enabled", True),
-                    stat.get("desc", ""),
+                    stat.get("description", stat.get("desc", "")),
                     # Load min and max from existing data, falling back to 0 and 100
                     stat.get("min", 0),
                     stat.get("max", 100)
                 )
-        else:
-            self.add_stat_row("Nutrition", 100, True, "Represents how well-fed the character is. Max 100.", 0, 100)
-            self.add_stat_row("Stamina", 100, True, "Represents physical energy. Depletes from actions. Max 100.", 0, 100)
+        #else:
+            #self.add_stat_row("Nutrition", 100, True, "Represents how well-fed the character is. Max 100.", 0, 100)
+            #self.add_stat_row("Stamina", 100, True, "Represents physical energy. Depletes from actions. Max 100.", 0, 100)
 
     def add_stat_row(self, name="", value=100, enabled=True, desc="", min_val=0, max_val=100):
         row = StatRow(name=name, value=value, enabled=enabled, desc=desc, min_val=min_val, max_val=max_val)
+        row.desc_input.setText(desc)
         self.rows_layout.addWidget(row)
         self.rows.append(row)
         row.btn_remove.clicked.connect(lambda: self.remove_stat_row(row))
