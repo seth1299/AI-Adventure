@@ -24,7 +24,7 @@ class AIManager:
         self.app.player.location = data['starting_location'] or "Unknown"
         self.app.player.day = 1
         self.app.player.time = "7:00 A.M."
-        self.app.player.turn = 1
+        self.app.player.turn = 0
         
         main_types = [
             "Cyberpunk", "Steampunk", "Modern Urban", "Futuristic Sci-Fi", 
@@ -101,9 +101,9 @@ class AIManager:
         stats_text = ""
         for stat in data['stats']:
             if stat['enabled']:
-                stats_text += f"- {stat['name']}: " + f"Starts at {stat['value']}"
-        if not stats_text: 
-            stats_text = f"No specific Stats were specified (AI, you MUST invent 2 to 3 tracked stats fitting the {ai_genre} genre, such as Health, Sanity, Mana, etc.)"
+                stats_text += f"- {stat['name']}: " + f"{stat['description']}" + f"Starts at {stat['value']}"
+        #if not stats_text: 
+            #stats_text = f"No specific Stats were specified (AI, you MUST invent 2 to 3 tracked stats fitting the {ai_genre} genre, such as Health, Sanity, Mana, etc.)"
         
         random_gender = random.choice(["Male", "Female", "Non-Binary"])
         random_pronouns = "He/Him" if random_gender == "Male" else "She/Her" if random_gender == "Female" else "They/Them"
@@ -117,9 +117,9 @@ class AIManager:
         char_age = data['character']['age'] or "The Player Character's age was not specified, please create one for them."
         char_orientation = data['character']['orientation'] or "The Player Character's orientation was not specified, please create one for them."
         char_bg = data['character']['background'] or f"The Player Character's background was not specified, please create one for them that would make sense for a character who grew up in this {ai_genre} type of world with a Skill List of {skills_text}."
-        
+        character_text = {"Name: " + char_name + "\nGender: " + char_gender + "\nPronouns: " + char_pronouns + "\nOrientation: " + char_orientation + "\nBackground: " + char_bg}
+    
         start_loc = data['starting_location'] or f"Start the Player off in a Location that would make sense for the {ai_genre}."
-        start_loc_status = data['starting_location'] or "Unknown (Invent a starting location name)"
         
         species = data['world']['species'] or f"No specific species were specified by the Player. Feel free to create however many species you think would make sense for a {ai_genre} type of game."
         
@@ -164,13 +164,14 @@ Final Comments/Rules: {final_comments}
 INSTRUCTIONS:
 Output the following tags to set up the game files based on this data. The World should have a lengthy description, as it is quite important because it is describing the entire World as a whole. The World's description should be at least 25 sentences at MINIMUM; as it should be describing EVERYTHING at a basic level (e.g. the basic Economy system, the common Species of the World, the known Geography of the World and any important locations of interest, any important NPCs and their descriptions, any tie-ins to the Player's Background that there might be, any interesting politics (if any), any religions/cults of significance, et cetera.) Please make sure to put new lines where appropriate, separating thoughts and ideas by paragraphs. 
 [[WORLD_INFO: Write a summary of the game focus, world setting, tone, currency, and tech level here, following the instructions above.]]
-[[CHARACTER_INFO: Write the full character biography, appearance, and details here. Make sure to include the Player Character's Name, Age, Gender/Pronouns, Orientation, and Background.]]
+{f"[[CHARACTER_INFO: {character_text}]]" if "Player Character" not in character_text else "[[CHARACTER_INFO: Write the full character biography, appearance, and details here. Make sure to include the Player Character's Name, Age, Gender/Pronouns, Orientation, and Background.]]"}
 [[SKILL: Skill Name | Description | Level]] (You MUST output this tag exactly 16 times. First, output one tag for EVERY skill already provided in the "Starting Skills" list above, preserving their exact Names, Descriptions, and Levels. Then, output tags for the remaining skills you were asked to invent.)
 [[ADD: Type | Name | Description | Amount]] (Add logical starting equipment. Repeat this tag for each item that the Player will start out with.)
 [[DEFINE_CURRENCY: Name | Value]] (Repeat for each value in {currencies_text}, unless there is only one value. DO NOT DUPLICATE CURRENCIES.)
-[[DEFINE_STAT: Name | Value | Description]] (Repeat for each value in {stats_text}, unless there is only one value. DO NOT DUPLICATE STATS.)
+{"[[DEFINE_STAT: Name | Value | Description]] (COME UP WITH LOGICAL STATS FOR THIS STYLE OF GAME.)" if not stats_text else ""}
+{logging.info("NO STATS WERE PROVIDED." if not stats_text else "")}
 [[GIVE_COIN: X]] (Give the player a logical amount of starting base currency for their background. Repeat this tag however many times you need to if you are adding different types of coins; e.g. "[[GIVE_COIN: 5 Copper Pieces]] [[GIVE_COIN: 5 Silver Pieces]] [[GIVE_COIN: 5 Gold Pieces]]". Please only use the currency listed in {currencies_text}.)
-[[STATUS: {start_loc_status} | 0]]
+[[STATUS: {start_loc} | AUTO]]
 [[MUSIC: FILENAME_PLACEHOLDER]] (You MUST output this tag to set the starting music. Replace FILENAME_PLACEHOLDER with exactly one of these options: {valid_sounds_str})
 
 After outputting the tags, summarize the first starting turn, describe the surroundings vividly, and finish by asking "What do you do now?" and suggesting a few possible actions.
@@ -257,7 +258,9 @@ After outputting the tags, summarize the first starting turn, describe the surro
                     s_name = match.group(1).strip()
                     s_val = int(match.group(2))
                     s_desc = match.group(3).strip()
-                    invented_stats.append({"name": s_name, "value": s_val, "enabled": True, "description": s_desc})
+                    s_ = {"name": s_name, "value": s_val, "enabled": True, "description": s_desc}
+                    logging.info(f"TRACKED STAT: {s_}")
+                    invented_stats.append(s_)
                 
                 if invented_stats:
                     self.app.player.tracked_stats.extend(invented_stats)
@@ -310,8 +313,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
                     
                 self.app.story_tab.set_controls_state(True, "What do you do now?")
 
-            # 2. PROCESS STANDARD TAGS (Now it has the currencies loaded to do the math!)
-            tag_parser.process_standard_tags(ai_text, is_startup=is_startup)    
+                
 
             # 3. FINALIZE STARTUP & SAVE
             if is_startup:                
@@ -351,6 +353,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
                 # Recursive call
                 self.query_ai(follow_up, user_text, recursion_depth + 1)
             else:
+                tag_parser.process_standard_tags(ai_text, is_startup=is_startup)
                 logging.info(f"AI text: {ai_text}")
                 # Clean tags for final display
                 clean_pattern = re.compile(r"\[\[[A-Z_]+:.*?\]\]", re.DOTALL)
@@ -391,6 +394,7 @@ class TagParser:
 
     def process_standard_tags(self, ai_text, is_startup=False):
         """Processes typical gameplay tags and returns the cleaned text."""
+        
         # Inventory
         for match in re.finditer(r"\[\[ADD:\s*(.*?)\]\]", ai_text, re.DOTALL):
             res = self.app.notebook_widgets["Inventory"].autonomous_add(match.group(1))
