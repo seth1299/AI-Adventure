@@ -209,13 +209,18 @@ class InventoryPanel(QWidget):
     # ---- AIManager tag helpers ----
 
     def modify_item(self, raw_args: str):
+        """
+        Parses a [[MODIFY_ITEM:]] tag to alter an existing item's name, description, or amount.
+        Ensures that the 'amount' field is stored strictly as an integer in the JSON data.
+        """
         try:
             parts = [p.strip() for p in (raw_args or "").split("|")]
             if len(parts) < 1:
                 return "Error: Missing Target Name."
 
-            target = parts[0]
+            target_name = parts[0]
 
+            # Helper function to determine if the AI actually wants to change this parameter
             def should_update(idx: int) -> bool:
                 if len(parts) <= idx:
                     return False
@@ -223,52 +228,73 @@ class InventoryPanel(QWidget):
                 return val not in ("SAME", "SKIP", "", "N/A")
 
             new_name = parts[1] if should_update(1) else None
-            new_desc = parts[2] if should_update(2) else None
-            new_amt = parts[3] if should_update(3) else None
+            new_description = parts[2] if should_update(2) else None
+            new_amount = parts[3] if should_update(3) else None
 
             data = self.load_data()
             found = False
 
-            for _cat, items in data.items():
+            for category, items in data.items():
                 if not isinstance(items, list):
                     continue
+                    
                 for item in items:
                     current_name = ""
                     if isinstance(item, dict):
                         current_name = str(item.get("name", ""))
                     elif isinstance(item, list) and item:
                         current_name = str(item[0])
-                    if current_name.lower() != str(target).lower():
+                        
+                    # Skip if this isn't the item we are looking for
+                    if current_name.lower() != str(target_name).lower():
                         continue
 
+                    # Apply modifications to standard Dictionary items
                     if isinstance(item, dict):
                         if new_name:
                             item["name"] = new_name
-                        if new_desc:
-                            item["desc"] = new_desc
-                        if new_amt:
-                            item["amount"] = new_amt
+                        if new_description:
+                            item["desc"] = new_description
+                        if new_amount:
+                            try:
+                                # Explicitly cast and store as an integer
+                                item["amount"] = int(new_amount)
+                            except ValueError:
+                                logging.error(f"modify_item: Invalid integer amount '{new_amount}'. Skipping amount update.")
+                    
+                    # Fallback for older array-style items, if any still exist
                     else:
                         if new_name:
                             item[0] = new_name
-                        if new_desc:
-                            item[1] = new_desc
-                        if new_amt:
-                            item[2] = new_amt
+                        if new_description:
+                            item[1] = new_description
+                        if new_amount:
+                            try:
+                                item[2] = int(new_amount)
+                            except ValueError:
+                                logging.error(f"modify_item: Invalid integer amount '{new_amount}'. Skipping amount update.")
 
                     found = True
                     break
+                    
                 if found:
                     break
 
             if found:
                 self.save_data(data)
+            else:
+                logging.warning(f"modify_item: Could not find item '{target_name}' to modify.")
                     
         except Exception as e:
             logging.exception(f"InventoryPanel.modify_item failed for arguments {raw_args}: {e}")
+            
         self.refresh_display()
 
     def autonomous_add(self, raw_args: str):
+        """
+        Parses an [[ADD:]] tag to safely add a new item or stack onto an existing one.
+        Saves the amount strictly as an integer in the JSON file.
+        """
         try:
             parts = [p.strip() for p in (raw_args or "").split("|")]
             if len(parts) < 2:
@@ -276,41 +302,54 @@ class InventoryPanel(QWidget):
 
             category = parts[0].title()
             name = parts[1]
-            desc = parts[2] if len(parts) > 2 else "No description."
-            amount = parts[3] if len(parts) > 3 else 1
+            description = parts[2] if len(parts) > 2 else "No description."
+            
+            # Safely parse the incoming amount to add as an integer
+            try:
+                amount_to_add = int(parts[3]) if len(parts) > 3 else 1
+            except ValueError:
+                amount_to_add = 1
 
-            new_item = {"name": name, "desc": desc, "amount": amount}
+            # Store the amount directly as an int, not a string
+            new_item = {"name": name, "desc": description, "amount": amount_to_add}
 
             data = self.load_data()
             if category not in data or not isinstance(data.get(category), list):
                 data[category] = []
 
-            # Stack logic
+            # Check if we should stack the item
             found = False
             for item in data[category]:
                 if not isinstance(item, dict):
                     continue
+                
                 if str(item.get("name", "")).lower() == str(name).lower() and "meta" not in item:
                     try:
-                        cur_amt = item.get("amount", 0)
-                        item["amount"] = str(cur_amt + amount)
+                        # Parse the current amount safely, then store the new sum directly as an int
+                        current_amount = int(item.get("amount", 0))
+                        item["amount"] = current_amount + amount_to_add
                         found = True
                         
                     except Exception as e:
                         logging.error(f"InventoryPanel.autonomous_add: stacking failed: {e}")
                     break
 
+            # If it's a brand new item, append it to the category
             if not found:
                 data[category].append(new_item)
-                logging.info(f"Successfully added {new_item.get("amount", "")}x {new_item.get("name", "")} to the Player's inventory.")
+                logging.info(f"Successfully added {amount_to_add}x {name} to the Player's inventory.")
 
             self.save_data(data)
         except Exception as e:
-            logging.exception(f"InventoryPanel.autonomous_add failed: {e}")
+            logging.error(f"InventoryPanel.autonomous_add failed: {e}")
+            
         self.refresh_display()
 
     def autonomous_remove(self, raw_args: str):
-        # Format: Name | Amount
+        """
+        Parses a [[REMOVE:]] tag to decrease an item's amount or remove it completely.
+        Ensures the remaining amount is saved strictly as an integer.
+        """
         try:
             parts = [p.strip() for p in (raw_args or "").split("|")]
             target_name = parts[0] if parts else (raw_args or "UNKNOWN ITEM").strip()
@@ -324,23 +363,23 @@ class InventoryPanel(QWidget):
             data = self.load_data()
             removed = False
 
-            for _cat, items in data.items():
+            for _category, items in data.items():
                 if not isinstance(items, list):
                     continue
                 
-                # Loop through using a standard index (so we can safely pop the item later)
-                for i in range(len(items)):
-                    item = items[i]
+                # Loop using index so we can safely pop the item if it hits 0
+                for index in range(len(items)):
+                    item = items[index]
                     if not isinstance(item, dict): 
                         continue
                         
                     item_name = str(item.get("name", "UNKNOWN NAME"))
 
-                    # Ensure case-insensitive matching
+                    # Case-insensitive matching
                     if str(target_name).lower() not in item_name.lower():
                         continue
 
-                    # Safely cast current item amount to an integer
+                    # Safely cast current item amount to an int
                     try:
                         current_amount = int(item.get("amount", 1))
                     except ValueError:
@@ -349,26 +388,24 @@ class InventoryPanel(QWidget):
                     try:
                         new_amount = current_amount - amount_to_remove
                         if new_amount <= 0:
-                            items.pop(i) # Remove item completely if amount hits 0
+                            items.pop(index) 
                         else:
-                            # Store it back as a string to maintain JSON formatting
-                            item["amount"] = str(new_amount) 
+                            # Store the resulting amount directly as an int
+                            item["amount"] = new_amount 
                         removed = True
                     except Exception as e: 
                         logging.error(f"Error removing item: {e}")
 
-                    # Break inner loop once we successfully process the target item
-                    break
+                    break # Break inner loop
                 
-                # Break outer loop if we found and removed the item
                 if removed:
-                    break
+                    break # Break outer loop
 
             if removed:
                 self.save_data(data)
                 logging.info(f"(Player lost {amount_to_remove}x {target_name}).")
             else: 
-                logging.error(f"Error: Could not find {target_name}.")
+                logging.error(f"Error: Could not find '{target_name}' to remove.")
                 
         except Exception as e:
             logging.error(f"InventoryPanel.autonomous_remove failed: {e}")
