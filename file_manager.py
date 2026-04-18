@@ -46,7 +46,7 @@ class FileManager:
             formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
             file_handler.setFormatter(formatter)
             logger.addHandler(file_handler)
-            logging.info(f"Logger switched to: {new_log_path}")
+            #logging.info(f"Logger switched to: {new_log_path}")
         except Exception as e:
             print(f"Failed to switch logger: {e}")
 

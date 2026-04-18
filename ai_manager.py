@@ -376,9 +376,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
             final_history_text = re.sub(r'\n{3,}', '\n\n', final_history_text).strip()
             
             if final_display_text and len(final_display_text) > 8:
-                self.app.story_tab.print_text(" ")
                 self.app.story_tab.print_text(final_display_text, sender="")
-                self.app.story_tab.print_text(" ")
                 
                 text_to_save = final_history_text
                 trim_markers = ["Possible Actions:", "Suggested Actions:", "### Actions", "What would you like to do?", "What do you do?", "What do you do now?"]

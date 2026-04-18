@@ -125,7 +125,6 @@ class QtAppContext:
 
         self.current_adventure_path = None
 
-        self.creation_summary_path = os.path.join(SAVES_DIR, "creation_summary.txt")
         self.secret_path = os.path.join(SAVES_DIR, "secret.txt")
         self.world_path = os.path.join(SAVES_DIR, "world.md")
         self.conversation_history = []
@@ -135,6 +134,15 @@ class QtAppContext:
 
         # API surface AIManager expects
         self.story_tab = QtStoryTabAdapter(win.story_panel, self.ui)
+        try:
+            if win.history_panel: pass
+            else: logging.exception("NO HISTORY PANEL UI.")
+            if win.quest_panel: pass
+            else: logging.exception("NO QUEST PANEL UI.")
+            if win.quests_panel: pass
+            else: logging.exception("NO QUESTS PANEL UI.")
+        except Exception as e:
+            logging.exception(f"CRITICAL ERROR WHILE LOADING: {e}")
 
         self.notebook_widgets = {
                 "Inventory": QtPanelAdapter(win.inventory_panel, self.ui),
@@ -179,7 +187,7 @@ class QtAppContext:
                 # --- CHANGED: We use a 3-column grid again since we have the descriptions! ---
                 headers = ["Item Name", "Description", "Price"]
                 grid = tabulate(table_data, headers=headers, tablefmt="rounded_grid")
-                return f"\n{grid}\n"
+                return f"{grid}"
                 
             return match.group(0) # Fallback to the OOG text if parsing fails
             
@@ -290,11 +298,11 @@ class QtAppContext:
         except Exception:
             self.player.karmic_streak = 0
             
-        saved_music = data.get("current_music")
+        saved_music = data.get("current_music", "C:\\Users\\sethg\\OneDrive\\Desktop\\Main Folder\\Applications\\AI-Adventure\\sounds\\Town Village City.mp3")
         if saved_music:
             self.sound_manager.play_music(saved_music)
             
-        currencies = data.get("Currencies")
+        currencies = data.get("Currencies", [{}])
         if currencies:
             self.player.world_currencies = currencies
         else:
@@ -312,10 +320,9 @@ class QtAppContext:
             
         try:
             for widget in self.notebook_widgets:
-                if hasattr(widget, 'set_base_path'):
-                    self.notebook_widgets[widget].set_base_path(save_path)
-        except Exception:
-            logging.exception("Failed to load markdown tabs")
+                self.notebook_widgets[widget].set_base_path(save_path)
+        except Exception as e:
+            logging.exception(f"Failed to load {widget}: {e}")
 
         self._sync_player_state_to_ui()
         return data
@@ -382,21 +389,28 @@ class QtAppContext:
         s = self.player.get_status_dict()
 
         def _apply():
-            self.win.story_panel.set_status(
-                turn=s.get("turn") or 1,
-                location=s.get("location") or "Character Creation",
-                day=f"{s.get('day')}" or "Day 1",
-                time=s.get("time") or "12:00 A.M.",
-                dynamic_stats=s.get("tracked_stats", [])
-            )
+            try: 
+                self.win.story_panel.set_status(
+                    turn=s.get("turn") or 1,
+                    location=s.get("location") or "Character Creation",
+                    day=f"{s.get('day')}" or "Day 1",
+                    time=s.get("time") or "12:00 A.M.",
+                    dynamic_stats=s.get("tracked_stats", [])
+                )
+            except Exception as e:
+                logging.exception(f"Could not set story panel status: {e}")
             
         if "Quests" in self.notebook_widgets:
                 quests_widget = self.notebook_widgets["Quests"]
                 if hasattr(quests_widget, "refresh_display"):
                     quests_widget.refresh_display()
+        else: logging.warning("No notebook widget named Quests exists.")
 
         # AIManager calls this from worker threads; dispatch to UI thread.
-        self.ui.run_now.emit(_apply)
+        try:
+            self.ui.run_now.emit(_apply)
+        except Exception as e:
+            logging.exception(f"Could not call ui.run_now.emit: {e}")
 
 def main() -> int:
     FileManager.setup_initial_logging()
@@ -440,20 +454,21 @@ def main() -> int:
         app_ctx.player.set_save_path(save_path)
 
         savegame_path = os.path.join(save_path, "savegame.json")
-        creation_summary_path = os.path.join(save_path, "creation_summary.txt")
         secret_path = os.path.join(save_path, "secret.txt")
         world_path = os.path.join(save_path, "world.md")
-        if os.path.exists(savegame_path):
-            app_ctx.load_savegame_state(save_path)
-            win._load_ui_state(save_path)
-            app_ctx.generate_recap()
-            return
-        if not os.path.exists(creation_summary_path): 
-            with open(creation_summary_path, "w", encoding="utf-8") as f: f.write("")
-        if not os.path.exists(secret_path): 
-            with open(secret_path, "w", encoding="utf-8") as f: f.write("")
-        if not os.path.exists(world_path): 
-            with open(world_path, "w", encoding="utf-8") as f: f.write("")
+        try:
+            if os.path.exists(savegame_path):
+                app_ctx.load_savegame_state(save_path)
+                win._load_ui_state(save_path)
+                app_ctx.generate_recap()
+                return
+            else: logging.warning("No save game path exists.")
+            if not os.path.exists(secret_path): 
+                with open(secret_path, "w", encoding="utf-8") as f: f.write("")
+            if not os.path.exists(world_path): 
+                with open(world_path, "w", encoding="utf-8") as f: f.write("")
+        except Exception as e:
+            logging.exception(f"Could not boot selected save: {e}")
 
         app_ctx.current_adventure_path = save_path
         app_ctx.conversation_history = []

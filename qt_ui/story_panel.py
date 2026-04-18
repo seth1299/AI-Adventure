@@ -246,7 +246,7 @@ class StoryPanel(QWidget):
             # Pass BOTH clean_text (for audio) and original text (for UI display)
             self._generate_and_play_tts(clean_text, original_text=text)
         else:
-            self.append_text(text)
+            self.append_text("\n" + text)
 
     def _emit_send(self) -> None:
         text = (self.txt_input.text() or "").strip()
