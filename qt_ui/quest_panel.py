@@ -9,9 +9,9 @@ class QuestsPanel(QWidget):
     """
     A read-only UI panel that displays active quests in a rounded grid format.
     """
-    def __init__(self, app):
+    def __init__(self, parent: QWidget | None = None, app_context=None):
         super().__init__()
-        self.app = app
+        self.app = app_context
         self.init_ui()
         
     def init_ui(self):
@@ -26,6 +26,7 @@ class QuestsPanel(QWidget):
         
     def refresh_display(self):
         """Reads the player's current quests and updates the text display with generated tables."""
+        if not self.app: return
         quests = getattr(self.app.player, 'quests', [])
         
         if not quests:
@@ -50,12 +51,13 @@ class QuestsPanel(QWidget):
             ]
             
             grid = tabulate(table_data, tablefmt="rounded_grid")
-            display_text += f"### {name} ###\n{grid}\n\n"
+            display_text += f"{name} \n{grid}\n\n"
             
         self.text_display.setPlainText(display_text.strip())
         
     def add_quest(self, name, giver, description, turn_in, reward):
         """Adds a quest to the player's log if it doesn't exist already."""
+        if not self.app: return
         # Ensure the player object has a quests list
         if not hasattr(self.app.player, 'quests'):
             self.app.player.quests = []
@@ -76,6 +78,8 @@ class QuestsPanel(QWidget):
         
     def complete_quest(self, name):
         """Removes a quest from the active quest log by its exact name."""
+        if not self.app: return
+        
         if not hasattr(self.app.player, 'quests'):
             return
             

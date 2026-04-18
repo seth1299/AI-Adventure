@@ -276,7 +276,8 @@ class QtAppContext:
             
         try:
             for widget in self.notebook_widgets:
-                self.notebook_widgets[widget].set_base_path(save_path)
+                if hasattr(widget, 'set_base_path'):
+                    self.notebook_widgets[widget].set_base_path(save_path)
         except Exception:
             logging.exception("Failed to load markdown tabs")
 
@@ -350,6 +351,11 @@ class QtAppContext:
                 time=s.get("time") or "12:00 A.M.",
                 dynamic_stats=s.get("tracked_stats", [])
             )
+            
+        if "Quests" in self.notebook_widgets:
+                quests_widget = self.notebook_widgets["Quests"]
+                if hasattr(quests_widget, "refresh_display"):
+                    quests_widget.refresh_display()
 
         # AIManager calls this from worker threads; dispatch to UI thread.
         self.ui.run_now.emit(_apply)
@@ -385,6 +391,7 @@ def main() -> int:
     win.app = app_ctx
     win.inventory_panel.app = app_ctx
     win.ai_manager = AIManager(app_ctx)
+    win.quests_panel.app = app_ctx
     win.setWindowTitle(f"{save_name}")
     win.show()
     
