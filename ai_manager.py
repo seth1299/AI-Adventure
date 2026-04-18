@@ -374,6 +374,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
                     if marker in text_to_save:
                         text_to_save = text_to_save.split(marker)[0].strip()
                         break
+                # TODO: Figure out how to either "hide" the god-awful Merchant Table when it ends up having tens and tens of "\u2500", "\u2502", "\u253c", and similar markers in it
                 
                 if not is_startup:
                     self.app.conversation_history.append(f"{user_text}")

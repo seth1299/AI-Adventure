@@ -61,7 +61,7 @@ class MainWindow(QMainWindow):
         self.processing_panel = ProcessingPanel()
         self.recipes_panel = RecipesPanel()
         self.character_panel = MarkdownPanel("Character")
-        self.quests_panel = QuestsPanel(self)
+        self.quests_panel = QuestsPanel(app_context=self.app)
         self._add_dock("Quests", self.quests_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
         self._add_dock("World", self.world_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
         self._add_dock("Journal", self.journal_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
