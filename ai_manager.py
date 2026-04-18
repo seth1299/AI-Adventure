@@ -247,7 +247,9 @@ After outputting the tags, summarize the first starting turn, describe the surro
             
             # --- TAG PARSING ---
             tag_parser = TagParser(self.app)
-            ai_text = tag_parser.process_inline_tags(ai_text)
+            display_ai_text = tag_parser.process_inline_tags(ai_text, is_history=False)
+            history_ai_text = tag_parser.process_inline_tags(ai_text, is_history=True)
+            ai_text = display_ai_text
             
             # 1. SETUP FOUNDATION FIRST (Creation Specific Tags)
             if is_startup:
@@ -321,7 +323,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
                     self.app.after(0, lambda: self.app.notebook_widgets["Inventory"].refresh_display())
 
                 logging.info("Starting game now...")
-                clean_creation_text = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", ai_text, flags=re.DOTALL).strip()
+                clean_creation_text = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", history_ai_text, flags=re.DOTALL).strip()
                 self.app.conversation_history.append(f"{clean_creation_text}")
 
             # 4. RECURSIVE LOGIC (Rolls)
@@ -339,7 +341,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
                         self.app.after(0, lambda: skills_tab.load_data())
                 
                 # Added flags=re.DOTALL to prevent multi-line tags from sneaking through
-                clean_prev = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", ai_text, flags=re.DOTALL).strip()
+                clean_prev = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", history_ai_text, flags=re.DOTALL).strip()
                 logging.info(f"[System: Player rolled {result} for {skill}]")
                 
                 # Instructing the AI not to repeat previous tags stops the duplication
@@ -359,22 +361,25 @@ After outputting the tags, summarize the first starting turn, describe the surro
             # 5. FINALIZE AND PRINT
             logging.info(f"AI text: {ai_text}")
             clean_pattern = re.compile(r"\[\[[A-Z_]+:.*?\]\]", re.DOTALL)
-            final_text = clean_pattern.sub("", ai_text)
-            final_text = re.sub(r'\n{3,}', '\n\n', final_text)
-            final_text = final_text.strip()
+            # Format the text meant for UI Display
+            final_display_text = clean_pattern.sub("", display_ai_text)
+            final_display_text = re.sub(r'\n{3,}', '\n\n', final_display_text).strip()
             
-            if final_text and len(final_text) > 8:
+            # Format the text meant for History Saving
+            final_history_text = clean_pattern.sub("", history_ai_text)
+            final_history_text = re.sub(r'\n{3,}', '\n\n', final_history_text).strip()
+            
+            if final_display_text and len(final_display_text) > 8:
                 self.app.story_tab.print_text(" ")
-                self.app.story_tab.print_text(final_text, sender="")
+                self.app.story_tab.print_text(final_display_text, sender="")
                 self.app.story_tab.print_text(" ")
                 
-                text_to_save = final_text
+                text_to_save = final_history_text
                 trim_markers = ["Possible Actions:", "Suggested Actions:", "### Actions", "What would you like to do?", "What do you do?", "What do you do now?"]
                 for marker in trim_markers:
                     if marker in text_to_save:
                         text_to_save = text_to_save.split(marker)[0].strip()
                         break
-                # TODO: Figure out how to either "hide" the god-awful Merchant Table when it ends up having tens and tens of "\u2500", "\u2502", "\u253c", and similar markers in it
                 
                 if not is_startup:
                     self.app.conversation_history.append(f"{user_text}")
@@ -619,7 +624,7 @@ class TagParser:
             if not existing:
                 self.app.player.tracked_stats.append({"name": s_name, "value": s_val, "enabled": True, "description": s_desc})
                 
-    def process_inline_tags(self, ai_text):
+    def process_inline_tags(self, ai_text, is_history=False):
         """Processes tags that need to be replaced with actual text before displaying."""
         
         def replace_currency(match):
@@ -645,6 +650,7 @@ class TagParser:
                 return "(Merchant inventory is unreadable)"
 
             table_data = []
+            history_items = []
             for item in parsed_list:
                 # Clean up any lingering quotes and split by the pipe character
                 item = item.strip().strip('\'"')
@@ -663,19 +669,29 @@ class TagParser:
                         formatted_price = price_raw # Fallback if AI hallucinates text instead of an int
                         
                     table_data.append([name, description, formatted_price])
+                    
+                    # --- CHANGED: Include the description in the history summary! ---
+                    # We wrap the name in single quotes and use a hyphen to cleanly separate the description.
+                    history_items.append(f"'{name}' - {description} ({formatted_price})") 
                 else:
                     # Fallback if the AI messes up the pipe formatting
                     table_data.append(parts + [""] * (3 - len(parts)))
+                    if len(parts) > 0:
+                        history_items.append(f"'{parts[0]}'")
             
             if not table_data:
                 return "\n*(This merchant has nothing for sale.)*\n"
                 
-            # Create the 3xY rounded grid!
-            headers = ["Item Name", "Description", "Price"]
-            grid = tabulate(table_data, headers=headers, tablefmt="rounded_grid")
-            
-            # Pad with newlines so it renders nicely in the text box
-            return f"\n{grid}\n"
+            if is_history:
+                items_str = ", ".join(history_items)
+                return f"\n*(OOG: A merchant table is listed detailing the following items: {items_str}.)*\n"
+            else:
+                # Create the 3xY rounded grid!
+                headers = ["Item Name", "Description", "Price"]
+                grid = tabulate(table_data, headers=headers, tablefmt="rounded_grid")
+                
+                # Pad with newlines so it renders nicely in the text box
+                return f"\n{grid}\n"
                 
         # Find all instances of [[DISPLAY_CURRENCY: X]] and swap them
         modified_text = re.sub(r"\[\[DISPLAY_CURRENCY:\s*(-?\d+)\]\]", replace_currency, ai_text)

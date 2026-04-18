@@ -149,6 +149,42 @@ class QtAppContext:
             }
 
         self._sync_player_state_to_ui()
+        
+    def _reconstruct_merchant_tables(self, text: str) -> str:
+        """
+        Parses the token-saving OOG merchant summaries back into readable UI grids.
+        Returns the modified string.
+        """
+        if not text: return text
+        
+        import re
+        from tabulate import tabulate
+        
+        # Look for our exact OOG sentence structure
+        pattern = r"\*\(OOG: A merchant table is listed detailing the following items:\s*(.*?)\.\)\*"
+        
+        def replace_with_grid(match):
+            items_str = match.group(1)
+            table_data = []
+            
+            # --- CHANGED: Regex safely pulls 'Item Name' - Description (Price) ---
+            # It extracts Group 1 (Name), Group 2 (Description), and Group 3 (Price).
+            for item_match in re.finditer(r"'(.*?)'\s*-\s*(.*?)\s*\(([^)]+)\)", items_str):
+                name = item_match.group(1).strip()
+                description = item_match.group(2).strip()
+                price = item_match.group(3).strip()
+                table_data.append([name, description, price])
+                
+            if table_data:
+                # --- CHANGED: We use a 3-column grid again since we have the descriptions! ---
+                headers = ["Item Name", "Description", "Price"]
+                grid = tabulate(table_data, headers=headers, tablefmt="rounded_grid")
+                return f"\n{grid}\n"
+                
+            return match.group(0) # Fallback to the OOG text if parsing fails
+            
+        # Swap all instances of the OOG text with the newly drawn grids
+        return re.sub(pattern, replace_with_grid, text)
 
     def after(self, ms: int, func) -> None:
         self.ui.run_later.emit(int(ms), func)
@@ -304,9 +340,11 @@ class QtAppContext:
                     last_gm_message = line
                 
             if "History" in self.notebook_widgets:
-                self.notebook_widgets["History"].set_text(history_text.strip())
+                display_history = self._reconstruct_merchant_tables(history_text.strip())
+                self.notebook_widgets["History"].set_text(display_history)
                 
             if last_gm_message:
+                last_gm_message = self._reconstruct_merchant_tables(last_gm_message)
                 self.story_tab.print_text(last_gm_message + "\n\nWhat do you do now?\n", sender="")
             else:
                 self.story_tab.print_text(f"What do you do now?\n")
