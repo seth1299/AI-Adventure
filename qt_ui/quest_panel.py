@@ -85,8 +85,13 @@ class QuestsPanel(QWidget):
             
         initial_count = len(self.app.player.quests)
         
-        # Filter out the quest with the matching name
-        self.app.player.quests = [q for q in self.app.player.quests if q.get("name", "").lower() != name.lower()]
+        # We iterate over a temporary copy of the list using list() so we don't 
+        # run into shifting-index errors while removing items from the real list.
+        for quest in list(self.app.player.quests):
+            if quest.get("name", "").lower() == name.lower():
+                # IN-PLACE DELETION: This permanently deletes the dictionary from the 
+                # original list in memory, guaranteeing the save system sees it!
+                self.app.player.quests.remove(quest)
         
         # Only refresh if a quest was actually removed
         if len(self.app.player.quests) < initial_count:
