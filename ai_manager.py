@@ -315,24 +315,8 @@ After outputting the tags, summarize the first starting turn, describe the surro
                     self.app.player.world_currencies = invented_currencies
                     
                 self.app.story_tab.set_controls_state(True, "What do you do now?")
-
-            # 2. PROCESS STANDARD TAGS
-            # Placed outside the if/else block so that tags are never skipped, even if a Roll occurs!
-            tag_parser.process_standard_tags(ai_text, is_startup=is_startup)
-
-            # 3. FINALIZE STARTUP & SAVE
-            if is_startup:                
-                logging.info("Saving game now...")
-                self.app.save_game()
-                self.app.after(0, lambda: self.app._sync_player_state_to_ui())
-                if "Inventory" in self.app.notebook_widgets:
-                    self.app.after(0, lambda: self.app.notebook_widgets["Inventory"].refresh_display())
-
-                logging.info("Starting game now...")
-                clean_creation_text = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", history_ai_text, flags=re.DOTALL).strip()
-                self.app.conversation_history.append(f"{clean_creation_text}")
-
-            # 4. RECURSIVE LOGIC (Rolls)
+                
+            # 2. RECURSIVE LOGIC (Rolls)
             roll_match = re.search(r"\[\[ROLL:\s*(.*?)\]\]", ai_text)
 
             if roll_match and recursion_depth < 2:
@@ -346,16 +330,15 @@ After outputting the tags, summarize the first starting turn, describe the surro
                     elif hasattr(skills_tab, 'load_data'):
                         self.app.after(0, lambda: skills_tab.load_data())
                 
-                # Added flags=re.DOTALL to prevent multi-line tags from sneaking through
-                clean_prev = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", history_ai_text, flags=re.DOTALL).strip()
                 logging.info(f"[System: Player rolled {result} for {skill}]")
                 
-                # Instructing the AI not to repeat previous tags stops the duplication
+                draft_with_tags = history_ai_text.strip()
+                
                 follow_up = (
-                    f"{prompt}\nGM: {clean_prev}\n"
-                    f"[System: Player rolled {result} for {skill}. Please determine what degree of success/failure that is, "
+                    f"{prompt}\nGM (Draft): {draft_with_tags}\n"
+                    f"[System: Player rolled {result} for {skill}. Please rewrite your response to incorporate the success/failure of this roll, "
                     f"then narrate the outcome. Do NOT mention the die roll at all in the diegetic context. "
-                    f"CRITICAL: You have already executed the background actions for this turn. Do NOT output any standard tags (like [[ADD:]], [[GIVE_COIN:]], etc.) that you can read from the prompt that was just given to you!]"
+                    f"CRITICAL: The tags from your draft were NOT executed yet. You MUST output ALL necessary tags (like [[STATUS:]], [[REMOVE:]], [[ADD:]], etc.) again in this final response!]"
                 )
                 
                 # Recursive call
@@ -363,6 +346,24 @@ After outputting the tags, summarize the first starting turn, describe the surro
                 
                 # Added return so the Pass 1 block terminates here and doesn't double-append to UI history!
                 return 
+
+            # 3. PROCESS STANDARD TAGS
+            # Placed outside the if/else block so that tags are never skipped, even if a Roll occurs!
+            tag_parser.process_standard_tags(ai_text, is_startup=is_startup)
+
+            # 4. FINALIZE STARTUP & SAVE
+            if is_startup:                
+                logging.info("Saving game now...")
+                self.app.save_game()
+                self.app.after(0, lambda: self.app._sync_player_state_to_ui())
+                if "Inventory" in self.app.notebook_widgets:
+                    self.app.after(0, lambda: self.app.notebook_widgets["Inventory"].refresh_display())
+
+                logging.info("Starting game now...")
+                clean_creation_text = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", history_ai_text, flags=re.DOTALL).strip()
+                self.app.conversation_history.append(f"{clean_creation_text}")
+
+            
 
             # 5. FINALIZE AND PRINT
             logging.info(f"AI text: {ai_text}")
@@ -414,6 +415,10 @@ class TagParser:
         for match in re.finditer(r"\[\[REMOVE:\s*(.*?)\]\]", ai_text, re.DOTALL):
             res = self.app.notebook_widgets["Inventory"].autonomous_remove(match.group(1))
             #self.app.story_tab.print_text(res, sender="GM")
+            
+        for match in re.finditer(r"\[\[MODIFY_ITEM:\s*(.*?)\]\]", ai_text, re.DOTALL):
+            if "Inventory" in self.app.notebook_widgets:
+                self.app.notebook_widgets["Inventory"].modify_item(match.group(1))
             
         for match in re.finditer(r"\[\[MODIFY_STAT:\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text):
             stat_name, stat_val = match.group(1).strip(), match.group(2).strip()
