@@ -15,9 +15,15 @@ class AIManager:
             logging.error(f"Failed to initialize Gemini Client: {e}")
 
     def clean_quotes(self, text):
-        """Replaces smart quotes (unicode) with standard ASCII quotes."""
+        """Replaces smart quotes and unicode dashes with standard ASCII equivalents."""
         if not text: return ""
-        return text.replace("‘", "'").replace("’", "'").replace("“", '"').replace("”", '"')
+        
+        return (text.replace("‘", "'")
+                    .replace("’", "'")
+                    .replace("“", '"')
+                    .replace("”", '"')
+                    .replace("—", "--")  # Replaces the Em Dash (\u2014) with a double-hyphen
+                    .replace("–", "-"))  # Replaces the En Dash (\u2013) with a single-hyphen
 
     def start_new_game_from_wizard(self, data):
         """Compiles the wizard data into a one-shot prompt to generate the game start."""                

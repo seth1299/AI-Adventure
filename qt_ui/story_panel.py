@@ -125,8 +125,15 @@ class StoryPanel(QWidget):
         self.volume_changed.emit(val / 100.0)
 
     def append_text(self, text: str) -> None:
-        #if not text:
-        #    return
+        # Strip trailing/leading whitespace to standardize blocks
+        text = text.strip()
+        if not text:
+            return
+            
+        # Insert a blank line before every new message block to ensure consistent spacing
+        if self.txt_log.toPlainText():
+            self.txt_log.append("")
+            
         self.txt_log.append(text)
         self._scroll_to_bottom()
 
@@ -224,7 +231,9 @@ class StoryPanel(QWidget):
 
     def print_text(self, text: str, *, sender: str = "GM") -> None:
         """Prints text to the story window, processing TTS and typing effects if enabled."""
-        if not text.strip(): 
+        # Strip trailing/leading whitespace and ignore hardcoded AI spacing
+        text = text.strip()
+        if not text: 
             return
             
         # Flush any ongoing typing so it doesn't overlap with a new incoming message
@@ -237,7 +246,7 @@ class StoryPanel(QWidget):
             # Pass BOTH clean_text (for audio) and original text (for UI display)
             self._generate_and_play_tts(clean_text, original_text=text)
         else:
-            self.append_text(f"{text}")
+            self.append_text(text)
 
     def _emit_send(self) -> None:
         text = (self.txt_input.text() or "").strip()
@@ -281,6 +290,8 @@ class StoryPanel(QWidget):
         
     def _start_typing_effect(self, text: str) -> None:
         """Prepares the buffer and calculates the WPM delay for typing."""
+        text = text.strip() # Strip whitespace to standardize block spacing
+        
         # Add spacing if the log isn't empty to distinguish paragraphs
         if self.txt_log.toPlainText():
             self.txt_log.append("")
