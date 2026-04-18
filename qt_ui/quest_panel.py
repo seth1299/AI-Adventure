@@ -24,6 +24,9 @@ class QuestsPanel(QWidget):
         self.text_display.setOpenExternalLinks(False)
         layout.addWidget(self.text_display)
         
+    def set_base_path(self, save_folder: str) -> None:
+        pass
+        
     def refresh_display(self):
         """Reads the player's current quests and updates the text display with generated tables."""
         if not self.app: return

@@ -98,16 +98,17 @@ class MarkdownPanel(QWidget):
     # ---- Save/Load wiring ----
 
     def set_base_path(self, save_folder: str) -> None:
-        if not save_folder:
+        if not save_folder or not self:
             return
 
         try:
             os.makedirs(save_folder, exist_ok=True)
-        except Exception:
-            logging.exception("Failed to ensure save folder exists")
+            self.filename = os.path.join(save_folder, f"{self.name}.md")
+            self.reload_from_disk(force=True)
+        except Exception as e:
+            logging.exception(f"Could not set base path for {self.filename}: {e}")
 
-        self.filename = os.path.join(save_folder, f"{self.name}.md")
-        self.reload_from_disk(force=True)
+        
 
     def reload_from_disk(self, force: bool = False) -> None:
         if not self.filename:
