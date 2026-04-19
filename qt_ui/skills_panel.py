@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging, os, textwrap
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QPlainTextEdit
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextBrowser
 from tabulate import tabulate
 from file_manager import FileManager
 
@@ -44,12 +44,9 @@ class SkillsPanel(QWidget):
 
         root.addLayout(bar)
 
-        self.display = QPlainTextEdit()
-        self.display.setReadOnly(True)
+        self.display = QTextBrowser()
         self.display.setFont(QFont("Consolas", 11))
-        self.display.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         root.addWidget(self.display, stretch=1)
-
         self._set_state("No save loaded")
 
     def set_base_path(self, save_folder: str) -> None:
@@ -71,12 +68,7 @@ class SkillsPanel(QWidget):
         self.refresh_display()
 
     def get_text(self) -> str:
-        """Returns the text that is currently displayed to the Player.
-
-        Returns:
-            str: The text on the Skills Panels that is currently displayed to the Player (but not necessarily the actual skills.json data).
-        """
-        return self.display.toPlainText()
+        return self.display.toMarkdown()
 
     def load_data(self) -> list[dict]:
         """Loads the Skills dictionary / skills.json file.
@@ -120,12 +112,12 @@ class SkillsPanel(QWidget):
         
         """
         if not self.data_path:
-            self.display.setPlainText("(No save loaded)")
+            self.display.setMarkdown("(No save loaded)")
             return
 
         data = self.load_data()
         if not data:
-            self.display.setPlainText("SKILLS\n\n(None)")
+            self.display.setMarkdown("### SKILLS\n\n*(None)*")
             self._set_state("")
             return
 
@@ -157,8 +149,13 @@ class SkillsPanel(QWidget):
                 ]
             )
 
-        panel_display = "SKILLS\n" + tabulate(rows, headers, tablefmt="rounded_grid") + "\n"
-        self.display.setPlainText(panel_display)
+        # Generate the rounded grid
+        grid = tabulate(rows, headers, tablefmt="rounded_grid")
+        
+        # Combine the Markdown header and the code-block wrapped grid
+        panel_display = f"### SKILLS\n\n```text\n{grid}\n```\n"
+        
+        self.display.setMarkdown(panel_display)
         self._set_state("")
 
     def _set_state(self, text: str) -> None:

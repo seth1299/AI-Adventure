@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
 class StoryPanel(QWidget):
     send_requested = Signal(str)
     volume_changed = Signal(float)
-    start_typing_signal = Signal(str)
     
     AVAILABLE_VOICES = {
         "Aria (Female, US)": "en-US-AriaNeural",

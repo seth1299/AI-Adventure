@@ -49,7 +49,6 @@ DEFAULT_RULES = (
 - Keep responses under 30 sentences (excluding your final suggested actions).
 - Use single blank lines between paragraphs for legibility. 
 - Ensure that there is one line of blank space before and at the end of each message for legibility.
-- Output strictly in plaintext. Avoid Markdown bolding or italics outside of your functional tags.
 </formatting>
 
 <game_mechanics>

@@ -33,7 +33,7 @@ class QuestsPanel(QWidget):
         quests = getattr(self.app.player, 'quests', [])
         
         if not quests:
-            self.text_display.setPlainText("You currently have no active quests.")
+            self.text_display.setMarkdown("*You currently have no active quests.*")
             return
             
         display_text = ""
@@ -53,8 +53,11 @@ class QuestsPanel(QWidget):
                 ["Reward", reward]
             ]
             
+            # Generate the rounded grid
             grid = tabulate(table_data, tablefmt="rounded_grid")
-            display_text += f"{name} \n{grid}\n\n"
+            
+            # Wrap the grid in a code block under the quest's Markdown header
+            display_text += f"### {name} \n\n```text\n{grid}\n```\n\n"
             
         self.text_display.setPlainText(display_text.strip())
         

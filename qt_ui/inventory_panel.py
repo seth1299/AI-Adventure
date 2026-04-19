@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging, os
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QPlainTextEdit
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextBrowser
 from tabulate import tabulate
 from file_manager import FileManager
 
@@ -46,12 +46,9 @@ class InventoryPanel(QWidget):
         root.addLayout(bar)
 
         # ---- Display ----
-        self.display = QPlainTextEdit()
-        self.display.setReadOnly(True)
+        self.display = QTextBrowser()
         self.display.setFont(QFont("Consolas", 11))
-        self.display.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         root.addWidget(self.display, stretch=1)
-
         self._set_state("No save loaded")
 
     # ---- Wiring ----
@@ -70,7 +67,8 @@ class InventoryPanel(QWidget):
         self.refresh_display()
 
     def get_text(self) -> str:
-        return self.display.toPlainText()
+        """Returns the Markdown formatted text of the inventory."""
+        return self.display.toMarkdown()
 
     # ---- Data I/O ----
 
@@ -109,7 +107,7 @@ class InventoryPanel(QWidget):
 
     def refresh_display(self) -> None:
         if not self.data_path:
-            self.display.setPlainText("(No save loaded)")
+            self.display.setMarkdown("(No save loaded)")
             return
 
         data = self.load_data()
@@ -122,7 +120,7 @@ class InventoryPanel(QWidget):
 
         # Only display Empty if there are NO items AND NO currencies defined
         if not data and not world_currencies:
-            self.display.setPlainText("INVENTORY\n\n(Empty)")
+            self.display.setMarkdown("### INVENTORY\n\n*(Empty)*")
             self._set_state("")
             return
 
@@ -134,7 +132,7 @@ class InventoryPanel(QWidget):
         else:
             logging.error("Cannot find Player object.")
             
-        parts: list[str] = ["INVENTORY\n", f"Wealth: {wealth_str}\n"]
+        parts: list[str] = ["### INVENTORY\n\n", f"**Wealth:** {wealth_str}\n\n"]
 
         # --- DYNAMIC CURRENCY TABLE ---
         if world_currencies:
@@ -164,9 +162,11 @@ class InventoryPanel(QWidget):
                 currency_rows.append(["Loose Change", "Base Units", loose_str, "1 base unit"])
                 
             if currency_rows:
-                parts.append("\nWealth / Currencies\n")
-                parts.append(tabulate(currency_rows, headers, tablefmt="rounded_grid"))
-                parts.append("\n")
+                parts.append("#### Wealth / Currencies\n\n")
+                # Generate the rounded grid
+                grid = tabulate(currency_rows, headers, tablefmt="rounded_grid")
+                # Wrap it in a Markdown code block (```) to preserve the grid shape
+                parts.append(f"```text\n{grid}\n```\n\n")
 
         # --- REGULAR ITEMS ---
         for category in sorted(data.keys(), key=lambda s: str(s).lower()):
@@ -196,11 +196,12 @@ class InventoryPanel(QWidget):
 
                 rows.append([name, desc, amt])
 
-            parts.append(f"\n{category}\n")
-            parts.append(tabulate(rows, headers, tablefmt="rounded_grid"))
-            parts.append("\n")
+            parts.append(f"#### {category}\n\n")
+            # Change tablefmt to "pipe"
+            parts.append(tabulate(rows, headers, tablefmt="pipe"))
+            parts.append(f"```text\n{grid}\n```\n\n")
 
-        self.display.setPlainText("".join(parts).rstrip() + "\n")
+        self.display.setMarkdown("".join(parts).rstrip() + "\n")
         self._set_state("")
 
     def _set_state(self, text: str) -> None:
