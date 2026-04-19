@@ -227,7 +227,10 @@ After outputting the tags, summarize the first starting turn, describe the surro
         context_data += status_context
 
         # 3. Build Prompt
-        recent_history = self.app.conversation_history[-3000:] if len(self.app.conversation_history) > 3000 else self.app.conversation_history
+        history_text = ""
+        if "History" in self.app.notebook_widgets:
+            history_text = self.app.notebook_widgets["History"].get_text().strip()
+        recent_history = history_text[-6000:] if len(history_text) > 6000 else history_text
         full_prompt = f"\nPast Conversation History:\n{recent_history}\nUser's request: {user_text}\nPlease remember to consider the following in your response: {context_data}"
 
         # 4. Thread the request
@@ -389,8 +392,9 @@ After outputting the tags, summarize the first starting turn, describe the surro
                     self.app.after(0, lambda: self.app.notebook_widgets["Inventory"].refresh_display())
 
                 logging.info("Starting game now...")
-                clean_creation_text = re.sub(r"\[\[[A-Z_]+:.*?\]\]", "", history_ai_text, flags=re.DOTALL).strip()
-                self.app.conversation_history.append(f"{clean_creation_text}")
+                if "History" in self.app.notebook_widgets:
+                    new_entry = f"**System: Start of Game**\n\n**GM:** {clean_creation_text}\n\n---\n\n"
+                    self.app.after(0, lambda text=new_entry: self.app.notebook_widgets["History"].set_text(text))
 
             
 
@@ -416,8 +420,15 @@ After outputting the tags, summarize the first starting turn, describe the surro
                         break
                 
                 if not is_startup:
-                    self.app.conversation_history.append(f"{user_text}")
-                    self.app.conversation_history.append(f"{text_to_save.strip()}")
+                    if "History" in self.app.notebook_widgets:
+                        hist_panel = self.app.notebook_widgets["History"]
+                        current_hist = hist_panel.get_text()
+                        
+                        # text_to_save is derived from history_ai_text, which contains the OOG tags!
+                        new_exchange = f"**Player:** {user_text}\n\n**GM:** {text_to_save.strip()}\n\n---\n\n"
+                        
+                        # Use after() to safely push to UI thread
+                        self.app.after(0, lambda ch=current_hist, ne=new_exchange: hist_panel.set_text(ch + ne))
                 
                 try:
                     self.app.save_game()
