@@ -1,6 +1,6 @@
 # qt_ui/story_panel.py
 from __future__ import annotations
-import re, edge_tts, asyncio, threading, os, tempfile, pygame, uuid, logging
+import re, edge_tts, asyncio, threading, os, tempfile, pygame, uuid, logging, markdown
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
@@ -49,10 +49,6 @@ class StoryPanel(QWidget):
         self.tts_rate = 0
         self.tts_voice = "en-US-AriaNeural"
         self.temp_dir = tempfile.gettempdir()
-        self.typing_timer = QTimer(self)
-        self.typing_timer.timeout.connect(self._type_next_word)
-        self.typing_buffer = [] 
-        self.start_typing_signal.connect(self._start_typing_effect)
         self._unlock_queued = False
 
         root = QVBoxLayout(self)
@@ -103,12 +99,6 @@ class StoryPanel(QWidget):
         self.txt_input.setPlaceholderText("What do you do next?")
         self.txt_input.returnPressed.connect(self._emit_send)
         input_row.addWidget(self.txt_input, stretch=1)
-        
-        self.btn_skip = QPushButton("Skip/Stop")
-        self.btn_skip.setFixedWidth(100)
-        self.btn_skip.clicked.connect(self.stop_tts)
-        self.btn_skip.setVisible(False)
-        input_row.addWidget(self.btn_skip)
 
         self.btn_send = QPushButton("Send")
         self.btn_send.setFixedWidth(100)
@@ -124,17 +114,29 @@ class StoryPanel(QWidget):
         # Pygame uses 0.0 to 1.0 for volume, so we divide the 0-100 slider value by 100
         self.volume_changed.emit(val / 100.0)
 
-    def append_text(self, text: str) -> None:
-        # Strip trailing/leading whitespace to standardize blocks
-        text = text.strip()
-        if not text:
+    def append_text(self, markdown_string: str) -> None:
+        """
+        Converts a Markdown string to HTML and appends it to the log as Rich Text.
+        """
+        markdown_string = markdown_string.strip()
+        if not markdown_string:
             return
             
-        # Insert a blank line before every new message block to ensure consistent spacing
+        # Insert a blank line before every new message block
         if self.txt_log.toPlainText():
             self.txt_log.append("")
             
-        self.txt_log.append(text)
+        try:
+            # Convert the raw markdown string into an HTML formatted string
+            rendered_html = markdown.markdown(markdown_string)
+            
+            # append() natively processes HTML strings and renders them
+            self.txt_log.append(rendered_html)
+        except Exception as error:
+            logging.error(f"Failed to append Markdown/HTML text: {error}")
+            # Fallback to plain text if HTML parsing fails
+            self.txt_log.append(markdown_string)
+            
         self._scroll_to_bottom()
 
     def set_status(self, *, turn=None, location=None, day=None, time=None, dynamic_stats=None):
@@ -215,7 +217,7 @@ class StoryPanel(QWidget):
         
     def set_controls_state(self, enabled: bool, status_text: str | None = None) -> None:
         """Enable/disable input controls. Optionally updates placeholder text."""
-        if enabled and self.typing_timer.isActive():
+        if enabled:
             self._unlock_queued = True
             return
         self._unlock_queued = False
@@ -235,9 +237,6 @@ class StoryPanel(QWidget):
         text = text.strip()
         if not text: 
             return
-            
-        # Flush any ongoing typing so it doesn't overlap with a new incoming message
-        self._flush_typing_buffer()
         
         if self.narrator_enabled and not text.startswith("> "):
             # Strip markdown formatting for the audio so it doesn't narrate "asterisk"
@@ -277,87 +276,11 @@ class StoryPanel(QWidget):
                 
                 self._play_generated_tts(dynamic_tts_file)
                 # IMPORTANT: Fire the visual typing signal EXACTLY when audio starts playing
-                if original_text is not None:
-                    self.start_typing_signal.emit(original_text)
             except Exception as e:
                 print(f"Edge-TTS Error: {e}")
-                # Fallback: Just print the text normally if generation fails
-                if original_text is not None:
-                    self.start_typing_signal.emit(original_text)
 
         # Start the generator in a background thread
         threading.Thread(target=run_async, daemon=True).start()
-        
-    def _start_typing_effect(self, text: str) -> None:
-        """Prepares the buffer and calculates the WPM delay for typing."""
-        text = text.strip() # Strip whitespace to standardize block spacing
-        
-        # Add spacing if the log isn't empty to distinguish paragraphs
-        if self.txt_log.toPlainText():
-            self.txt_log.append("")
-            
-        # Split text but retain spaces/newlines as separate tokens
-        self.typing_buffer = re.split(r'(\s+)', text)
-        self.typing_buffer = [w for w in self.typing_buffer if w] # Remove empty strings
-        
-        # Edge-TTS default WPM is approx 160. Calculate modified WPM based on slider.
-        base_wpm = 180
-        multiplier = 1.0 + (self.tts_rate * 0.05)
-        if multiplier < 0.1: multiplier = 0.1 # Prevent dividing by zero
-        
-        current_wpm = base_wpm * multiplier
-        
-        # Words per minute -> ms delay between words (60,000 ms per minute)
-        delay_ms = int(60000 / current_wpm)
-        self.btn_send.setVisible(False)
-        self.btn_skip.setVisible(True)
-        
-        self.typing_timer.start(delay_ms)
-        
-    def _type_next_word(self) -> None:
-        """Pops the next word from the buffer and inserts it into the text edit inline."""
-        if not self.typing_buffer:
-            self.typing_timer.stop()
-            self._scroll_to_bottom()
-            self.btn_skip.setVisible(False)
-            self.btn_send.setVisible(True)
-            if self._unlock_queued:
-                self.set_controls_state(True)
-            #else:
-                #self.set_controls_state(False)
-            return
-            
-        # Grab the next word token
-        word = self.typing_buffer.pop(0)
-        
-        # Use a cursor to insert inline text without appending new blocks/paragraphs
-        cursor = self.txt_log.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        self.txt_log.setTextCursor(cursor)
-        self.txt_log.insertPlainText(word)
-        
-        # If the token was a whitespace/newline, instantly grab and insert the next *actual* word.
-        # This guarantees the WPM delay calculates time between actual words, not spaces.
-        while self.typing_buffer and self.typing_buffer[0].isspace():
-            space = self.typing_buffer.pop(0)
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            self.txt_log.setTextCursor(cursor)
-            self.txt_log.insertPlainText(space)
-            
-        self._scroll_to_bottom()
-
-    def _flush_typing_buffer(self) -> None:
-        """Instantly prints the remainder of the typing buffer if interrupted or stopped."""
-        if self.typing_timer.isActive():
-            self.typing_timer.stop()
-            if self.typing_buffer:
-                rest_of_text = "".join(self.typing_buffer)
-                cursor = self.txt_log.textCursor()
-                cursor.movePosition(QTextCursor.MoveOperation.End)
-                self.txt_log.setTextCursor(cursor)
-                self.txt_log.insertPlainText(rest_of_text)
-                self.typing_buffer.clear()
-                self._scroll_to_bottom()
 
     def _play_generated_tts(self, filepath: str):
         """Loads the generated file into Pygame and plays it on our reserved channel."""
@@ -371,21 +294,15 @@ class StoryPanel(QWidget):
             print(f"Audio playback error: {e}")
 
     def stop_tts(self):
-        self._flush_typing_buffer()
         try:
             if pygame.mixer.get_init():
                 pygame.mixer.Channel(1).stop()
         except Exception as e:
             logging.error(f"Error stopping TTS: {e}")
-            
-        self.btn_skip.setVisible(False)
-        self.btn_send.setVisible(True)
         
         # Execute queued unlock if AI generation finished while speaking
-        if self._unlock_queued:
-            self.set_controls_state(True)
-        #else:
-            #self.set_controls_state(False)
+        if self._unlock_queued: self.set_controls_state(True)
+
 
     def play_voice_sample(self) -> None:
         self.stop_tts()

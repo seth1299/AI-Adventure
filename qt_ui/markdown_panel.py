@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QPlainTextEdit,
+    QTextEdit,
     QMessageBox,
 )
 
@@ -63,9 +63,10 @@ class MarkdownPanel(QWidget):
         root.addLayout(bar)
 
         # ---- Editor ----
-        self.editor = QPlainTextEdit()
+        self.editor = QTextEdit()
         if self.name == "World": self.editor.setReadOnly(True)
-        self.editor.setTabStopDistance(4 * self.editor.fontMetrics().horizontalAdvance(" "))
+        font_metrics = self.editor.fontMetrics()
+        self.editor.setTabStopDistance(4 * font_metrics.horizontalAdvance(" "))
         self.editor.setFont(QFont("Consolas", 11))
         self.editor.textChanged.connect(self._on_text_changed)
         root.addWidget(self.editor, stretch=1)
@@ -81,18 +82,31 @@ class MarkdownPanel(QWidget):
     # ---- Public API used by AIManager ----
 
     def get_text(self) -> str:
-        return self.editor.toPlainText()
+        """
+        Retrieves the rich text contents of the editor formatted as a Markdown string.
+        """
+        try:
+            # Native PySide6 method to convert rich text back into Markdown
+            return self.editor.toMarkdown()
+        except Exception as error:
+            logging.error(f"Error retrieving Markdown text: {error}")
+            return ""
 
-    def set_text(self, text: str) -> None:
+    def set_text(self, markdown_string: str) -> None:
+        """
+        Parses a Markdown string and renders it as Rich Text in the editor.
+        """
         self._loading = True
         try:
             self.editor.blockSignals(True)
-            self.editor.setPlainText(text or "")
+            # Native PySide6 method to render Markdown as Rich Text
+            self.editor.setMarkdown(markdown_string or "")
+        except Exception as error:
+            logging.error(f"Error setting Markdown text: {error}")
         finally:
             self.editor.blockSignals(False)
             self._loading = False
 
-        # Treat programmatic updates as real changes (AI writes, etc.)
         self._mark_dirty()
 
     # ---- Save/Load wiring ----
@@ -107,8 +121,6 @@ class MarkdownPanel(QWidget):
             self.reload_from_disk(force=True)
         except Exception as e:
             logging.exception(f"Could not set base path for {self.filename}: {e}")
-
-        
 
     def reload_from_disk(self, force: bool = False) -> None:
         if not self.filename:
@@ -127,12 +139,15 @@ class MarkdownPanel(QWidget):
 
         content = FileManager.read_text_file(self.filename)
         if not content.strip():
-            content = f"{self.name}\n\n"
+            content = f"# {self.name}\n\n" # Added a Markdown header hash as default
 
         self._loading = True
         try:
             self.editor.blockSignals(True)
-            self.editor.setPlainText(content)
+            # Replace setPlainText with setMarkdown
+            self.editor.setMarkdown(content)
+        except Exception as error:
+            logging.error(f"Error reloading Markdown from disk: {error}")
         finally:
             self.editor.blockSignals(False)
             self._loading = False
