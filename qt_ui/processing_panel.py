@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QPlainTextEdit,
+    QTextBrowser,
 )
 
 from tabulate import tabulate
@@ -53,11 +53,10 @@ class ProcessingPanel(QWidget):
 
         root.addLayout(bar)
 
-        self.display = QPlainTextEdit()
-        self.display.setReadOnly(True)
+        self.display = QTextBrowser()
         self.display.setFont(QFont("Consolas", 11))
-        self.display.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         root.addWidget(self.display, stretch=1)
+        self._set_state("No save loaded")
 
         self._set_state("No save loaded")
 
@@ -75,7 +74,8 @@ class ProcessingPanel(QWidget):
         self.refresh_display()
 
     def get_text(self) -> str:
-        return self.display.toPlainText()
+        """Returns the Markdown formatted text of the inventory."""
+        return self.display.toMarkdown()
 
     def load_data(self) -> list[dict]:
         if not self.data_path or not os.path.exists(self.data_path):
@@ -248,12 +248,12 @@ class ProcessingPanel(QWidget):
 
     def refresh_display(self) -> None:
         if not self.data_path:
-            self.display.setPlainText("(No save loaded)")
+            self.display.setMarkdown("(No save loaded)")
             return
 
         data = self.load_data()
         if not data:
-            self.display.setPlainText("ONGOING TASKS\n\n(None)")
+            self.display.setMarkdown("### ONGOING TASKS\n\n(None)")
             self._set_state("")
             return
 
@@ -295,9 +295,9 @@ class ProcessingPanel(QWidget):
                     prog = f"{done:.0f}/{req:.0f} Mins (Skill: {skill}) {time_str}"
                     
                 rows.append([item.get("name", ""), "PROJECT", status, prog, y, desc])
-
-        txt = "ONGOING TASKS\n" + tabulate(rows, headers, tablefmt="rounded_grid") + "\n"
-        self.display.setPlainText(txt)
+                
+        txt = "### ONGOING TASKS\n" + tabulate(rows, headers, tablefmt="rounded_grid") + "\n"
+        self.display.append(f"<pre style=\"font-family: Consolas, 'Courier New', monospace; line-height: 1.0;\">{txt}</pre>\n\n")
         self._set_state("")
 
     def remove_process(self, name):

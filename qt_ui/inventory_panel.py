@@ -165,7 +165,7 @@ class InventoryPanel(QWidget):
                 parts.append("#### Wealth / Currencies\n\n")
                 grid = tabulate(currency_rows, headers, tablefmt="rounded_grid")
                 # Use a preformatted HTML block to force the font and fix line gaps!
-                parts.append(f"<pre style=\"font-family: Consolas, 'Courier New', monospace; line-height: 1.0;\">\n{grid}\n</pre>\n\n")
+                parts.append(f"<pre style=\"font-family: Consolas, 'Courier New', monospace; line-height: 1.0;\">{grid}</pre>\n\n")
 
         # --- REGULAR ITEMS ---
         for category in sorted(data.keys(), key=lambda s: str(s).lower()):
@@ -198,7 +198,7 @@ class InventoryPanel(QWidget):
             parts.append(f"#### {category}\n\n")
             grid = tabulate(rows, headers, tablefmt="rounded_grid")
             # Use a preformatted HTML block
-            parts.append(f"<pre style=\"font-family: Consolas, 'Courier New', monospace; line-height: 1.0;\">\n{grid}\n</pre>\n\n")
+            parts.append(f"<pre style=\"font-family: Consolas, 'Courier New', monospace; line-height: 1.0;\">{grid}</pre>\n\n")
 
         self.display.setMarkdown("".join(parts).rstrip() + "\n")
         self._set_state("")

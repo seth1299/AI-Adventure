@@ -153,7 +153,7 @@ class SkillsPanel(QWidget):
         grid = tabulate(rows, headers, tablefmt="rounded_grid")
         
         # Combine the Markdown header and the code-block wrapped grid
-        panel_display = f"### SKILLS\n\n<pre style=\"font-family: Consolas, 'Courier New', monospace; line-height: 1.0;\">\n{grid}\n</pre>\n"
+        panel_display = f"### SKILLS\n\n<pre style=\"font-family: Consolas, 'Courier New', monospace; line-height: 1.0;\">{grid}</pre>\n"
         
         self.display.setMarkdown(panel_display)
         self._set_state("")

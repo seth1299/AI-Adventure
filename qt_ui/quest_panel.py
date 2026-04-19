@@ -57,7 +57,7 @@ class QuestsPanel(QWidget):
             grid = tabulate(table_data, tablefmt="rounded_grid")
             
             # Wrap the grid in a code block under the quest's Markdown header
-            display_text += f"### {name} \n\n<pre style=\"font-family: Consolas, 'Courier New', monospace; line-height: 1.0;\">\n{grid}\n</pre>\n\n"
+            display_text += f"### {name} \n\n<pre style=\"font-family: Consolas, 'Courier New', monospace; line-height: 1.0;\">{grid}</pre>\n\n"
             
         self.text_display.setPlainText(display_text.strip())
         
