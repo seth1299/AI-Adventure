@@ -163,10 +163,9 @@ class InventoryPanel(QWidget):
                 
             if currency_rows:
                 parts.append("#### Wealth / Currencies\n\n")
-                # Generate the rounded grid
                 grid = tabulate(currency_rows, headers, tablefmt="rounded_grid")
-                # Wrap it in a Markdown code block (```) to preserve the grid shape
-                parts.append(f"```text\n{grid}\n```\n\n")
+                # Use a preformatted HTML block to force the font and fix line gaps!
+                parts.append(f"<pre style=\"font-family: Consolas, 'Courier New', monospace; line-height: 1.0;\">\n{grid}\n</pre>\n\n")
 
         # --- REGULAR ITEMS ---
         for category in sorted(data.keys(), key=lambda s: str(s).lower()):
@@ -197,9 +196,9 @@ class InventoryPanel(QWidget):
                 rows.append([name, desc, amt])
 
             parts.append(f"#### {category}\n\n")
-            # Change tablefmt to "pipe"
-            parts.append(tabulate(rows, headers, tablefmt="pipe"))
-            parts.append(f"```text\n{grid}\n```\n\n")
+            grid = tabulate(rows, headers, tablefmt="rounded_grid")
+            # Use a preformatted HTML block
+            parts.append(f"<pre style=\"font-family: Consolas, 'Courier New', monospace; line-height: 1.0;\">\n{grid}\n</pre>\n\n")
 
         self.display.setMarkdown("".join(parts).rstrip() + "\n")
         self._set_state("")

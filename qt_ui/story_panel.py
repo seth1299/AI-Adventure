@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 class StoryPanel(QWidget):
     send_requested = Signal(str)
     volume_changed = Signal(float)
+    text_ready_signal = Signal(str)
     
     AVAILABLE_VOICES = {
         "Aria (Female, US)": "en-US-AriaNeural",
@@ -49,6 +50,7 @@ class StoryPanel(QWidget):
         self.tts_voice = "en-US-AriaNeural"
         self.temp_dir = tempfile.gettempdir()
         self._unlock_queued = False
+        self.text_ready_signal.connect(self.append_text)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -274,9 +276,14 @@ class StoryPanel(QWidget):
                 loop.close()
                 
                 self._play_generated_tts(dynamic_tts_file)
-                # IMPORTANT: Fire the visual typing signal EXACTLY when audio starts playing
+                
+                if original_text is not None:
+                    self.text_ready_signal.emit(original_text)
+                
             except Exception as e:
                 print(f"Edge-TTS Error: {e}")
+                if original_text is not None:
+                    self.text_ready_signal.emit(original_text)
 
         # Start the generator in a background thread
         threading.Thread(target=run_async, daemon=True).start()
