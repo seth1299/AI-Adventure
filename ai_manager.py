@@ -233,8 +233,6 @@ After outputting the tags, summarize the first starting turn, describe the surro
         # 4. Thread the request
         threading.Thread(target=self.query_ai, args=(full_prompt, user_text), daemon=True).start()
 
-    # ai_manager.py
-
     def query_ai(self, prompt, user_text, recursion_depth=0, is_startup=False):
         """Sends the prompt to Gemini and processes all resulting tags."""
         current_rules = self.app.load_rules()
@@ -318,6 +316,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
                 
             # 2. RECURSIVE LOGIC (Rolls)
             roll_match = re.search(r"\[\[ROLL:\s*(.*?)\]\]", ai_text)
+            project_match = re.search(r"\[\[START_PROJECT:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL)
 
             if roll_match and recursion_depth < 2:
                 skill = roll_match.group(1).strip()
@@ -333,6 +332,7 @@ After outputting the tags, summarize the first starting turn, describe the surro
                 logging.info(f"[System: Player rolled {result} for {skill}]")
                 
                 draft_with_tags = history_ai_text.strip()
+                draft_with_tags = re.sub(r"\[\[ROLL:\s*.*?\]\]", "", draft_with_tags).strip()
                 
                 follow_up = (
                     f"{prompt}\nGM (Draft): {draft_with_tags}\n"
@@ -346,6 +346,35 @@ After outputting the tags, summarize the first starting turn, describe the surro
                 
                 # Added return so the Pass 1 block terminates here and doesn't double-append to UI history!
                 return 
+            
+            if project_match and recursion_depth < 2:
+                project_name = project_match.group(1).strip()
+                skill_name = project_match.group(4).strip()
+                
+                try:
+                    work_required = float(project_match.group(3).strip())
+                except ValueError:
+                    work_required = 0.0
+                    
+                # Calculate the exact time using the same math from the Processing Panel
+                skill_level = self.app._get_skill_level(skill_name)
+                speed_multiplier = 1.0 + (0.5 * skill_level)
+                estimated_minutes = (work_required / speed_multiplier) if speed_multiplier > 0 else 0.0
+                
+                logging.info(f"[System: Calculated project estimate for '{project_name}' at {estimated_minutes:g} minutes]")
+                
+                draft_with_tags = history_ai_text.strip()
+                draft_with_tags = re.sub(r"\[\[START_PROJECT:\s*.*?\]\]", "", draft_with_tags, flags=re.DOTALL).strip()
+                
+                follow_up = (
+                    f"{prompt}\nGM (Draft): {draft_with_tags}\n"
+                    f"[System: The exact estimated player time to complete the project '{project_name}' is {estimated_minutes:g} minutes (based on their Level {skill_level} {skill_name} skill). "
+                    f"Please rewrite your response to accurately reflect this time cost in your [[WORK:]] and [[STATUS:]] tags if the player works on it. "
+                    f"CRITICAL: The tags from your draft were NOT executed yet. You MUST output ALL necessary tags again in this final response!]"
+                )
+                
+                self.query_ai(follow_up, user_text, recursion_depth + 1)
+                return
 
             # 3. PROCESS STANDARD TAGS
             # Placed outside the if/else block so that tags are never skipped, even if a Roll occurs!
@@ -424,6 +453,12 @@ class TagParser:
             stat_name, stat_val = match.group(1).strip(), match.group(2).strip()
             self.app.player.modify_stat(stat_name, stat_val)
             self.app._sync_player_state_to_ui()
+            
+        for match in re.finditer(r"\[\[SKILL:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text, re.DOTALL):
+            s_name = match.group(1).strip()
+            s_desc = match.group(2).strip() if match.group(2).strip() else "No description provided."
+            s_lvl = int(match.group(3))
+            self.app.notebook_widgets["Skills"].force_learn_skill(s_name, s_desc, s_lvl)
             
         music_match = re.search(r"\[\[MUSIC:\s*(.*?)\]\]", ai_text, re.DOTALL)
         if music_match:
