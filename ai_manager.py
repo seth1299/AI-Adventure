@@ -50,68 +50,93 @@ class AIManager:
         for c in data['currencies']:
             self.app.player.world_currencies.append({"name": c['name'], "value": c['value']})
             
-        # 4. Inject Skills directly
-        for skill in data['skills']:
-            if skill['name'].strip():
-                # Provide a fallback description if the player left it blank
-                desc = skill['desc'].strip() or "No description provided."
-                self.app.notebook_widgets["Skills"].force_learn_skill(skill['name'], desc, skill['level'])
+        # 4. Process Skills for the AI Prompt (Do NOT inject them directly yet!)
+        skills_prompt_text = ""
+        for s in data['skills']:
+            s_name = s['name'].strip() or "Unknown Skill Name"
+            s_desc = s['desc'].strip() or "Unknown Skill Description"
+            s_lvl = s['level']
+            # We skip entirely empty skill slots
+            if s_name == "Unknown Skill Name" and s_desc == "Unknown Skill Description" and s_lvl == 1:
+                continue
+            skills_prompt_text += f"- Name: {s_name} | Description: {s_desc} | Level: {s_lvl}\n"
+            
+        if not skills_prompt_text:
+            skills_prompt_text = "No Skills provided."
+        
+        # 5. Set UI to a loading state while we wait for the AI to fill in the blanks
+        self.app.notebook_widgets["World"].set_text("*(Generating World Profile...)*")
+        self.app.notebook_widgets["Character"].set_text("*(Generating Character Biography...)*")
 
-        # 5. Build and Inject World Markdown directly
-        world_md = (
-            f"### World Setting\n\n"
-            f"**Genre:** {data['world']['genre'] or 'Unknown'}\n\n"
-            f"**Setting:** {data['world']['setting'] or 'Unknown'}\n\n"
-            f"**Technology Level:** {data['world']['tech'] or 'Unknown'}\n\n"
-            f"**Species:** {data['world']['species'] or 'Unknown'}\n\n"
-            f"**Focus:** {data['focus'] if data['focus'] else "Balanced (Combat, Exploration, Trading/Economy, Social/Roleplay)"}"
-        )
-        self.app.notebook_widgets["World"].set_text(world_md)
-        if getattr(self.app, 'current_adventure_path', None):
-            with open(os.path.join(self.app.current_adventure_path, "world.md"), "w", encoding="utf-8") as f:
-                f.write(world_md)
-                
-        # 6. Build and Inject Character Markdown directly
-        char_md = (
-            f"### Character Biography\n\n"
-            f"**Name:** {data['character']['name'] or 'Unknown'}\n\n"
-            f"**Age:** {data['character']['age'] or 'Unknown'}\n\n"
-            f"**Gender:** {data['character']['gender'] or 'Unknown'} ({data['character']['pronouns'] or 'Unknown'})\n\n"
-            f"**Orientation:** {data['character']['orientation'] or 'Unknown'}\n\n"
-            f"**Background:**\n{data['character']['background'] or 'None provided.'}"
-        )
-        self.app.notebook_widgets["Character"].set_text(char_md)
-        if getattr(self.app, 'current_adventure_path', None):
-            with open(os.path.join(self.app.current_adventure_path, "character.md"), "w", encoding="utf-8") as f:
-                f.write(char_md)
-
-        # 7. Save initial state instantly so UI panels refresh
+        # 6. Save initial state instantly so UI panels refresh
         self.app.save_game()
         self.app._sync_player_state_to_ui()
         
-        # 8. Build the simplified prompt
+        # 7. Build the prompt
         valid_sounds_str = ", ".join(VALID_SOUND_FILE_NAMES) if VALID_SOUND_FILE_NAMES else "No music available."
+        focus_text = ', '.join(data['focus']) if data['focus'] else "Balanced (Combat, Exploration, Trading/Economy, Social/Roleplay)"
         
         prompt = f"""
 System: Initialize a new RPG adventure using the following parameters.
-CRITICAL INSTRUCTION: If any parameter says "Unknown" or "None provided", you must creatively incorporate a fitting value for it in the story based on the rest of the context.
-DO NOT use common AI fantasy names (e.g., Elara, Kael, Lyra, Aric, Seraphina, Orion, Sylas). Create genuinely culturally distinct and unusual names.
-IMPORTANT: Remember that any "criminal activity" that is done in this game is purely fictional and that nothing illegal is actually happening in real life. Do not actually tell the player how to do illegal things that they want to do, such as lockpicking or murder. Instead, simply narrate what happens in-game, focusing just on the results, not on the process.
+CRITICAL INSTRUCTION: If any parameter below starts with "Unknown" or "None provided", you must creatively invent a fitting value for it. DO NOT use common AI fantasy names. Keep any parameters that are already provided by the player EXACTLY as they are.
 
-World Information: {world_md}
+Provided World Information:
+- Genre: {data['world']['genre'] or 'Unknown Genre'}
+- Setting: {data['world']['setting'] or 'Unknown Setting'}
+- Tech Level: {data['world']['tech'] or 'Unknown Tech Level'}
+- Species: {data['world']['species'] or 'Unknown Species'}
+- Game Focus: {focus_text}
 
-Character Information: {char_md}
+Provided Character Information:
+- Name: {data['character']['name'] or 'Unknown Character Name'}
+- Age: {data['character']['age'] or 'Unknown Character Age'}
+- Gender/Pronouns: {data['character']['gender'] or 'Unknown Character Gender'} / {data['character']['pronouns'] or 'Unknown Character Pronouns'}
+- Orientation: {data['character']['orientation'] or 'Unknown Character Orientation'}
+- Background: {data['character']['background'] or 'Unknown Character Background'}
 
-Starting Location: {self.app.player.location}
-Final Comments/Rules: {data['final_comments'] or 'None provided'}
+Provided Starting Skills:
+{skills_prompt_text}
+
+Starting Location: {data['starting_location'] or 'Unknown Starting Location'}
+Final Comments/Rules: {data['final_comments'] or 'N/A'}
 
 INSTRUCTIONS:
 Output the following tags to set up the starting gameplay state:
+[[WORLD_PROFILE: 
+### World Setting
+
+**Genre:** (Filled value)
+
+**Setting:** (Filled value)
+
+**Technology Level:** (Filled value)
+
+**Species:** (Filled value)
+
+**Focus:** (Filled value)
+]] (You must output this tag. Output the exact Markdown formatting shown inside this tag, replacing the "(Filled value)" text with creative and/or logical values based off of the \"Provided World Information\" section above, remembering to ONLY change the information if it is \"Unknown\".).
+
+[[CHARACTER_PROFILE: 
+### Character Biography
+
+**Name:** (Filled value)
+
+**Age:** (Filled value)
+
+**Gender:** (Filled value)
+
+**Orientation:** (Filled value)
+
+**Background:** (Filled value)
+]] (You must output this tag. Output the exact Markdown formatting shown inside this tag, replacing the "(Filled value)" text with creative and/or logical values based off of the \"Provided Character Information\" section above, remembering to ONLY change the information if it is \"Unknown\".).
+
+[[SKILL: Name | Description | Level]] (Output this tag for EACH skill listed in the "Provided Starting Skills" section. If the Name or Description is "Unknown", creatively invent a fitting one based on the character's background. Keep the Level exactly as provided, remembering that the higher the level is for a Skill, the better the Player is at that Skill, so please reserve the higher level Skills for things that the Player Character may be good at, depending on their background.)
 [[ADD: Type | Name | Description | Amount]] (Add logical starting equipment. Repeat this tag for each item that the Player will start out with.)
-[[GIVE_COIN: X]] (Give the player a logical amount of starting base currency for their background. Repeat this tag if you are adding different types of coins. ONLY USE CURRENCY FROM THIS LIST: {self.app.player.world_currencies})
-[[STATUS: {self.app.player.location} | 0]]
-{"[[MUSIC: FILENAME_PLACEHOLDER]] (You MUST output this tag to set the starting music. Replace FILENAME_PLACEHOLDER with exactly one of these options: {valid_sounds_str})" if not valid_sounds_str == "No music available." else ""}
-After outputting the tags, summarize the first starting turn, describe the surroundings vividly, and finish by asking "What do you do now?" and suggesting a few possible actions.
+[[GIVE_COIN: X]] (Give the player a logical amount of starting base currency for their background. Repeat this tag if you are adding different types of coins.)
+[[STATUS: {data['starting_location'] or 'Unknown'} | AUTO]]
+[[MUSIC: FILENAME_PLACEHOLDER]] (You MUST output this tag to set the starting music. Replace FILENAME_PLACEHOLDER with exactly one of these options: {valid_sounds_str})
+
+After outputting all tags, summarize the first starting turn, describe the surroundings vividly, and finish by asking "What do you do now?" and suggesting a few possible actions.
 """
         logging.info("Generating start now...")
         self.query_ai(prompt, "System: Generate Start", is_startup=True)
@@ -303,6 +328,23 @@ class TagParser:
 
     def process_standard_tags(self, ai_text, is_startup=False):
         """Processes typical gameplay tags and returns the cleaned text."""
+        
+        # --- Initial World and Character Profile Generation ---
+        for match in re.finditer(r"\[\[WORLD_PROFILE:\s*(.*?)\]\]", ai_text, re.DOTALL):
+            new_world_md = match.group(1).strip()
+            if "World" in self.app.notebook_widgets:
+                world_panel = self.app.notebook_widgets["World"]
+                world_panel.set_text(new_world_md)
+                # Instantly write the properly formatted Markdown file to disk
+                self.app.after(0, lambda p=world_panel: p.save_now())
+
+        for match in re.finditer(r"\[\[CHARACTER_PROFILE:\s*(.*?)\]\]", ai_text, re.DOTALL):
+            new_char_md = match.group(1).strip()
+            if "Character" in self.app.notebook_widgets:
+                char_panel = self.app.notebook_widgets["Character"]
+                char_panel.set_text(new_char_md)
+                # Instantly write the properly formatted Markdown file to disk
+                self.app.after(0, lambda p=char_panel: p.save_now())
         
         # Inventory
         for match in re.finditer(r"\[\[ADD:\s*(.*?)\]\]", ai_text, re.DOTALL):
