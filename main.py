@@ -228,25 +228,27 @@ class QtAppContext:
         return formatted_rules
 
     def save_game(self) -> None:
+        """
+        Saves all markdown tabs and the current game state to JSON.
+        No longer saves Chat History to the JSON to avoid data duplication.
+        """
         if not self.current_adventure_path:
-            logging.warning(f"Warning: No valid save path.")
+            logging.warning("Warning: No valid save path.")
             return
 
-        # Save Markdown tabs
+        # Save Markdown tabs (This will safely save history.md via the History panel)
         try:
-            for widget in self.notebook_widgets:
-                w = self.notebook_widgets.get(widget)
-                if w != None and hasattr(w, "save_now"):
-                    w.save_now()
-        except Exception:
-            logging.exception("Qt save: markdown save failed")
+            for widget_name in self.notebook_widgets:
+                widget_instance = self.notebook_widgets.get(widget_name)
+                if widget_instance is not None and hasattr(widget_instance, "save_now"):
+                    widget_instance.save_now()
+        except Exception as error:
+            logging.error(f"Qt save error: markdown save failed. Details: {error}")
 
-        # Save JSON state (history + status)
+        # Save JSON state (excluding the deprecated Chat History)
         try:
-            history_list = self.conversation_history
             status_data = self.player.get_status_dict()
             save_data = {
-                "Chat History": history_list,
                 "Status": status_data,
                 "karmic_streak": int(getattr(self.player, "karmic_streak", 0) or 0),
                 "current_music": self.sound_manager.current_music
@@ -254,8 +256,8 @@ class QtAppContext:
             history_path = os.path.join(self.current_adventure_path, "savegame.json")
             logging.info(f"Saved to {history_path}.")
             FileManager.save_json_data(history_path, save_data)
-        except Exception:
-            logging.exception("Qt save: savegame.json write failed")
+        except Exception as error:
+            logging.error(f"Qt save error: savegame.json write failed. Details: {error}")
     
     def _resolve_save_path_for_recap(self) -> str | None:
         """Pick a save folder to read savegame.json from.
@@ -285,24 +287,28 @@ class QtAppContext:
             return None
         
     def load_savegame_state(self, save_path: str) -> dict:
-        """Load savegame.json and hydrate Player + app flags, then sync status UI."""
+        """
+        Loads savegame.json, hydrates the Player object, and syncs UI.
+        No longer overwrites conversation_history from JSON.
+        """
         self.current_adventure_path = save_path
         self.player.set_save_path(save_path)
 
-        sg_path = os.path.join(save_path, "savegame.json")
-        data = FileManager.load_json_data(sg_path) or {}
+        savegame_path = os.path.join(save_path, "savegame.json")
+        save_data = FileManager.load_json_data(savegame_path) or {}
 
         # Player meta
         try:
-            self.player.karmic_streak = int(data.get("karmic_streak", 0) or 0)
-        except Exception:
+            self.player.karmic_streak = int(save_data.get("karmic_streak", 0) or 0)
+        except Exception as error:
+            logging.error(f"Failed to load karmic streak: {error}")
             self.player.karmic_streak = 0
             
-        saved_music = data.get("current_music", "C:\\Users\\sethg\\OneDrive\\Desktop\\Main Folder\\Applications\\AI-Adventure\\sounds\\Town Village City.mp3")
+        saved_music = save_data.get("current_music", "C:\\Users\\sethg\\OneDrive\\Desktop\\Main Folder\\Applications\\AI-Adventure\\sounds\\Town Village City.mp3")
         if saved_music:
             self.sound_manager.play_music(saved_music)
             
-        currencies = data.get("Currencies", [{}])
+        currencies = save_data.get("Currencies", [{}])
         if currencies:
             self.player.world_currencies = currencies
         else:
@@ -310,45 +316,57 @@ class QtAppContext:
             self.player.world_currencies = [{"name": "Copper Piece", "value": 1}, {"name": "Silver Piece", "value": 10}]
 
         # Player status
-        status_data = data.get("Status") or {}
+        status_data = save_data.get("Status") or {}
         if isinstance(status_data, dict) and status_data:
             self.player.load_from_dict(status_data)
 
-        # History (keep around for later panels)
-        hist = data.get("Chat History") or []
-        self.conversation_history = hist
+        # Deprecated: We no longer load conversation history from the JSON.
+        self.conversation_history = []
             
         try:
-            for widget in self.notebook_widgets:
-                self.notebook_widgets[widget].set_base_path(save_path)
-        except Exception as e:
-            logging.exception(f"Failed to load {widget}: {e}")
+            for widget_name in self.notebook_widgets:
+                self.notebook_widgets[widget_name].set_base_path(save_path)
+        except Exception as error:
+            logging.error(f"Failed to load widget base paths: {error}")
 
         self._sync_player_state_to_ui()
-        return data
+        return save_data
 
     def generate_recap(self) -> None:
-        """Load the most recent savegame.json, sync status bar, then print a recap."""
+        """
+        Loads the most recent save, syncs status, and prints a recap.
+        Now extracts the recap directly from the History panel's loaded text
+        to prevent overwriting history.md with empty JSON data.
+        """
         try:
             save_path = self._resolve_save_path_for_recap()
             if not save_path:
                 self.story_tab.print_text("No save found to recap from.", sender="System")
                 return
 
-            data = self.load_savegame_state(save_path)
-            history = data.get("Chat History") or []
-            history_text = ""
+            # This triggers set_base_path for all panels, which loads history.md naturally
+            self.load_savegame_state(save_path)
+            
             last_gm_message = ""
-            for line in history:
-                if line == "" or line == None: continue
-                # We do not print to story_tab here anymore!
-                history_text += line + "\n\n"
-                if not line.startswith("> "):
-                    last_gm_message = line
-                
+            
+            # Extract the last GM response directly from the History tab's markdown
             if "History" in self.notebook_widgets:
-                display_history = self._reconstruct_merchant_tables(history_text.strip())
-                self.notebook_widgets["History"].set_text(display_history)
+                history_text = self.notebook_widgets["History"].get_text().strip()
+                
+                if history_text:
+                    # Split exchanges using the established '---' divider generated in ai_manager
+                    exchanges = [exchange.strip() for exchange in history_text.split("---") if exchange.strip()]
+                    if exchanges:
+                        last_exchange = exchanges[-1]
+                        
+                        # Filter out the player's prompt and system messages to isolate the GM text
+                        exchange_lines = last_exchange.split('\n')
+                        gm_response_lines = [
+                            line for line in exchange_lines 
+                            if not line.startswith("> ") and not line.startswith("**System:")
+                        ]
+                        
+                        last_gm_message = "\n".join(gm_response_lines).strip()
                 
             if last_gm_message:
                 last_gm_message = self._reconstruct_merchant_tables(last_gm_message)
@@ -356,10 +374,9 @@ class QtAppContext:
             else:
                 self.story_tab.print_text(f"What do you do now?\n")
             
-        except Exception:
-            logging.exception("Generate recap failed")
+        except Exception as error:
+            logging.error(f"Generate recap failed: {error}")
             self.story_tab.print_text("Recap failed (see logs).", sender="System")
-
     def _format_recap_text(self, text):
         if not text: return ""
         import re
