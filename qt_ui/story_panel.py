@@ -124,7 +124,7 @@ class StoryPanel(QWidget):
             return
             
         # Insert a blank line before every new message block
-        if self.txt_log.toPlainText():
+        if self.txt_log.toMarkdown():
             self.txt_log.append("")
             
         try:

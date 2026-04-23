@@ -335,8 +335,8 @@ class QtAppContext:
     def generate_recap(self) -> None:
         """
         Loads the most recent save, syncs status, and prints a recap.
-        Now extracts the recap directly from the History panel's loaded text
-        to prevent overwriting history.md with empty JSON data.
+        Extracts the recap directly from the History panel's loaded text,
+        sanitizing it for PySide6 rendering.
         """
         try:
             save_path = self._resolve_save_path_for_recap()
@@ -351,21 +351,30 @@ class QtAppContext:
             
             # Extract the last GM response directly from the History tab's markdown
             if "History" in self.notebook_widgets:
-                history_text = self.notebook_widgets["History"].get_text().strip()
+                # Replace \r to prevent Qt from applying weird spacing/fallback fonts
+                history_text = self.notebook_widgets["History"].get_text().replace('\r', '').strip()
                 
                 if history_text:
-                    # Split exchanges using the established '---' divider generated in ai_manager
+                    # Split exchanges using the established '---' divider
                     exchanges = [exchange.strip() for exchange in history_text.split("---") if exchange.strip()]
                     if exchanges:
                         last_exchange = exchanges[-1]
                         
-                        # Filter out the player's prompt and system messages to isolate the GM text
                         exchange_lines = last_exchange.split('\n')
-                        gm_response_lines = [
-                            line for line in exchange_lines 
-                            if not line.startswith("> ") and not line.startswith("**System:")
-                        ]
+                        gm_response_lines = []
                         
+                        for line in exchange_lines:
+                            # Filter out the player's prompt and system messages
+                            if line.startswith("> ") or line.startswith("**System:"):
+                                continue
+                                
+                            # Clean up the hardcoded **GM:** if it happens to be the very first startup exchange
+                            if line.startswith("**GM:**"):
+                                line = line.replace("**GM:**", "", 1).strip()
+                                
+                            gm_response_lines.append(line)
+                        
+                        # Join the sanitized lines back together
                         last_gm_message = "\n".join(gm_response_lines).strip()
                 
             if last_gm_message:
@@ -377,6 +386,7 @@ class QtAppContext:
         except Exception as error:
             logging.error(f"Generate recap failed: {error}")
             self.story_tab.print_text("Recap failed (see logs).", sender="System")
+            
     def _format_recap_text(self, text):
         if not text: return ""
         import re
