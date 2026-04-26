@@ -26,6 +26,7 @@ class SkillsPanel(QWidget):
 
         self.lbl_title = QLabel("Skills")
         self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_title.hide()
         bar.addWidget(self.lbl_title, stretch=1)
 
         self.lbl_state = QLabel("")

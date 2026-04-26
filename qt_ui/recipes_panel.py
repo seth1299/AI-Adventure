@@ -1,10 +1,6 @@
 # qt_ui/recipes_panel.py
 from __future__ import annotations
-
-import csv
-import logging
-import os
-
+import csv, logging, os
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -15,7 +11,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
 )
-
 from tabulate import tabulate
 
 
@@ -51,10 +46,12 @@ class RecipesPanel(QWidget):
 
         self.lbl_title = QLabel("Recipes")
         self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_title.hide()
         bar.addWidget(self.lbl_title, stretch=1)
 
         self.lbl_state = QLabel("")
         self.lbl_state.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        
         bar.addWidget(self.lbl_state)
 
         self.btn_reload = QPushButton("Reload")
@@ -115,29 +112,32 @@ class RecipesPanel(QWidget):
         if not self.csv_path:
             self.display.setPlainText("(No save loaded)")
             return
+        
+        try:
+            self._ensure_csv_exists()
+            rows = self._read_rows()
+            if not rows:
+                self.display.setPlainText("RECIPES\n\n(None)\n")
+                self._set_state("")
+                return
 
-        self._ensure_csv_exists()
-        rows = self._read_rows()
-        if not rows:
-            self.display.setPlainText("RECIPES\n\n(None)\n")
+            headers = ["Recipe", "Ingredients"]
+            table_rows = []
+            for r in rows:
+                name = (r.get("recipe_name") or "Unknown").strip()
+                ing_parts = []
+                for i in range(1, 4):
+                    ing = (r.get(f"ingredient_{i}") or "").strip()
+                    amt = (r.get(f"ingredient_{i}_amount") or "").strip()
+                    if ing:
+                        ing_parts.append(f"{ing}: {amt or '1'}")
+                table_rows.append([name, ", ".join(ing_parts)])
+
+            txt = "RECIPES\n" + tabulate(table_rows, headers, tablefmt="rounded_grid") + "\n"
+            self.display.setPlainText(txt)
             self._set_state("")
-            return
-
-        headers = ["Recipe", "Ingredients"]
-        table_rows = []
-        for r in rows:
-            name = (r.get("recipe_name") or "Unknown").strip()
-            ing_parts = []
-            for i in range(1, 4):
-                ing = (r.get(f"ingredient_{i}") or "").strip()
-                amt = (r.get(f"ingredient_{i}_amount") or "").strip()
-                if ing:
-                    ing_parts.append(f"{ing}: {amt or '1'}")
-            table_rows.append([name, ", ".join(ing_parts)])
-
-        txt = "RECIPES\n" + tabulate(table_rows, headers, tablefmt="rounded_grid") + "\n"
-        self.display.setPlainText(txt)
-        self._set_state("")
+        except Exception as e:
+            logging.exception(f"Critical error during refreshing recipes panel display: {e}")
 
     def _ensure_csv_exists(self) -> None:
         if not self.csv_path:

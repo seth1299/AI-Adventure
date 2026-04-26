@@ -44,6 +44,7 @@ class MarkdownPanel(QWidget):
 
         self.lbl_title = QLabel(f"{name}")
         self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_title.hide()
         bar.addWidget(self.lbl_title, stretch=1)
 
         self.lbl_state = QLabel("")
@@ -64,7 +65,6 @@ class MarkdownPanel(QWidget):
 
         # ---- Editor ----
         self.editor = QTextEdit()
-        if self.name == "World": self.editor.setReadOnly(True)
         font_metrics = self.editor.fontMetrics()
         self.editor.setTabStopDistance(4 * font_metrics.horizontalAdvance(" "))
         self.editor.setFont(QFont("Consolas", 11))
@@ -87,7 +87,9 @@ class MarkdownPanel(QWidget):
         """
         try:
             # Native PySide6 method to convert rich text back into Markdown
-            return self.editor.toMarkdown()
+            raw_markdown = self.editor.toMarkdown()
+            clean_markdown = raw_markdown.replace('`', '')
+            return clean_markdown
         except Exception as error:
             logging.error(f"Error retrieving Markdown text: {error}")
             return ""

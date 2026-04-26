@@ -2,12 +2,13 @@
 from __future__ import annotations
 from qt_ui.currency_dialog import CurrencyManagerDialog
 from qt_ui.stats_dialog import StatsManagerDialog
-from PySide6.QtCore import Qt, QSettings
+from PySide6.QtCore import Qt, QSettings, QByteArray
 from PySide6.QtWidgets import (
     QMainWindow,
     QDockWidget,
     QWidget,
-    QDialog
+    QDialog,
+    QTabWidget
 )
 from .markdown_panel import MarkdownPanel
 from .story_panel import StoryPanel
@@ -79,16 +80,30 @@ class MainWindow(QMainWindow):
             | QMainWindow.DockOption.AnimatedDocks
             | QMainWindow.DockOption.GroupedDragging
         )
-        
+        self.setTabPosition(Qt.DockWidgetArea.AllDockWidgetAreas, QTabWidget.TabPosition.North)
         self._setup_menu_bar()
         
     def _setup_menu_bar(self):
         """Creates the native OS-style top-left menu bar."""
         menu_bar = self.menuBar()
-        
+    
         # --- NEW: Expanded styling to apply to the Menu Bar AND the Dock Panels ---
         # Note: We apply this to `self` (the whole window) so it cascades down to the docks
         self.setStyleSheet("""
+            QTabBar::tab {
+                background: #333333;
+                color: #ffffff;
+                border: 1px solid #555555;
+                padding: 4px;
+                margin-bottom: 2px; /* Adds a tiny gap between vertical tabs */
+            }
+            QTabBar::tab:selected {
+                background: #4CAF50;
+                font-weight: bold;
+            }
+            QTabBar::tab:hover {
+                background: #444444;
+            }
             QMenuBar {
                 background-color: #2b2b2b;
                 color: #ffffff;
@@ -181,14 +196,21 @@ class MainWindow(QMainWindow):
     def get_dock(self, title: str) -> QDockWidget | None:
         return self._docks.get(title)
     
+    # qt_ui/main_window.py
+
     def closeEvent(self, event):
-        """Ensure game state is saved when the window is closed."""
+        """
+        Ensures the game state is saved when the window is closed. 
+        Logs any errors that occur during the shutdown sequence to prevent silent data loss.
+        """
         try:
             if self.app is not None:
                 self._save_ui_state()
                 self.app.save_game()
-        except Exception:
-            pass
+        except Exception as error:
+            # We catch and log the error, rather than silently passing, 
+            # so we can actually debug save-file corruption if it happens on exit.
+            logging.error(f"CRITICAL ERROR during application shutdown: {error}")
 
         super().closeEvent(event)
     
@@ -276,53 +298,94 @@ class MainWindow(QMainWindow):
                 settings.setValue("narrator_voice", current_voice)
 
     def _load_ui_state(self, save_path: str) -> None:
-        """Restores the UI layout from the save folder if it exists."""
+        """
+        Restores the UI layout (window size, dock positions, and media settings) 
+        from the save folder if it exists. 
+        
+        Includes explicit type-casting for QSettings values to satisfy strict 
+        type checkers and prevent runtime crashes from corrupted .ini data.
+        """
         ini_path = os.path.join(save_path, "ui_layout.ini")
-        if os.path.exists(ini_path):
+        if not os.path.exists(ini_path):
+            return
+            
+        try:
             settings = QSettings(ini_path, QSettings.Format.IniFormat)
             
-            geometry = settings.value("geometry")
-            state = settings.value("windowState")
+            # --- Layout Restoration ---
+            raw_geometry = settings.value("geometry")
+            raw_state = settings.value("windowState")
             
-            # Safely restore both the overall window size and the internal panel layout
-            if geometry:
-                self.restoreGeometry(geometry)
-            if state:
-                self.restoreState(state)
+            # Typecast safely to QByteArray
+            if isinstance(raw_geometry, str):
+                raw_geometry = raw_geometry.encode('utf-8')
+            if isinstance(raw_geometry, bytes):
+                raw_geometry = QByteArray(raw_geometry)
                 
+            if isinstance(raw_state, str):
+                raw_state = raw_state.encode('utf-8')
+            if isinstance(raw_state, bytes):
+                raw_state = QByteArray(raw_state)
+            
+            # 1. Restore the window geometries and binary state blobs first
+            if raw_geometry:
+                self.restoreGeometry(raw_geometry)
+            if raw_state:
+                self.restoreState(raw_state)
+                
+            # 2. Force the global tab recalculation LAST
+            # Using the AllDockWidgetAreas bitmask here ensures Qt redraws the tabs 
+            # to the West, permanently overriding whatever was loaded from the .ini blob.
+            #self.setTabPosition(
+            #    Qt.DockWidgetArea.AllDockWidgetAreas, 
+            #    QTabWidget.TabPosition.West
+            #)
+                
+            # --- Settings Restoration ---
+            
+            # 1. Music Volume
+            # We explicitly cast the generic object to a string first. 
+            # This proves to the type checker that float() can safely parse it.
             raw_volume = settings.value("volume_level", 100)
             try:
-                self.story_panel.set_music_volume(int(float(raw_volume))) # type: ignore
-                #else: self.story_panel.set_music_volume(100)
-            except (ValueError, TypeError):
-                # Fallback to 100 and force signal emission if reading fails completely
+                volume_string = str(raw_volume)
+                self.story_panel.set_music_volume(int(float(volume_string)))
+            except (ValueError, TypeError) as error:
+                logging.error(f"Failed to parse music volume, defaulting to 100. Error: {error}")
                 self.story_panel.set_music_volume(100)
                 
-            raw_tts = settings.value("narrator_volume", 100)
+            # 2. TTS Volume
+            raw_tts_volume = settings.value("narrator_volume", 100)
             try:
-                self.story_panel.set_tts_volume(int(raw_tts)) # type: ignore
-                #else: self.story_panel.set_tts_volume(int(100))
-            except (ValueError, TypeError):
+                tts_volume_string = str(raw_tts_volume)
+                self.story_panel.set_tts_volume(int(float(tts_volume_string)))
+            except (ValueError, TypeError) as error:
+                logging.error(f"Failed to parse TTS volume, defaulting to 100. Error: {error}")
                 self.story_panel.set_tts_volume(100)
             
-            raw_rate = settings.value("narrator_rate", 0)
+            # 3. TTS Rate
+            raw_tts_rate = settings.value("narrator_rate", 0)
             try:
-                self.story_panel.set_tts_rate(int(float(raw_rate))) # type: ignore
-            except (ValueError, TypeError):
+                tts_rate_string = str(raw_tts_rate)
+                self.story_panel.set_tts_rate(int(float(tts_rate_string)))
+            except (ValueError, TypeError) as error:
+                logging.error(f"Failed to parse TTS rate, defaulting to 0. Error: {error}")
                 self.story_panel.set_tts_rate(0)
                 
-            raw_narrator = settings.value("narrator_enabled", False)
-            # Handle the string "false" / "true" safely without relying on Qt
-            if isinstance(raw_narrator, str):
-                narrator_bool = raw_narrator.lower() == 'true'
-            else:
-                narrator_bool = bool(raw_narrator)
-                
-            self.story_panel.set_narrator_enabled(narrator_bool)
+            # 4. Narrator Toggle
+            raw_narrator_enabled = settings.value("narrator_enabled", False)
+            narrator_string = str(raw_narrator_enabled).lower()
+            # Safely check if the string representation implies True
+            is_narrator_enabled = narrator_string == 'true'
+            self.story_panel.set_narrator_enabled(is_narrator_enabled)
             
-            raw_voice = settings.value("narrator_voice", "")
-            if raw_voice:
-                self.story_panel.set_voice_by_name(str(raw_voice))
+            # 5. Narrator Voice
+            raw_voice_name = settings.value("narrator_voice", "")
+            if raw_voice_name:
+                self.story_panel.set_voice_by_name(str(raw_voice_name))
+
+        except Exception as general_error:
+            logging.error(f"Critical failure while loading UI state from {ini_path}. Details: {general_error}")
 
     def open_currency_menu(self):
         try:

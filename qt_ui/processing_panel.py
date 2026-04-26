@@ -32,9 +32,11 @@ class ProcessingPanel(QWidget):
 
         bar = QHBoxLayout()
         bar.setSpacing(8)
+        
 
         self.lbl_title = QLabel("Processing")
         self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_title.hide()
         bar.addWidget(self.lbl_title, stretch=1)
 
         self.lbl_state = QLabel("")
@@ -296,8 +298,20 @@ class ProcessingPanel(QWidget):
                     
                 rows.append([item.get("name", ""), "PROJECT", status, prog, y, desc])
                 
-        txt = "### ONGOING TASKS\n" + tabulate(rows, headers, tablefmt="rounded_grid") + "\n"
-        self.display.append(f"<pre style=\"font-family: Consolas, 'Courier New', monospace; line-height: 1.0;\">{txt}</pre>\n\n")
+        # 1. Generate the raw ASCII grid by itself
+        grid = tabulate(rows, headers, tablefmt="rounded_grid")
+        
+        # 2. Wrap ONLY the grid in the <pre> tag (with padding to prevent top clipping!)
+        safe_table_html = (
+            f"<pre style=\"font-family: Consolas, 'Courier New', monospace; "
+            f"line-height: 1.0; padding: 6px;\">\n\n{grid}\n</pre>\n"
+        )
+        
+        # 3. Combine the Markdown header with the HTML table
+        panel_display = f"### ONGOING TASKS\n\n\n\n\n{safe_table_html}"
+        
+        # 4. Use setMarkdown() to completely replace the display text
+        self.display.setMarkdown(panel_display)
         self._set_state("")
 
     def remove_process(self, name):

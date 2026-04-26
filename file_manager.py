@@ -15,7 +15,7 @@ class FileManager:
     @staticmethod
     def setup_initial_logging():
         """Sets up the basic logger on startup."""
-        log_file_path = os.path.join(SAVES_DIR, "error_log.txt")
+        log_file_path = os.path.join(SAVES_DIR, "Log.txt")
         logging.basicConfig(
             filename=log_file_path,
             level=logging.INFO,
@@ -31,9 +31,9 @@ class FileManager:
             save_dir = os.path.join(SAVES_DIR, save_name)
             if not os.path.exists(save_dir):
                 return
-            new_log_path = os.path.join(save_dir, f"{save_name}_error_log.txt")
+            new_log_path = os.path.join(save_dir, f"{save_name} Log.txt")
         else:
-            new_log_path = os.path.join(SAVES_DIR, "generic_text_adventure_error_log.txt")
+            new_log_path = os.path.join(SAVES_DIR, "Generic Log.txt")
 
         logger = logging.getLogger()
         for handler in logger.handlers[:]:

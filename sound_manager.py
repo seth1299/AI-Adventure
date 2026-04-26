@@ -1,8 +1,5 @@
 # sound_manager.py
-import pygame
-import os
-import sys
-import logging
+import pygame, os, logging
 
 class SoundManager:
     def __init__(self, sounds_dir):
@@ -22,7 +19,6 @@ class SoundManager:
     def play_music(self, filename, loop=True):
         """Streams music. Only one music track plays at a time."""
         if self.is_muted: return
-        logging.info(f"Attempting to play sound track {filename}.")
         
         track_path = os.path.join(self.sounds_dir, filename)
         
@@ -39,9 +35,8 @@ class SoundManager:
                 loops = -1 if loop else 0
                 pygame.mixer.music.play(loops=loops, fade_ms=1000)
                 self.current_music = filename
-                logging.info(f"Now Playing: {track_path}")
             except Exception as e:
-                logging.error(f"Error playing music: {e}")
+                logging.exception(f"Error playing music: {e}")
         else:
             logging.error(f"Music file not found: {track_path}")
 

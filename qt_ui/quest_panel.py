@@ -30,36 +30,39 @@ class QuestsPanel(QWidget):
     def refresh_display(self):
         """Reads the player's current quests and updates the text display with generated tables."""
         if not self.app: return
-        quests = getattr(self.app.player, 'quests', [])
-        
-        if not quests:
-            self.text_display.setMarkdown("*You currently have no active quests.*")
-            return
+        try:
+            quests = getattr(self.app.player, 'quests', [])
             
-        display_text = ""
-        
-        for quest in quests:
-            name = quest.get("name", "Unknown Quest")
-            giver = quest.get("giver", "Unknown")
-            description = quest.get("description", "No description provided.")
-            turn_in = quest.get("turn_in", "Unknown")
-            reward = quest.get("reward", "Unknown")
+            if not quests:
+                self.text_display.setMarkdown("*You currently have no active quests.*")
+                return
+                
+            display_text = ""
             
-            # Using a 2-column vertical table format so long descriptions don't cause horizontal overflow
-            table_data = [
-                ["Quest Giver", giver],
-                ["Description", description],
-                ["How to Complete", turn_in],
-                ["Reward", reward]
-            ]
-            
-            # Generate the rounded grid
-            grid = tabulate(table_data, tablefmt="rounded_grid")
-            
-            # Wrap the grid in a code block under the quest's Markdown header
-            display_text += f"### {name} \n\n<pre style=\"font-family: Consolas, 'Courier New', monospace; line-height: 1.0;\">{grid}</pre>\n\n"
-            
-        self.text_display.setPlainText(display_text.strip())
+            for quest in quests:
+                name = quest.get("name", "Unknown Quest")
+                giver = quest.get("giver", "Unknown")
+                description = quest.get("description", "No description provided.")
+                turn_in = quest.get("turn_in", "Unknown")
+                reward = quest.get("reward", "Unknown")
+                
+                # Using a 2-column vertical table format so long descriptions don't cause horizontal overflow
+                table_data = [
+                    ["Quest Giver", giver],
+                    ["Description", description],
+                    ["How to Complete", turn_in],
+                    ["Reward", reward]
+                ]
+                
+                # Generate the rounded grid
+                grid = tabulate(table_data, tablefmt="rounded_grid")
+                
+                # Wrap the grid in a code block under the quest's Markdown header
+                display_text += f"### {name} \n\n<pre style=\"font-family: Consolas, 'Courier New', monospace; line-height: 1.0;\">{grid}</pre>\n\n"
+                
+            self.text_display.setPlainText(display_text.strip())
+        except Exception as e:
+            logging.exception(f"Critical error during refreshing quest panel display: {e}")
         
     def add_quest(self, name, giver, description, turn_in, reward):
         """Adds a quest to the player's log if it doesn't exist already."""
@@ -68,19 +71,22 @@ class QuestsPanel(QWidget):
         if not hasattr(self.app.player, 'quests'):
             self.app.player.quests = []
             
-        # Check for duplicates so the AI doesn't give us the exact same quest twice
-        for q in self.app.player.quests:
-            if q.get("name", "").lower() == name.lower():
-                return 
-                
-        self.app.player.quests.append({
-            "name": name,
-            "giver": giver,
-            "description": description,
-            "turn_in": turn_in,
-            "reward": reward
-        })
-        self.refresh_display()
+        try:
+            # Check for duplicates so the AI doesn't give us the exact same quest twice
+            for q in self.app.player.quests:
+                if q.get("name", "").lower() == name.lower():
+                    return 
+                    
+            self.app.player.quests.append({
+                "name": name,
+                "giver": giver,
+                "description": description,
+                "turn_in": turn_in,
+                "reward": reward
+            })
+            self.refresh_display()
+        except Exception as e:
+            logging.exception(f"Critical error when adding quest: {e}")
         
     def complete_quest(self, name):
         """Removes a quest from the active quest log by its exact name."""
@@ -88,20 +94,23 @@ class QuestsPanel(QWidget):
         
         if not hasattr(self.app.player, 'quests'):
             return
+        
+        try:
+            initial_count = len(self.app.player.quests)
             
-        initial_count = len(self.app.player.quests)
-        
-        # We iterate over a temporary copy of the list using list() so we don't 
-        # run into shifting-index errors while removing items from the real list.
-        for quest in list(self.app.player.quests):
-            if quest.get("name", "").lower() == name.lower():
-                # IN-PLACE DELETION: This permanently deletes the dictionary from the 
-                # original list in memory, guaranteeing the save system sees it!
-                self.app.player.quests.remove(quest)
-        
-        # Only refresh if a quest was actually removed
-        if len(self.app.player.quests) < initial_count:
-            self.refresh_display()
+            # We iterate over a temporary copy of the list using list() so we don't 
+            # run into shifting-index errors while removing items from the real list.
+            for quest in list(self.app.player.quests):
+                if quest.get("name", "").lower() == name.lower():
+                    # IN-PLACE DELETION: This permanently deletes the dictionary from the 
+                    # original list in memory, guaranteeing the save system sees it!
+                    self.app.player.quests.remove(quest)
+            
+            # Only refresh if a quest was actually removed
+            if len(self.app.player.quests) < initial_count:
+                self.refresh_display()
+        except Exception as e:
+            logging.exception(f"Critical error when completing quest: {e}")
             
     def get_text(self):
         """

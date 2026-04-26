@@ -1,8 +1,8 @@
 # qt_ui/story_panel.py
 from __future__ import annotations
 import re, edge_tts, asyncio, threading, os, tempfile, pygame, uuid, logging, markdown
-from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QTextCursor
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QTextCursor, QTextBlockFormat, QTextCharFormat
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -118,21 +118,29 @@ class StoryPanel(QWidget):
     def append_text(self, markdown_string: str) -> None:
         """
         Converts a Markdown string to HTML and appends it to the log as Rich Text.
+        Safely resets block formatting to prevent lists from bleeding into the next message.
         """
         markdown_string = markdown_string.strip()
         if not markdown_string:
             return
             
-        # Insert a blank line before every new message block
-        if self.txt_log.toMarkdown():
-            self.txt_log.append("")
-            
         try:
             # Convert the raw markdown string into an HTML formatted string
             rendered_html = markdown.markdown(markdown_string)
             
-            # append() natively processes HTML strings and renders them
-            self.txt_log.append(rendered_html)
+            cursor = self.txt_log.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+
+            # --- MODIFIED: If the text log isn't empty, insert a clean block break to escape any active lists ---
+            if not self.txt_log.document().isEmpty():
+                cursor.insertBlock(QTextBlockFormat(), QTextCharFormat())
+                # Add a visual spacer between turns
+                cursor.insertHtml("<br>")
+                
+            # Insert the generated HTML natively via the cursor
+            cursor.insertHtml(rendered_html)
+            self.txt_log.setTextCursor(cursor)
+            
         except Exception as error:
             logging.error(f"Failed to append Markdown/HTML text: {error}")
             # Fallback to plain text if HTML parsing fails
@@ -216,21 +224,65 @@ class StoryPanel(QWidget):
         self.txt_log.setPlainText(text or "")
         self._scroll_to_bottom()
         
-    def set_controls_state(self, enabled: bool, status_text: str | None = None) -> None:
-        """Enable/disable input controls. Optionally updates placeholder text."""
-        if enabled:
-            self._unlock_queued = True
-            return
-        self._unlock_queued = False
-        self.txt_input.setEnabled(enabled)
-        self.btn_send.setEnabled(enabled)
+    def set_controls_state(self, is_enabled: bool, status_text: str | None = None, force_unlock: bool = False) -> None:
+        """
+        Enables or disables the player's text input controls.
+        
+        If the TTS narrator is currently speaking, enabling the controls is queued 
+        until the audio finishes playing (unless force_unlock is True).
+        """
+        # 1. Queue the unlock if we are trying to enable, but the TTS is currently speaking
+        if is_enabled and not force_unlock:
+            try:
+                # Check if the pygame mixer is initialized and the TTS channel (1) is busy playing audio
+                if pygame.mixer.get_init() and pygame.mixer.Channel(1).get_busy():
+                    self._unlock_queued = True
+                    return
+            except Exception as error:
+                logging.error(f"Error checking TTS channel status: {error}")
 
-        if enabled:
+        # 2. Proceed with actually locking/unlocking the UI elements
+        self._unlock_queued = False
+        self.txt_input.setEnabled(is_enabled)
+        self.btn_send.setEnabled(is_enabled)
+
+        if is_enabled:
             self.txt_input.setPlaceholderText("What do you do next?")
             self.txt_input.setFocus()
         else:
             if status_text is not None:
                 self.txt_input.setPlaceholderText(status_text)
+                
+    def _apply_phonetic_fixes(self, text: str) -> str:
+        """
+        Applies Regex-based phonetic replacements to fix common TTS mispronunciations.
+        By matching phrases rather than single words, we can deduce the context of heteronyms
+        (e.g., 'tear into' vs 'shed a tear').
+        """
+        # Dictionary mapping regex patterns to phonetic spellings.
+        # The \b ensures we only match whole words, not partial matches.
+        replacements = {
+            r"\btear into\b": "tare into",
+            r"\btear off\b": "tare off",
+            r"\btears off\b": "tares off",
+            r"\btearing\b": "tare-ing",  # Watch out: this will catch crying tearing too!
+            r"\bbow and arrow\b": "boe and arrow",
+            r"\btake a bow\b": "take a bough",
+            r"\bwind blows\b": "winned blows",
+            r"\bwind up\b": "wined up",
+            r"\blead pipe\b": "led pipe",
+            r"\blead the way\b": "leed the way"
+        }
+        
+        fixed_text = text
+        try:
+            for pattern, replacement in replacements.items():
+                # re.IGNORECASE ensures "Tear into" and "tear into" are both caught
+                fixed_text = re.sub(pattern, replacement, fixed_text, flags=re.IGNORECASE)
+        except Exception as e:
+            logging.error(f"Error applying phonetic fixes to TTS: {e}")
+            
+        return fixed_text
 
     def print_text(self, text: str, *, sender: str = "GM") -> None:
         """Prints text to the story window, processing TTS and typing effects if enabled."""
@@ -240,12 +292,32 @@ class StoryPanel(QWidget):
             return
         
         if self.narrator_enabled and not text.startswith("> "):
+            # Strip out the entire <pre>...</pre> HTML blocks ---
+            # ASCII grids sound terrible when read aloud by TTS. This regex completely removes 
+            # the HTML block and its contents from the audio queue so the TTS skips over it.
+            clean_text = re.sub(r'<pre.*?>.*?</pre>', '', text, flags=re.DOTALL)
             # Strip markdown formatting for the audio so it doesn't narrate "asterisk"
-            clean_text = re.sub(r'[*_~`#]', '', text, re.DOTALL)
+            clean_text = re.sub(r'[*_~`#]', '', clean_text, re.DOTALL)
+            
+            # Prevent Edge-TTS from stuttering/pausing on dashes ---
+            # We replace double hyphens with a comma for a natural breath, 
+            # and strip out any extra hyphens that might confuse the engine.
+            clean_text = clean_text.replace('--', ', ').replace('-', ' ')
+            
+            # Prevent TTS stuttering on hard line breaks ---
+            # Replace all newline characters with a space so the engine 
+            # treats it as one continuous flowing sentence, ignoring text wrapping.
+            clean_text = clean_text.replace('\n', ' ').replace('\r', '')
+            
+            # Apply our contextual phonetic dictionary ---
+            clean_text = self._apply_phonetic_fixes(clean_text)
             
             # Pass BOTH clean_text (for audio) and original text (for UI display)
             self._generate_and_play_tts(clean_text, original_text=text)
         else:
+            if text.startswith("> "):
+                text = "\\" + text
+                
             self.append_text("\n" + text)
 
     def _emit_send(self) -> None:
@@ -300,14 +372,19 @@ class StoryPanel(QWidget):
             print(f"Audio playback error: {e}")
 
     def stop_tts(self):
+        """
+        Stops the TTS audio playback and executes any queued UI unlocks.
+        """
         try:
             if pygame.mixer.get_init():
                 pygame.mixer.Channel(1).stop()
-        except Exception as e:
-            logging.error(f"Error stopping TTS: {e}")
+        except Exception as error:
+            logging.error(f"Error stopping TTS playback: {error}")
         
-        # Execute queued unlock if AI generation finished while speaking
-        if self._unlock_queued: self.set_controls_state(True)
+        # If the text box was waiting for the narrator to finish before unlocking, do it now.
+        # We pass force_unlock=True to bypass the mixer check, since we just stopped it.
+        if self._unlock_queued: 
+            self.set_controls_state(True, force_unlock=True)
 
 
     def play_voice_sample(self) -> None:

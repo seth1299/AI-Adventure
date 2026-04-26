@@ -1,10 +1,9 @@
 from google import genai
 from google.genai import types
-import threading, re, os, logging, random, csv
-from config import GEMINI_API_KEY, MODEL
+import threading, re, os, logging, csv
+from config import GEMINI_API_KEY, MODEL, VALID_SOUND_FILE_NAMES
 from tabulate import tabulate
 from rapidfuzz import process, fuzz
-from config import VALID_SOUND_FILE_NAMES
 
 class AIManager:
     def __init__(self, app):
@@ -209,6 +208,11 @@ After outputting all tags, summarize the first starting turn, describe the surro
             )
             ai_text = self.clean_quotes(response.text or "")
             if not ai_text: raise ValueError("Empty response")
+            # --- Save the completely raw text ---
+            # We must store the raw text so we can pass it back to the AI during 
+            # recursive recursive drafts (like skill rolls). If we pass the parsed 
+            # history text, the AI will hallucinate UI elements into the narrative.
+            raw_ai_text = ai_text
             
             # --- TAG PARSING ---
             tag_parser = TagParser(self.app)
@@ -236,7 +240,7 @@ After outputting all tags, summarize the first starting turn, describe the surro
                 
                 logging.info(f"[System: Player rolled {result} for {skill}]")
                 
-                draft_with_tags = history_ai_text.strip()
+                draft_with_tags = raw_ai_text.strip()
                 draft_with_tags = re.sub(r"\[\[ROLL:\s*.*?\]\]", "", draft_with_tags).strip()
                 
                 follow_up = (
@@ -264,7 +268,7 @@ After outputting all tags, summarize the first starting turn, describe the surro
                 
                 logging.info(f"[System: Calculated project estimate for '{project_name}' at {estimated_minutes:g} minutes]")
                 
-                draft_with_tags = history_ai_text.strip()
+                draft_with_tags = raw_ai_text.strip()
                 draft_with_tags = re.sub(r"\[\[START_PROJECT:\s*.*?\]\]", "", draft_with_tags, flags=re.DOTALL).strip()
                 
                 follow_up = (
@@ -287,35 +291,52 @@ After outputting all tags, summarize the first starting turn, describe the surro
             final_display_text = clean_pattern.sub("", display_ai_text)
             final_display_text = re.sub(r'\n{3,}', '\n\n', final_display_text).strip()
             
+            
+            trim_markers = ["Possible Actions:", "Suggested Actions:", "### Actions", "What would you like to do?", "What do you do?", "What do you do now?"]
+            
+            for marker in trim_markers:
+                if marker in final_display_text:
+                    parts = final_display_text.split(marker, 1)
+                    main_body = parts[0].strip()
+                    options_string = parts[1].strip()
+                    
+                    # Convert inline hyphens or asterisks into proper markdown newlines
+                    # This targets spaces followed by a dash/asterisk (e.g., " - " becomes "\n- ")
+                    options_string = options_string.replace(" - ", "\n- ").replace(" * ", "\n* ")
+                    
+                    # Failsafe: Ensure the very first option has a space after the hyphen if the AI forgot
+                    if options_string.startswith("-") and not options_string.startswith("- "):
+                        options_string = "- " + options_string[1:].lstrip()
+                    elif options_string.startswith("*") and not options_string.startswith("* "):
+                        options_string = "* " + options_string[1:].lstrip()
+                    
+                    # Reconstruct the string with bolding for the question and proper list spacing
+                    final_display_text = f"{main_body}\n\n**{marker}**\n\n{options_string.strip()}"
+                    break
             final_history_text = clean_pattern.sub("", history_ai_text)
             final_history_text = re.sub(r'\n{3,}', '\n\n', final_history_text).strip()
-            
             if final_display_text and len(final_display_text) > 8:
                 self.app.story_tab.print_text(final_display_text, sender="")
-                
                 text_to_save = final_history_text
-                trim_markers = ["Possible Actions:", "Suggested Actions:", "### Actions", "What would you like to do?", "What do you do?", "What do you do now?"]
-                for marker in trim_markers:
-                    if marker in text_to_save:
-                        text_to_save = text_to_save.split(marker)[0].strip()
-                        break
+            else: text_to_save = ""
                 
-                if "History" in self.app.notebook_widgets:
-                    hist_panel = self.app.notebook_widgets["History"]
-                    current_hist = hist_panel.get_text()
-                    
-                    # If this is the first turn, we don't want to log "**Player:** System: Generate Start"
-                    if is_startup:
-                        new_exchange = f"**System: Start of Game**\n\n**GM:** {text_to_save.strip()}\n\n---\n\n"
-                    else:
-                        new_exchange = f"> {user_text}\n\n{text_to_save.strip()}\n\n---\n\n"
-                    
-                    self.app.after(0, lambda ch=current_hist, ne=new_exchange: hist_panel.set_text(ch + ne))
                 
-                try:
-                    self.app.save_game()
-                except Exception as e:
-                    logging.error(f"Auto-save failed: {e}")
+            if "History" in self.app.notebook_widgets:
+                hist_panel = self.app.notebook_widgets["History"]
+                current_hist = hist_panel.get_text()
+                    
+                # If this is the first turn, we don't want to log "**Player:** System: Generate Start"
+                if is_startup:
+                    new_exchange = f"**System: Start of Game**\n\n**GM:** {text_to_save.strip()}\n\n// NEW EXCHANGE\n\n"
+                else:
+                    new_exchange = f"{user_text}\n\n{text_to_save.strip()}\n\n// NEW EXCHANGE\n\n"
+                    
+                self.app.after(0, lambda ch=current_hist, ne=new_exchange: hist_panel.set_text(ch + ne))
+                
+            try:
+                self.app.save_game()
+            except Exception as e:
+                logging.error(f"Auto-save failed: {e}")
 
         except Exception as e:
             logging.error(f"AI Error: {e}")
@@ -414,17 +435,6 @@ class TagParser:
                 location=loc,
                 minutes_to_add=mins_to_add
             )
-            
-            # --- NEW: Check if any tasks finished due to the time jump! ---
-            if "Processing" in self.app.notebook_widgets:
-                completed_tasks = self.app.notebook_widgets["Processing"].check_active_tasks(
-                    self.app.player.day, 
-                    self.app.player.time
-                )
-                
-                # Automatically notify the player in the chat!
-                for task in completed_tasks:
-                    self.app.story_tab.print_text(f"*(System: {task} is now complete!)*", sender="")
                     
             self.app._sync_player_state_to_ui()
                     
@@ -498,8 +508,7 @@ class TagParser:
                     with open(self.app.world_path, "a", encoding="utf-8") as f:
                         f.write(f"\n{new_world_lore}\n")
                         
-                    # 3. (Optional but recommended) Update the UI panel immediately 
-                    # so the player can see the new lore without reloading the save!
+                    # 3. Update the UI panel immediately so the player can see the new lore without reloading the save!
                     if "World" in self.app.notebook_widgets:
                         current_text = self.app.notebook_widgets["World"].get_text()
                         # Append the new text to whatever is already in the World tab
@@ -624,7 +633,7 @@ class TagParser:
                         
                     table_data.append([name, description, formatted_price])
                     
-                    # --- CHANGED: Include the description in the history summary! ---
+                    # --- Include the description in the history summary! ---
                     # We wrap the name in single quotes and use a hyphen to cleanly separate the description.
                     history_items.append(f"'{name}' - {description} ({formatted_price})") 
                 else:
@@ -643,9 +652,12 @@ class TagParser:
                 # Create the 3xY rounded grid!
                 headers = ["Item Name", "Description", "Price"]
                 grid = tabulate(table_data, headers=headers, tablefmt="rounded_grid")
-                
+                formatted_html = (
+                f"<pre style=\"font-family: Consolas, 'Courier New', monospace; "
+                f"line-height: 1.0; padding: 6px;\">\n\n{grid}\n</pre>\n\n"
+                )
                 # Pad with newlines so it renders nicely in the text box
-                return f"\n{grid}\n"
+                return f"\n{formatted_html}\n"
                 
         # Find all instances of [[DISPLAY_CURRENCY: X]] and swap them
         modified_text = re.sub(r"\[\[DISPLAY_CURRENCY:\s*(-?\d+)\]\]", replace_currency, ai_text)

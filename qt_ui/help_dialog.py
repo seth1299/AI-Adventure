@@ -43,5 +43,6 @@ class HelpDialog(QDialog):
         <p>• You can add, edit, or remove custom stats (like Health or Sanity) using the <b>Menu -> Manage Tracked Stats</b> button. Make sure to include a description as specific as possible for each stat, even if it seems obvious to you, it can be worth it to explicitly tell the A.I. EXACTLY what you are envisioning for the Stat to do.</p>
         <p>• You can click "Menu" -> "Manage Currencies" to make your own system of currency for the game! You can add or remove however many units of currency you want, and as long as you correctly set how much each unit of currency is worth, the A.I. should be able to keep track of all of the currencies automatically for you.</p>
         <p>• Simply type what your character does or says naturally! The AI GM will figure out the rest.</p>
+        <p>• You can type whatever you want into the "World" tab, but do keep in mind that whatever you put into the World tab, the A.I. will take as complete fact, so that can make the game as easy or as difficult as you want it to be.</p>
         """
         self.text_browser.setHtml(help_content)

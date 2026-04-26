@@ -11,8 +11,8 @@ from sound_manager import SoundManager
 from config import SAVES_DIR, BASE_SOUNDS_DIR, VALID_SOUND_FILE_NAMES, DEFAULT_RULES
 from qt_ui.main_menu_dialog import MainMenuDialog
 import threading
-from PySide6.QtWidgets import QApplication, QDialog
-from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt, QThread
+from PySide6.QtWidgets import QApplication, QDialog, QProxyStyle, QStyle, QStyleOptionTab
+from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt, QThread, QSize
 from queue import Queue
 
 class _UiDispatcher(QObject):
@@ -161,38 +161,63 @@ class QtAppContext:
     def _reconstruct_merchant_tables(self, text: str) -> str:
         """
         Parses the token-saving OOG merchant summaries back into readable UI grids.
-        Returns the modified string.
+        Handles multi-line markdown strings by utilizing the re.DOTALL flag.
+        
+        Args:
+            text (str): The raw markdown text to parse.
+            
+        Returns:
+            str: The modified string with HTML grids injected where the OOG text was.
         """
         if not text: return text
         
         import re
         from tabulate import tabulate
         
-        # Look for our exact OOG sentence structure
-        pattern = r"\*\(OOG: A merchant table is listed detailing the following items:\s*(.*?)\.\)\*"
+        # The pattern remains the same, but we will apply the DOTALL flag when searching
+        pattern = r"\\?\*?\(OOG: A merchant table is listed detailing the following items:\s*(.*?)\.\)\\?\*?"
+        
+        # Added flags=re.DOTALL so the search can span across the hard line breaks in the Markdown file
+        logging.info(f"Regex matches for the merchant table pattern: {re.search(pattern, text, flags=re.DOTALL)}")
         
         def replace_with_grid(match):
-            items_str = match.group(1)
+            """
+            Callback function for re.sub to process each matched merchant table.
+            """
+            logging.info("Replacing merchant grid now!")
+            
+            # Extract the raw items string and strip out the newlines so our inner regex 
+            # doesn't get confused by random line breaks in the middle of item names/descriptions.
+            raw_items_string = match.group(1)
+            clean_items_string = raw_items_string.replace('\n', ' ').replace('\r', '')
+            
             table_data = []
             
-            # --- CHANGED: Regex safely pulls 'Item Name' - Description (Price) ---
-            # It extracts Group 1 (Name), Group 2 (Description), and Group 3 (Price).
-            for item_match in re.finditer(r"'(.*?)'\s*-\s*(.*?)\s*\(([^)]+)\)", items_str):
-                name = item_match.group(1).strip()
-                description = item_match.group(2).strip()
-                price = item_match.group(3).strip()
-                table_data.append([name, description, price])
+            # Extract Group 1 (Name), Group 2 (Description), and Group 3 (Price)
+            for item_match in re.finditer(r"'(.*?)'\s*-\s*(.*?)\s*\(([^)]+)\)", clean_items_string):
+                logging.info(f"Current item match: {item_match}")
+                item_name = item_match.group(1).strip()
+                item_description = item_match.group(2).strip()
+                item_price = item_match.group(3).strip()
+                table_data.append([item_name, item_description, item_price])
                 
             if table_data:
-                # --- CHANGED: We use a 3-column grid again since we have the descriptions! ---
+                logging.info(f"Current table data: {table_data}")
                 headers = ["Item Name", "Description", "Price"]
                 grid = tabulate(table_data, headers=headers, tablefmt="rounded_grid")
-                return f"{grid}"
                 
-            return match.group(0) # Fallback to the OOG text if parsing fails
+                formatted_html = (
+                f"<pre style=\"font-family: Consolas, 'Courier New', monospace; "
+                f"line-height: 1.0; padding: 6px;\">\n\n{grid}\n</pre>\n\n"
+                )
+                logging.info(f"Formatted HTML generated successfully.")
+                return f"{formatted_html}"
+                
+            logging.error("Failed to parse individual items from merchant table string.")
+            return match.group(0) 
             
-        # Swap all instances of the OOG text with the newly drawn grids
-        return re.sub(pattern, replace_with_grid, text)
+        # IMPORTANT: Apply flags=re.DOTALL here as well so the substitution catches the multi-line match
+        return re.sub(pattern, replace_with_grid, text, flags=re.DOTALL)
 
     def after(self, ms: int, func) -> None:
         self.ui.run_later.emit(int(ms), func)
@@ -356,10 +381,9 @@ class QtAppContext:
                 
                 if history_text:
                     # Split exchanges using the established '---' divider
-                    exchanges = [exchange.strip() for exchange in history_text.split("---") if exchange.strip()]
+                    exchanges = [exchange.strip() for exchange in history_text.split("// NEW EXCHANGE") if exchange.strip()]
                     if exchanges:
                         last_exchange = exchanges[-1]
-                        
                         exchange_lines = last_exchange.split('\n')
                         gm_response_lines = []
                         
@@ -378,10 +402,12 @@ class QtAppContext:
                         last_gm_message = "\n".join(gm_response_lines).strip()
                 
             if last_gm_message:
+                logging.info("There is a last gm message, reconstructing merchant tables now!")
                 last_gm_message = self._reconstruct_merchant_tables(last_gm_message)
-                self.story_tab.print_text(last_gm_message + "\n\nWhat do you do now?\n", sender="")
+                self.story_tab.print_text(last_gm_message + "\n\n", sender="")
             else:
-                self.story_tab.print_text(f"What do you do now?\n")
+                logging.info("There is NOT a last gm message!")
+                self.story_tab.print_text(f"\n")
             
         except Exception as error:
             logging.error(f"Generate recap failed: {error}")
@@ -524,4 +550,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as e:
+        logging.exception(f"Error: {e}")
