@@ -70,6 +70,42 @@ class SkillsPanel(QWidget):
 
     def get_text(self) -> str:
         return self.display.toMarkdown()
+    
+    def add_xp(self, skill_name: str, xp_amount: int):
+        """Adds an amount of xp to a skill.
+
+        Args:
+            skill_name (str): The name of the Skill to add the xp to.
+            xp_amount (int): The amount of xp to add to the Skill.
+        """
+        data = self.load_data()
+        found = False
+        try:
+            if data:
+                for skill in data:
+                    if str(skill.get("Name", "")).lower() == skill_name.lower():
+                        if skill["Level"] >= 5: return
+                        
+                        skill["XP"] += xp_amount
+                        
+                        if skill["Threshold"] <= skill["XP"]:
+                            skill["Level"] += 1
+                            skill["XP"] = 0
+                            skill["Threshold"] += 2
+                            
+                        # FIX 1: Move this OUTSIDE the level-up if-statement!
+                        found = True 
+                        break    
+                        
+                if found: 
+                    logging.info(f"Successfully added {xp_amount} xp to {skill_name} skill.")
+                    # FIX 2: Actually save the modified data to the disk!
+                    self.save_data(data)
+                    
+        except Exception as e:
+            logging.exception(f"Error adding XP: {e}")
+        finally:
+            self.refresh_display()
 
     def load_data(self) -> list[dict]:
         """Loads the Skills dictionary / skills.json file.
@@ -130,8 +166,10 @@ class SkillsPanel(QWidget):
                 level = int(skill.get("Level", 0) or 0)
                 level_string = "+5 (MAX LEVEL)" if level == 5 else f"+{level}" if level >= 0 else str(level)
                 description = "\n".join(textwrap.wrap(skill.get("Description", ""), width=35))
-                xp = skill.get("XP", 0)
-                threshold = skill.get("Threshold", 0)
+                xp = skill.get("XP", 0) 
+                xp_string = str(xp) if level < 5 else "(MAX LEVEL)"
+                threshold = skill.get("Threshold", 0) 
+                threshold_string = str(threshold) if level < 5 else "(MAX LEVEL)"
                 
             except Exception:
                 level = 0
@@ -145,8 +183,8 @@ class SkillsPanel(QWidget):
                     name,
                     description,
                     level_string,
-                    xp,
-                    threshold,
+                    xp_string,
+                    threshold_string,
                 ]
             )
 

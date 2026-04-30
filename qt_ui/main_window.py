@@ -25,6 +25,8 @@ from .recipes_panel import RecipesPanel
 import logging
 from qt_ui.help_dialog import HelpDialog
 from qt_ui.quest_panel import QuestsPanel
+from qt_ui.calendar_dialog import CalendarManagerDialog
+from .calendar_panel import CalendarPanel
 
 class MainWindow(QMainWindow):
     """
@@ -59,10 +61,12 @@ class MainWindow(QMainWindow):
         self.history_panel = MarkdownPanel("History")
         self.inventory_panel = InventoryPanel(app_context=self.app)
         self.skills_panel = SkillsPanel()
-        self.processing_panel = ProcessingPanel()
+        self.processing_panel = ProcessingPanel(app_context=self.app)
         self.recipes_panel = RecipesPanel()
         self.character_panel = MarkdownPanel("Character")
+        self.calendar_panel = CalendarPanel(app_context=self.app)
         self.quests_panel = QuestsPanel(app_context=self.app)
+        self.sales_ledger_panel = MarkdownPanel("Sales Ledger")
         self._add_dock("Quests", self.quests_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
         self._add_dock("World", self.world_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
         self._add_dock("Journal", self.journal_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
@@ -71,7 +75,9 @@ class MainWindow(QMainWindow):
         self._add_dock("Processing", self.processing_panel, area=Qt.DockWidgetArea.BottomDockWidgetArea)
         self._add_dock("Recipes", self.recipes_panel, area=Qt.DockWidgetArea.BottomDockWidgetArea)
         self._add_dock("Character", self.character_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
+        self._add_dock("Calendar", self.calendar_panel, area=Qt.DockWidgetArea.RightDockWidgetArea)
         self._add_dock("History", self.history_panel, Qt.DockWidgetArea.LeftDockWidgetArea)
+        self._add_dock("Sales Ledger", self.sales_ledger_panel, area=Qt.DockWidgetArea.BottomDockWidgetArea)
 
         # Allow docks to tab together when dragged into same area
         self.setDockOptions(
@@ -161,6 +167,9 @@ class MainWindow(QMainWindow):
         
         action_stats = game_menu.addAction("Manage Tracked Stats")
         action_stats.triggered.connect(self.open_stats_menu)
+        
+        action_calendar = game_menu.addAction("Manage Calendar")
+        action_calendar.triggered.connect(self.open_calendar_menu)
         
         game_menu.addSeparator()
         
@@ -423,6 +432,19 @@ class MainWindow(QMainWindow):
             dialog.exec()
         except Exception as e:
             error_msg = f"Error opening help menu: {str(e)}"
+            logging.exception(error_msg)
+            self.story_panel.print_text(error_msg, sender="System Error")
+            
+    def open_calendar_menu(self):
+        if not self.app: return
+        try:
+            dialog = CalendarManagerDialog(self, existing_calendar=self.app.player.calendar_settings)
+            if dialog.exec(): 
+                self.app.player.calendar_settings = dialog.final_calendar_data
+                self.app.save_game()
+                self.app._sync_player_state_to_ui()
+        except Exception as e:
+            error_msg = f"Error opening calendar menu: {str(e)}"
             logging.exception(error_msg)
             self.story_panel.print_text(error_msg, sender="System Error")
             

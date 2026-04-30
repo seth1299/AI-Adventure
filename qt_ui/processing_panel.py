@@ -1,8 +1,7 @@
 # qt_ui/processing_panel.py
 from __future__ import annotations
 
-import logging
-import os
+import logging, os, time_utils
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
@@ -22,10 +21,10 @@ from file_manager import FileManager
 class ProcessingPanel(QWidget):
     """Qt Processing panel (processes + projects) backed by processing.json."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, app_context=None) -> None:
         super().__init__(parent)
         self.data_path: str = ""
-
+        self.app = app_context
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
@@ -61,6 +60,13 @@ class ProcessingPanel(QWidget):
         self._set_state("No save loaded")
 
         self._set_state("No save loaded")
+        
+    def _get_player(self):
+        """Safely locate the Player object."""
+        if not self.app: return None
+        if hasattr(self.app, 'player'): return self.app.player
+        if hasattr(self.app, 'app') and hasattr(self.app.app, 'player'): return self.app.app.player
+        return None
 
     def set_base_path(self, save_folder: str) -> None:
         if not save_folder:
@@ -128,7 +134,9 @@ class ProcessingPanel(QWidget):
         """Checks if ongoing tasks have passed their target completion time."""
         data = self.load_data()
         if not data:
+            logging.warning("No data to load for check_active_tasks in processing_panel.py.")
             return []
+        logging.info(f"Successfully loaded processing panel data! Data: {data}")
 
         completed = []
         changed = False
@@ -142,9 +150,10 @@ class ProcessingPanel(QWidget):
             # Grab the targets from the dictionary we made in add_timed_process
             target_day = item.get("ready_on_day", 1)
             target_time_str = item.get("ready_on_time", "12:00 A.M.")
-            
+            has_time_passed = is_time_passed(current_day, current_time_str, target_day, target_time_str)
+            logging.info(f"Target day: {target_day}; Target Time: {target_time_str}; has the time passed? {has_time_passed}")
             # Use our utility to see if the current time is greater than or equal to the target time
-            if is_time_passed(current_day, current_time_str, target_day, target_time_str):
+            if has_time_passed:
                 item["status"] = "COMPLETED"
                 expected_yield = item.get("yield", "Unknown")
                 completed.append(f"{item.get('name', 'Unknown')} (Yield: {expected_yield})")
@@ -152,6 +161,7 @@ class ProcessingPanel(QWidget):
 
         if changed:
             self.save_data(data)
+            self.refresh_display()
 
         return completed
 
@@ -258,6 +268,9 @@ class ProcessingPanel(QWidget):
             self.display.setMarkdown("### ONGOING TASKS\n\n(None)")
             self._set_state("")
             return
+        
+        player = self._get_player()
+        cal_settings = player.calendar_settings if player else {}
 
         rows = []
         headers = ["Name", "Type", "Status", "Due/Progress", "Yield", "Description"]
@@ -273,7 +286,14 @@ class ProcessingPanel(QWidget):
                 else:
                     target_day = item.get("ready_on_day", "Unknown")
                     target_time = item.get("ready_on_time", "Unknown")
-                    prog = f"Due: Day {target_day} at {target_time}"
+                    if target_day != "Unknown":
+                        rich_target_date = time_utils.calculate_calendar_date(int(target_day), cal_settings)
+                        #logging.info(f"Rich target date: {rich_target_date}")
+                        prog = f"Due: {rich_target_date} at {target_time}"
+                        #logging.info(f"Prog: {prog}")
+                    else:
+                        prog = f"Due: Day {target_day} at {target_time}"
+                        #logging.info("Target day is unknown.")
                 rows.append([item.get("name", ""), "PROCESS", status, prog, y, desc])
             else:
                 req = float(item.get("work_required", 0.0) or 0.0)

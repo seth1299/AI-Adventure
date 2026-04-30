@@ -120,9 +120,6 @@ class StatsManagerDialog(QDialog):
                     stat.get("min", 0),
                     stat.get("max", 100)
                 )
-        #else:
-            #self.add_stat_row("Nutrition", 100, True, "Represents how well-fed the character is. Max 100.", 0, 100)
-            #self.add_stat_row("Stamina", 100, True, "Represents physical energy. Depletes from actions. Max 100.", 0, 100)
 
     def add_stat_row(self, name="", value=100, enabled=True, desc="", min_val=0, max_val=100):
         row = StatRow(name=name, value=value, enabled=enabled, desc=desc, min_val=min_val, max_val=max_val)

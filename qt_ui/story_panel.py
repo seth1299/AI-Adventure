@@ -1,7 +1,7 @@
 # qt_ui/story_panel.py
 from __future__ import annotations
 import re, edge_tts, asyncio, threading, os, tempfile, pygame, uuid, logging, markdown
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QTextCursor, QTextBlockFormat, QTextCharFormat
 from PySide6.QtWidgets import (
     QWidget,
@@ -40,6 +40,8 @@ class StoryPanel(QWidget):
             "location": "Unknown",
             "day": "Day 1",
             "time": "Morning",
+            "weather": "Sunny",     
+            "temperature": "76",   
             "dynamic_stats": []
         }
         
@@ -51,11 +53,19 @@ class StoryPanel(QWidget):
         self.temp_dir = tempfile.gettempdir()
         self._unlock_queued = False
         self.text_ready_signal.connect(self.append_text)
+        
+        self._tts_check_timer = QTimer(self)
+        self._tts_check_timer.setInterval(250) # Poll every 250ms
+        self._tts_check_timer.timeout.connect(self._check_tts_finished)
+        self._tts_check_timer.start()
+
+        self.header_layout = QHBoxLayout() # <--- Changed to Horizontal Layout
+        self.header_layout.setSpacing(20)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
-
+        
         # ---- Header (Status + Progress Bars on newlines) ----
         self.header_layout = QVBoxLayout()
         self.header_layout.setSpacing(4)
@@ -66,11 +76,12 @@ class StoryPanel(QWidget):
         # Style it to stand out slightly from the progress bars below it
         self.lbl_base_status.setStyleSheet("font-weight: bold; margin-bottom: 5px;")
         self.header_layout.addWidget(self.lbl_base_status)
-
-        # Container for the dynamically generated progress bars
+        
+        # Stats Container (Right side)
         self.stats_layout = QVBoxLayout()
         self.stats_layout.setSpacing(2)
-        self.header_layout.addLayout(self.stats_layout)
+        # Adding stretch=1 pushes the status text to the left and gives the bars room to breathe
+        self.header_layout.addLayout(self.stats_layout, stretch=1)
 
         root.addLayout(self.header_layout)
 
@@ -114,6 +125,23 @@ class StoryPanel(QWidget):
     def _emit_volume(self, val: int) -> None:
         # Pygame uses 0.0 to 1.0 for volume, so we divide the 0-100 slider value by 100
         self.volume_changed.emit(val / 100.0)
+        
+    def _check_tts_finished(self) -> None:
+        """
+        Periodically checks if the TTS audio has finished playing.
+        If the audio is done and an unlock is queued, it releases the UI.
+        """
+        if self._unlock_queued:
+            try:
+                # If Pygame is initialized and Channel 1 is no longer playing audio...
+                if pygame.mixer.get_init() and not pygame.mixer.Channel(1).get_busy():
+                    self._unlock_queued = False
+                    self.set_controls_state(True, force_unlock=True)
+            except Exception as e:
+                logging.error(f"Error checking TTS channel status: {e}")
+                # Failsafe: Unlock the UI anyway so the player isn't soft-locked
+                self._unlock_queued = False
+                self.set_controls_state(True, force_unlock=True)
 
     def append_text(self, markdown_string: str) -> None:
         """
@@ -148,11 +176,13 @@ class StoryPanel(QWidget):
             
         self._scroll_to_bottom()
 
-    def set_status(self, *, turn=None, location=None, day=None, time=None, dynamic_stats=None):
+    def set_status(self, *, turn=None, location=None, day=None, time=None, weather=None, temperature=None, dynamic_stats=None):
         if turn is not None: self._status_cache["turn"] = str(turn)
         if location is not None: self._status_cache["location"] = str(location)
         if day is not None: self._status_cache["day"] = str(day)
         if time is not None: self._status_cache["time"] = str(time)
+        if weather is not None: self._status_cache["weather"] = str(weather)
+        if temperature is not None: self._status_cache["temperature"] = str(temperature)
         if dynamic_stats is not None: self._status_cache["dynamic_stats"] = dynamic_stats 
         
         self._update_status_ui()
@@ -160,62 +190,67 @@ class StoryPanel(QWidget):
     def _update_status_ui(self) -> None:
         """Rebuilds the status text and dynamically creates progress bars for stats."""
         s = self._status_cache
-        if not "Day" in s['day']: s['day'] = "Day: " + s['day']
         
-        # 1. Update the top standard text
-        base_str = f"Turn: {s['turn']} \nLocation: {s['location']} \n{s['day']} \n{s['time']}"
+        base_str = (
+            f"Turn: {s['turn']} \n"
+            f"Location: {s['location']} \n"
+            f"Date: {s['day']} \n"
+            f"Time: {s['time']} \n"
+            f"Weather: {s['weather']} ({s['temperature']}°F)"
+        )
         self.lbl_base_status.setText(base_str)
+        self.lbl_base_status.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         
-        # 2. Safely clear old progress bars
-        while self.stats_layout.count() > 0:
-            item = self.stats_layout.takeAt(0)
-            if item is not None:
-                widget = item.widget()
-                if widget is not None:
-                    widget.deleteLater()
+        # 1. Clear out the old progress bars from the layout so they don't stack infinitely
+        while self.stats_layout.count():
+            child = self.stats_layout.takeAt(0)
+            widget_to_delete = child.widget() # type: ignore
+            if widget_to_delete is not None:
+                widget_to_delete.deleteLater()
                 
-        # 3. Create new progress bars for each enabled stat
-        for st in s.get("dynamic_stats", []):
-            if st.get("enabled", True):
-                pb = QProgressBar()
-                pb.setRange(0, 100) # Assumes stats are max 100 as per your previous design
+        # 2. Iterate through the tracked stats and generate a bar for each
+        stats = s.get("dynamic_stats", [])
+        for stat in stats:
+            if not stat.get("enabled", True):
+                continue
                 
-                # Safely parse the value
-                try:
-                    val = int(st['value'])
-                except ValueError:
-                    val = 0
-                    
-                pb.setValue(val)
-                # Formats text as: "Stat Name: 75%" 
-                pb.setFormat(f"{st['name']}: %p%") 
-                pb.setTextVisible(True)
-                pb.setFixedHeight(18) # Keeps the bars sleek
-                
-                if val > 50:
-                    bar_color = "#4CAF50" # Green
-                elif val > 25:
-                    bar_color = "#FF9800" # Orange/Yellow
-                else:
-                    bar_color = "#F44336" # Red
-                    
-                # Apply a custom stylesheet to this specific progress bar
-                pb.setStyleSheet(f"""
-                    QProgressBar {{
-                        border: 1px solid #555;
-                        border-radius: 4px;
-                        text-align: center;
-                        background-color: #333; /* Dark background for the empty track */
-                        color: white; /* Text color */
-                        font-weight: bold;
-                    }}
-                    QProgressBar::chunk {{
-                        background-color: {bar_color};
-                        border-radius: 3px;
-                    }}
-                """)
-                
-                self.stats_layout.addWidget(pb)
+            # Create a horizontal row for the Label + Bar
+            stat_row_layout = QHBoxLayout()
+            stat_row_layout.setContentsMargins(0, 0, 0, 0)
+            
+            # Stat Name Label
+            name_label = QLabel(f"{stat.get('name', 'Stat')}:")
+            name_label.setFixedWidth(80) # Lock the width so the progress bars perfectly align
+            name_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            
+            # The actual Progress Bar
+            progress_bar = QProgressBar()
+            progress_bar.setMinimum(int(stat.get("min", 0)))
+            progress_bar.setMaximum(int(stat.get("max", 100)))
+            progress_bar.setValue(int(stat.get("value", 0)))
+            progress_bar.setTextVisible(True)
+            progress_bar.setFormat("%v / %m") # Displays as "Current / Max" (e.g., 50 / 100)
+            
+            # Apply some clean styling to make it look RPG-like
+            progress_bar.setStyleSheet("""
+                QProgressBar {
+                    border: 1px solid #555;
+                    border-radius: 3px;
+                    text-align: center;
+                    font-weight: bold;
+                }
+                QProgressBar::chunk {
+                    background-color: #4CAF50;
+                }
+            """)
+            
+            stat_row_layout.addWidget(name_label)
+            stat_row_layout.addWidget(progress_bar)
+            
+            # Wrap the layout in a QWidget so it can be easily targeted and deleted in the next refresh
+            stat_wrapper = QWidget()
+            stat_wrapper.setLayout(stat_row_layout)
+            self.stats_layout.addWidget(stat_wrapper)
 
     def get_log_text(self) -> str:
         return self.txt_log.toPlainText()

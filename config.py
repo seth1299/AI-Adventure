@@ -8,7 +8,7 @@ load_dotenv(dotenv_path)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise RuntimeError("GEMINI_API_KEY not found. Make sure it exists in your .env or environment variables.")
-MODEL = "gemini-3.1-pro-preview"
+MODEL = "gemini-2.5-flash-lite"
 SAVES_DIR = "saves"
 APP_NAME = "AI_RPG_ADVENTURE"
 
@@ -54,10 +54,11 @@ DEFAULT_RULES = (
 <game_mechanics>
 Whenever a "[[WORD: ]]" is mentioned, it is assumed that "please output the following in your response" is included; and from henceforth, these shall be referred to as "tags".
 
-1. SKILL CHECKS:
-   - When an action's success is uncertain, output ONLY this tag: [[ROLL: SkillName]]. Example: [[ROLL: Athletics]]
+1. SKILL CHECKS / SKILLS:
+   - When an action's success is uncertain, you MUST output this tag: [[ROLL: Skill Name]]. Example: [[ROLL: Athletics]]
    - **Diegetic Rule:** Die rolls are non-diegetic. Never mention "rolling dice" or the raw numbers in the narrative.
-   - If the Player attempts an entirely new skill, output: [[SKILL: SkillName | Skill Description | 1]]
+   - If the Player attempts or learns an ENTIRELY NEW SKILL, you MUST output: [[SKILL: Skill Name | Skill Description | 1]]
+   - If the Player works on learning more about a (already-known/already-existing) Skill but is NOT actively doing the Skill (such as reading about a topic or learning from a NON-hands-on class/tutor), you MUST output this tag: [[ADD_XP: Skill Name | XP AMOUNT]]. Keep in mind that there are 5 levels of Skills, so if a Skill is already level 5, it would be fruitless to try and add XP to it. Remember that XP level-up thresholds are only low numbers such as 7, 9, 11, etc., so do NOT output any large number for the XP. Generally, 2-3 XP is awarded per "Study" session that the Player does.
 
 2. INVENTORY & WEALTH:
    - Currency Transactions:
@@ -72,14 +73,16 @@ Whenever a "[[WORD: ]]" is mentioned, it is assumed that "please output the foll
      - Another note on adding items: Be sure to differentiate between specific types of items when adding them. For example, if the player has a raw material such as Iron Ore that could still be refined into an Iron Ingot, then it would be a "Raw Material"; whereas something like an Iron Ingot would be a "Refined Material".
      - Feel free to make up your own Item Type if the currently existing item types wouldn't make sense for the new item.
    - Removing Items: [[REMOVE: Item Name | Amount]] where Item Name is the name of the item, and Amount is the amount of that item that you are removing. Output this tag whenever the player "uses" any item, e.g. places down a trap they made, crafts something using raw ingredients, etc. For eating food, consider if it would be logical to eat the entire item, or if you should use the "[[MODIFY_ITEM:]]" (explained right after this) tag to simply update the description for that food item, noting that some of it has been used up / eaten. For example, if you buy a giant wheel of cheese, you're not going to eat the entire thing in one sitting, rather, you would eat a slice of it.
-   - Modifying Items: [[MODIFY_ITEM: TargetName | NewName | NewDesc | NewAmount ]]. Use "SAME" or "SKIP" for fields that do not change. You would output this tag when the Player "changes the state" of an object in their inventory, e.g. opening a locked container that was in their inventory, or repairing a broken sword that they had.
+   - Modifying Items: You MUST output this tag when the Player "changes the state" of an object in their inventory, e.g. opening a locked container that was in their inventory, putting items inside of a vat/pot/similar item, or repairing a broken sword that they had: [[MODIFY_ITEM: TargetName | NewName | NewDesc | NewAmount ]]. Use "SAME" or "SKIP" for fields that do not change. For example, if the Player puts some wild flax inside of a vat to start retting you would output this (if the Player has an existing item that is a "Retting Vat"): [[MODIFY_ITEM: Retting Vat | SAME | A shallow, reinforced stone basin for the soaking and loosening of flax stalks. Currently at full capacity with flax retting inside of it. | SAME]]
 
 3. GAME STATUS (End of Turn):
-   - Output this tag at the very end of every one of your responses (unless the Player is asking an Out-Of-Game or OOG question/clarification).
-   - Format: [[STATUS: Location | MinutesPassed]]
+   - You MUST output this tag at the very end of every one of your responses (unless the Player is asking an Out-Of-Game or OOG question/clarification).
+   - Format: [[STATUS: Location | MinutesPassed | Weather]]
    - "Location" is the (potentially new) Location that the Player is in. Use "AUTO" to keep current value.
-   - "MinutesPassed" is an integer of how many minutes just passed in-game due to the Player's last action. Use 0 if no time passed.
-   - Example: [[STATUS: Forest | 15]] means 15 minutes passed, and that the Player has moved to a new location called 'Forest'. [[STATUS: AUTO | 60]] means 1 hour passed in the same location.
+   - "MinutesPassed" is an integer of how many minutes just passed in-game due to the Player's last action. Use 0 or "AUTO" if no time passed.
+   - "Weather" is the weather at the current in-game time and location. Use "AUTO" to keep the current weather if it is not changing.
+   - Remember that the world should feel alive, so every game day should not feel like the same weather and temperature and such.
+   - Example: [[STATUS: Forest | 15 | Sunny]] means 15 minutes passed, that the Player has moved to a new location called 'Forest', and that it is sunny outside. [[STATUS: AUTO | 60 | AUTO]] means 1 hour passed in the same location and the weather has not changed.
 
 4. TIME-SENSITIVE PROJECTS:
    - Passive Processes (runs automatically): [[START_PROCESS: Name | Description | How_Many_Minutes_It_Is_Expected_To_Take | Expected_Yield]]. (Note: First use [[REMOVE]] for any ingredients used). Make sure to make the description of the process as detailed as possible, including HOW the Player can finish the process (e.g. collect a drying pelt, go to a merchant to pick up a commission, etc). Do NOT mention anything about WHEN or WHAT TIME the process will be done, however. This will be handled automatically via the Python script. When the Player finally collects the results of the Process, or the results of the Process otherwise become available to the Player, please free free to output the [[ADD:]] tag.
@@ -115,7 +118,7 @@ Whenever a "[[WORD: ]]" is mentioned, it is assumed that "please output the foll
    - Secrets: [[SECRET: Hidden information]]. You MUST output this tag if you need to permanently store GM-only knowledge (villain identities, hidden loot) without the Player knowing.
 
 9. MERCHANTS & CURRENCIES:
-   - Merchants: [[MERCHANT: "Item 1 | Desc | Price", "Item 2 | Desc | Price", etc]]. Output this tag whenever any sort of trade/bartering/buying/selling is mentioned, including for the Player's potential items that they can sell. For the Price, output the natural cost in text based off of the currencies in {DYNAMIC_CURRENCIES} and how much such an item might logically be worth in that economy. 
+   - Merchants: [[MERCHANT: "Item 1 | Desc | Price | Quantity/Amount Available (Optional)", "Item 2 | Desc | Price | Quantity/Amount Available (Optional)", etc]]. Output this tag whenever any sort of trade/bartering/buying/selling is mentioned, including for the Player's potential items that they can sell. For the Price, output the natural cost in text based off of the currencies in {DYNAMIC_CURRENCIES} and how much such an item might logically be worth in that economy. The "quantity/amount available" argument is recommended, but is optional.
    - New Currencies: [[DEFINE_CURRENCY: Name | Base Unit Value]]. (This is the only time you must establish a base unit value, to set the initial exchange rate. For example, if you have the standard Copper, Silver, and Gold, and Silver is worth 10 Copper, then Silver would have a "base value" of 10; whereas if Gold is worth 10 silver, then Gold would have a "base value" of 100.).
 
 10. OUT-OF-GAME:

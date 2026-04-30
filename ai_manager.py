@@ -170,13 +170,23 @@ After outputting all tags, summarize the first starting turn, describe the surro
                 # Grab the description if it exists, otherwise leave it blank
                 desc_text = f" (Rules: {stat.get('description')})" if stat.get('description') else ""
                 stats_str += f"{stat['name']}: {stat['value']}{desc_text}\n"
+        status_dict = self.app.player.get_status_dict()
+        rich_date = status_dict.get("formatted_date", f"Day {status_dict.get('day')}")
+        calendar_context = ""
+        cal_settings = status_dict.get("calendar_settings", {})
+        if cal_settings and cal_settings.get("weekdays") and cal_settings.get("months"):
+            weekdays_str = ", ".join(cal_settings["weekdays"])
+            # Format: "MonthName (30 days), OtherMonth (20 days)"
+            months_str = ", ".join([f"{m.get('name')} ({m.get('days')} days)" for m in cal_settings["months"]])
+            calendar_context = f"\nWorld Calendar Rules -> Weekdays in order: [{weekdays_str}]. Months in order: [{months_str}]. DO NOT USE REAL-WORLD CALENDAR INFORMATION UNLESS THAT IS WHAT WAS JUST GIVEN TO YOU."
         status_context = (
             f"\n[CURRENT STATUS]\n"
             f"Player's current Location: {self.app.player.location}\n"
-            f"Current in-game Day: {self.app.player.day}\n"
+            f"Current in-game Date: {rich_date}\n"
             f"Current in-game Time: {self.app.player.time}\n"
             f"Current in-game Turn: {self.app.player.turn}\n"
             f"Stats: {stats_str}"
+            f"{calendar_context}"
         )
         context_data += status_context
 
@@ -202,9 +212,13 @@ After outputting all tags, summarize the first starting turn, describe the surro
                 model=MODEL,
                 config=types.GenerateContentConfig(
                     system_instruction=current_rules,
-                    temperature=0.9
+                    temperature = 1.0,
+                    thinking_config = types.ThinkingConfig(thinking_budget = -1),
+                    response_modalities = [],
+                    tools=[],
+                    safety_settings=[types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_NONE)]
                 ),
-                contents=prompt
+                contents=prompt                
             )
             ai_text = self.clean_quotes(response.text or "")
             if not ai_text: raise ValueError("Empty response")
@@ -291,14 +305,25 @@ After outputting all tags, summarize the first starting turn, describe the surro
             final_display_text = clean_pattern.sub("", display_ai_text)
             final_display_text = re.sub(r'\n{3,}', '\n\n', final_display_text).strip()
             
+            if "Processing" in self.app.notebook_widgets:
+                processing_tab = self.app.notebook_widgets["Processing"]
+                if hasattr(processing_tab, 'get_text'):
+                    self.app.after(0, lambda: processing_tab.check_active_tasks(self.app.get_day(), self.app.get_time()))
+                else: logging.warning("Processing tab does not have attribute 'check_active_tasks'.")
+                if hasattr(processing_tab, 'refresh_display'):
+                    self.app.after(0, lambda: processing_tab.refresh_display())
+                else: logging.warning("Processing tab does not have attribute 'refresh_display'.")
+            else: logging.warning(f"No processing tab in notebook widgets. Existing notebook widgets: {self.app.notebook_widgets}")
             
             trim_markers = ["Possible Actions:", "Suggested Actions:", "### Actions", "What would you like to do?", "What do you do?", "What do you do now?"]
+            text_to_save = final_display_text
             
             for marker in trim_markers:
                 if marker in final_display_text:
                     parts = final_display_text.split(marker, 1)
                     main_body = parts[0].strip()
                     options_string = parts[1].strip()
+                    text_to_save = main_body
                     
                     # Convert inline hyphens or asterisks into proper markdown newlines
                     # This targets spaces followed by a dash/asterisk (e.g., " - " becomes "\n- ")
@@ -317,8 +342,7 @@ After outputting all tags, summarize the first starting turn, describe the surro
             final_history_text = re.sub(r'\n{3,}', '\n\n', final_history_text).strip()
             if final_display_text and len(final_display_text) > 8:
                 self.app.story_tab.print_text(final_display_text, sender="")
-                text_to_save = final_history_text
-            else: text_to_save = ""
+            else: logging.warning(f"No text to save in message \n\n{final_display_text}")
                 
                 
             if "History" in self.app.notebook_widgets:
@@ -420,10 +444,11 @@ class TagParser:
                 self.app.notebook_widgets["Quests"].complete_quest(q_name)
                 logging.info(f"Completed quest: {q_name}")
 
-        status_match = re.search(r"\[\[STATUS:\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL)
+        status_match = re.search(r"\[\[STATUS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text)
         if status_match:
             loc = status_match.group(1).strip()
             mins_str = status_match.group(2).strip()
+            weather = status_match.group(3).strip()
             
             try:
                 mins_to_add = 0 if mins_str.upper() == "AUTO" else int(float(mins_str))
@@ -431,9 +456,11 @@ class TagParser:
                 logging.error(f"AI passed invalid minutes: {mins_str}")
                 mins_to_add = 0
                 
+            # The system handles temperature and season generation automatically now
             self.app.player.update_world_state(
                 location=loc,
-                minutes_to_add=mins_to_add
+                minutes_to_add=mins_to_add,
+                weather=weather
             )
                     
             self.app._sync_player_state_to_ui()
@@ -441,18 +468,39 @@ class TagParser:
         for match in re.finditer(r"\[\[RECIPE:\s*(.*?)\]\]", ai_text, re.DOTALL):
             res = self.app.notebook_widgets["Recipes"].add_recipe_from_tag(match.group(1))
             if res: logging.info(res)
-                    
-        for match in re.finditer(r"\[\[START_PROCESS:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL):
-            p_name = match.group(1).strip()
-            p_desc = match.group(2).strip()
             
+        for match in re.finditer(r"\[\[ADD_XP:\s*(.*?)\]\]", ai_text, re.DOTALL):
+            parts = [p.strip() for p in match.group(1).split("|")]
+            if len(parts) == 2:
+                skill_name, xp_amount = parts[0], parts[1]
+                try:
+                    xp_amount_to_int = int(xp_amount)
+                    self.app.notebook_widgets["Skills"].add_xp(skill_name, xp_amount_to_int)
+                except Exception as e:
+                    logging.exception(f"Error in [[ADD_XP]] tag: {e}")
+            else:
+                logging.warning(f"[[ADD_XP]] tag had invalid number of arguments. Expected 2 arguments, but got {len(parts)}. Argument: {match}.")
+                    
+        for match in re.finditer(r"\[\[START_PROCESS:\s*(.*?)\]\]", ai_text, re.DOTALL):
+            # Capture the inside of the tag and split it manually
+            parts = [p.strip() for p in match.group(1).split("|")]
+            
+            # Failsafe: Ensure the AI provided all 4 parts
+            if len(parts) >= 4:
+                p_name, p_desc, p_time, p_yield = parts[0], parts[1], parts[2], parts[3]
+            elif len(parts) == 3:
+                # Failsafe: If the AI forgot the yield, default to 1 instead of crashing/bleeding
+                p_name, p_desc, p_time, p_yield = parts[0], parts[1], parts[2], "1"
+            else:
+                logging.error(f"Malformed START_PROCESS tag ignored: {match.group(0)}")
+                continue
+                
             try:
-                p_slots = int(float(match.group(3).strip()))
+                p_slots = int(float(p_time))
             except ValueError:
-                logging.error(f"AI passed invalid time for process: {match.group(3)}")
+                logging.error(f"AI passed invalid time for process: {p_time}")
                 p_slots = 60 # Fallback to 1 hour
                 
-            p_yield = match.group(4).strip()
             res = self.app.notebook_widgets["Processing"].add_timed_process(p_name, p_desc, p_slots, self.app.player.day, self.app.player.time, p_yield)
             if res: logging.info(res)
             
@@ -460,12 +508,15 @@ class TagParser:
             res = self.app.notebook_widgets["Processing"].remove_process(match.group(1).strip())
             if res: logging.info(res)
             
-        for match in re.finditer(r"\[\[START_PROJECT:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*([\d.]+)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL):
-            p_name = match.group(1).strip()
-            p_desc = match.group(2).strip()
-            work_required = match.group(3).strip()
-            skill_name = match.group(4).strip()
-            p_yield = match.group(5).strip()
+        for match in re.finditer(r"\[\[START_PROJECT:\s*(.*?)\]\]", ai_text, re.DOTALL):
+            parts = [p.strip() for p in match.group(1).split("|")]
+            
+            if len(parts) >= 5:
+                p_name, p_desc, work_required, skill_name, p_yield = parts[0], parts[1], parts[2], parts[3], parts[4]
+            else:
+                logging.error(f"Malformed START_PROJECT tag ignored: {match.group(0)}")
+                continue
+                
             lvl = self.app._get_skill_level(skill_name)
             res = self.app.notebook_widgets["Processing"].add_project(p_name, p_desc, work_required, skill_name, lvl, p_yield)
             if res: logging.info(res)
@@ -483,18 +534,21 @@ class TagParser:
             
         for match in re.finditer(r"\[\[SECRET:\s*(.*?)\]\]", ai_text, re.DOTALL):
             try:
-                # --- FIXED: Extract the actual text generated by the AI ---
                 new_secret = match.group(1).strip()
                 
-                if not self.app.secret_path:
-                    with open(self.app.secret_path, "w", encoding="utf-8") as f:
-                        f.write("")
-                else:
-                    with open(self.app.secret_path, "a", encoding="utf-8") as f:
+                if self.app.secret_path:
+                    # Check if the file physically exists on the disk, rather than checking if the string is empty
+                    mode = "a" if os.path.exists(self.app.secret_path) else "w"
+                    
+                    with open(self.app.secret_path, mode, encoding="utf-8") as f:
                         f.write(f"\n{new_secret}\n")
+                        
+                    # Safely apply the hidden attribute only if the user is on Windows
+                    if os.name == 'nt':
                         import subprocess
                         subprocess.check_call(["attrib", "+H", self.app.secret_path])
-                        logging.info(f"Success! Wrote secret .txt file with path {self.app.secret_path}")
+                        
+                    logging.info(f"Success! Wrote secret .txt file with path {self.app.secret_path}")
             except Exception as e:
                     logging.error(f"Error writing secret: {e}")
                     
@@ -605,18 +659,33 @@ class TagParser:
             if not raw_data:
                 return ""
             
-            try:
-                # csv.reader safely splits by commas while ignoring commas inside quotes
-                parsed_list = list(csv.reader([raw_data], skipinitialspace=True))[0]
-            except Exception as e:
-                logging.error(f"Failed to parse MERCHANT tag: {e}")
-                return "(Merchant inventory is unreadable)"
+            # 1. Handle multi-line strings cleanly by splitting into lines first
+            raw_lines = [line.strip() for line in raw_data.split('\n') if line.strip()]
+            
+            parsed_items = []
+            for line in raw_lines:
+                try:
+                    # csv.reader safely handles commas between items (e.g., 'Item1', 'Item2')
+                    # while ignoring commas inside quoted descriptions.
+                    items_in_line = list(csv.reader([line], skipinitialspace=True))[0]
+                    for item in items_in_line:
+                        clean_item = item.strip().strip('\'"')
+                        if clean_item:
+                            parsed_items.append(clean_item)
+                except Exception as e:
+                    logging.error(f"Failed to parse line in merchant tag: {e}")
+                    # Failsafe: if csv.reader fails, just add the whole line
+                    clean_line = line.strip().strip('\'"')
+                    if clean_line:
+                        parsed_items.append(clean_line)
 
             table_data = []
             history_items = []
-            for item in parsed_list:
-                # Clean up any lingering quotes and split by the pipe character
-                item = item.strip().strip('\'"')
+            max_cols = 3 # We start by expecting at least Name, Desc, Price
+            headers = ["Item Name", "Description", "Price"]
+
+            for item in parsed_items:
+                # Split by pipe and clean whitespace
                 parts = [p.strip() for p in item.split('|')]
                 
                 if len(parts) >= 3:
@@ -624,39 +693,51 @@ class TagParser:
                     description = parts[1]
                     price_raw = parts[2]
                     
-                    # Convert the raw base unit integer into nicely formatted currency
                     try:
                         price_val = int(price_raw)
                         formatted_price = self.app.player.get_formatted_currency(price_val)
                     except ValueError:
-                        formatted_price = price_raw # Fallback if AI hallucinates text instead of an int
+                        formatted_price = price_raw 
                         
-                    table_data.append([name, description, formatted_price])
+                    row_data = [name, description, formatted_price]
                     
-                    # --- Include the description in the history summary! ---
-                    # We wrap the name in single quotes and use a hyphen to cleanly separate the description.
+                    # --- FIX: Dynamically capture any extra columns the AI generates! ---
+                    if len(parts) > 3:
+                        row_data.extend(parts[3:])
+                        max_cols = max(max_cols, len(row_data))
+                        
+                    table_data.append(row_data)
                     history_items.append(f"'{name}' - {description} ({formatted_price})") 
-                else:
-                    # Fallback if the AI messes up the pipe formatting
-                    table_data.append(parts + [""] * (3 - len(parts)))
-                    if len(parts) > 0:
-                        history_items.append(f"'{parts[0]}'")
+                elif len(parts) > 0 and parts[0]:
+                    # Fallback if the AI really messes up the formatting
+                    table_data.append(parts)
+                    history_items.append(f"'{parts[0]}'")
             
             if not table_data:
                 return "\n*(This merchant has nothing for sale.)*\n"
+                
+            # Pad all rows with empty strings so they match max_cols (prevents Tabulate from crashing)
+            for row in table_data:
+                while len(row) < max_cols:
+                    row.append("")
+                    
+            # Dynamically add headers for the extra columns
+            while len(headers) < max_cols:
+                # The 4th column is almost always Quantity/Stock based on AI behavior
+                if len(headers) == 3:
+                    headers.append("Quantity / Stock")
+                else:
+                    headers.append("Extra Info")
                 
             if is_history:
                 items_str = ", ".join(history_items)
                 return f"\n*(OOG: A merchant table is listed detailing the following items: {items_str}.)*\n"
             else:
-                # Create the 3xY rounded grid!
-                headers = ["Item Name", "Description", "Price"]
                 grid = tabulate(table_data, headers=headers, tablefmt="rounded_grid")
                 formatted_html = (
                 f"<pre style=\"font-family: Consolas, 'Courier New', monospace; "
                 f"line-height: 1.0; padding: 6px;\">\n\n{grid}\n</pre>\n\n"
                 )
-                # Pad with newlines so it renders nicely in the text box
                 return f"\n{formatted_html}\n"
                 
         # Find all instances of [[DISPLAY_CURRENCY: X]] and swap them

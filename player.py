@@ -5,17 +5,20 @@ import time_utils
 class Player:
     def __init__(self):
         self.name = "Unknown"
+        self.weather = "Sunny"
         self.karmic_streak = 0
         self.save_path = None
         self.tracked_stats = []
         self.base_currency = 0
         self.world_currencies = []
+        self.calendar_settings = {}
         
         # World State (often tied to the player in single-player RPGs)
         self.location = "Unknown"
         self.turn = 1
         self.day = 1
         self.time = "12:00 PM"
+        self.temperature = 76
         self.quests = []
 
     def load_from_dict(self, data):
@@ -24,11 +27,16 @@ class Player:
         self.turn = int(data.get("turn", 1))
         self.day = data.get("day", 1)
         self.time = data.get("time", "Start")
+        self.weather = data.get("weather", "Sunny")
+        self.temperature = data.get("temperature", 76)
         self.base_currency = int(data.get("base_currency", 0))
         self.quests = data.get("quests", [])
         
         if "world_currencies" in data:
             self.world_currencies = data["world_currencies"]
+            
+        if "calendar_settings" in data:
+            self.calendar_settings = data["calendar_settings"]
             
         if "tracked_stats" in data:
             self.tracked_stats = data["tracked_stats"]
@@ -39,10 +47,14 @@ class Player:
             "location": self.location,
             "turn": str(self.turn),
             "day": self.day,
+            "formatted_date": time_utils.calculate_calendar_date(self.day, self.calendar_settings),
             "time": self.time,
+            "weather": self.weather,
+            "temperature": self.temperature,
             "base_currency": self.base_currency,
             "tracked_stats": self.tracked_stats,
             "world_currencies": self.world_currencies,
+            "calendar_settings": self.calendar_settings,
             "quests": self.quests
         }
     
@@ -50,19 +62,31 @@ class Player:
         if self.world_currencies: return self.world_currencies
         else: return ""
 
-    def update_world_state(self, location: str, minutes_to_add: int) -> None:
+    def update_world_state(self, location: str, minutes_to_add: int, weather: str) -> None:
         """Updates the tracking variables and automatically rolls over time/days."""
         self.turn += 1
 
-        if location and str(location).strip().upper() != "AUTO": 
-            self.location = location
-        
         try:
-            # Replaces string slicing with our safe 24-hour wrap-around utility
-            self.day, self.time = time_utils.advance_time(self.day, self.time, minutes_to_add)
+            old_day = self.day
+            old_weather = self.weather
+            
+            minutes_to_add_ = 0 if str(minutes_to_add).upper() == "AUTO" else int(float(minutes_to_add))
+            self.day, self.time = time_utils.advance_time(self.day, self.time, minutes_to_add_)
             logging.info(f"Time successfully advanced to Day {self.day}, {self.time}")
+            
+            if location and str(location).strip().upper() != "AUTO": 
+                self.location = location
+            if weather and str(weather).strip().upper() != "AUTO":
+                self.weather = weather
+                
+            # --- Automated Season & Temperature Logic ---
+            # Only randomize the temperature if the weather shifts or a new day dawns
+            if self.day != old_day or self.weather != old_weather:
+                _, current_season = time_utils.get_month_and_season(self.day, self.calendar_settings)
+                self.temperature = time_utils.generate_dynamic_temperature(current_season, self.weather)
+                
         except Exception as error:
-            logging.error(f"Failed to update world time: {error}")
+            logging.error(f"Failed to update world: {error}")
 
     def modify_stat(self, stat_name, raw_value):
         """

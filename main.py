@@ -92,7 +92,19 @@ class QtPanelAdapter:
         self._ui = dispatcher
 
     def get_text(self) -> str:
-        return str(self._ui.call_blocking(lambda: self._panel.get_text()))
+        """
+        Safely retrieves the text from the underlying panel.
+        If the panel does not have a get_text method, it catches the missing attribute 
+        and returns an empty string to prevent silent UI thread crashes.
+        """
+        if not hasattr(self._panel, "get_text"):
+            return ""
+            
+        try:
+            return str(self._ui.call_blocking(lambda: self._panel.get_text()))
+        except Exception as error:
+            logging.error(f"Failed to retrieve text from panel: {error}")
+            return ""
 
     def set_text(self, text: str) -> None:
         self._ui.call_blocking(lambda t=text: self._panel.set_text(t))
@@ -101,7 +113,8 @@ class QtPanelAdapter:
         self._ui.call_blocking(lambda p=base_path: self._panel.set_base_path(p))
 
     def save_now(self) -> None:
-        if self != None and hasattr(self._ui.call_blocking, "save_now"): self._ui.call_blocking(self._panel.save_now)
+        if self._panel is not None and hasattr(self._panel, "save_now"): 
+            self._ui.call_blocking(self._panel.save_now)
 
     def __getattr__(self, name):
         """
@@ -153,7 +166,9 @@ class QtAppContext:
                 "World": QtPanelAdapter(win.world_panel, self.ui),
                 "Journal": QtPanelAdapter(win.journal_panel, self.ui),
                 "History": QtPanelAdapter(win.history_panel, self.ui),
-                "Quests": QtPanelAdapter(win.quests_panel, self.ui)
+                "Quests": QtPanelAdapter(win.quests_panel, self.ui),
+                "Sales Ledger": QtPanelAdapter(win.sales_ledger_panel, self.ui),
+                "Calendar": QtPanelAdapter(win.calendar_panel, self.ui)
             }
 
         self._sync_player_state_to_ui()
@@ -178,31 +193,33 @@ class QtAppContext:
         pattern = r"\\?\*?\(OOG: A merchant table is listed detailing the following items:\s*(.*?)\.\)\\?\*?"
         
         # Added flags=re.DOTALL so the search can span across the hard line breaks in the Markdown file
-        logging.info(f"Regex matches for the merchant table pattern: {re.search(pattern, text, flags=re.DOTALL)}")
+        #logging.info(f"Regex matches for the merchant table pattern: {re.search(pattern, text, flags=re.DOTALL)}")
         
         def replace_with_grid(match):
             """
             Callback function for re.sub to process each matched merchant table.
             """
-            logging.info("Replacing merchant grid now!")
-            
-            # Extract the raw items string and strip out the newlines so our inner regex 
-            # doesn't get confused by random line breaks in the middle of item names/descriptions.
             raw_items_string = match.group(1)
             clean_items_string = raw_items_string.replace('\n', ' ').replace('\r', '')
             
             table_data = []
             
-            # Extract Group 1 (Name), Group 2 (Description), and Group 3 (Price)
-            for item_match in re.finditer(r"'(.*?)'\s*-\s*(.*?)\s*\(([^)]+)\)", clean_items_string):
-                logging.info(f"Current item match: {item_match}")
+            # --- SAFER REGEX ---
+            # Group 1: Name (Allows internal apostrophes via backtracking)
+            # Group 2: Description (Optional)
+            # Group 3: Price (Optional)
+            pattern = r"'(.+?)'(?:\s*-\s*(.*?)\s*\(([^)]+)\))?(?=\s*,|\s*$)"
+            
+            for item_match in re.finditer(pattern, clean_items_string):
                 item_name = item_match.group(1).strip()
-                item_description = item_match.group(2).strip()
-                item_price = item_match.group(3).strip()
+                
+                # Safely assign description and price only if the regex actually found them
+                item_description = item_match.group(2).strip() if item_match.group(2) else ""
+                item_price = item_match.group(3).strip() if item_match.group(3) else ""
+                
                 table_data.append([item_name, item_description, item_price])
                 
             if table_data:
-                logging.info(f"Current table data: {table_data}")
                 headers = ["Item Name", "Description", "Price"]
                 grid = tabulate(table_data, headers=headers, tablefmt="rounded_grid")
                 
@@ -210,11 +227,10 @@ class QtAppContext:
                 f"<pre style=\"font-family: Consolas, 'Courier New', monospace; "
                 f"line-height: 1.0; padding: 6px;\">\n\n{grid}\n</pre>\n\n"
                 )
-                logging.info(f"Formatted HTML generated successfully.")
                 return f"{formatted_html}"
-                
-            logging.error("Failed to parse individual items from merchant table string.")
-            return match.group(0) 
+            else: 
+                logging.error(f"Failed to parse individual items from merchant table. Raw string: {clean_items_string}")
+                return match.group(0)
             
         # IMPORTANT: Apply flags=re.DOTALL here as well so the substitution catches the multi-line match
         return re.sub(pattern, replace_with_grid, text, flags=re.DOTALL)
@@ -402,11 +418,11 @@ class QtAppContext:
                         last_gm_message = "\n".join(gm_response_lines).strip()
                 
             if last_gm_message:
-                logging.info("There is a last gm message, reconstructing merchant tables now!")
+                #logging.info("There is a last gm message, reconstructing merchant tables now!")
                 last_gm_message = self._reconstruct_merchant_tables(last_gm_message)
                 self.story_tab.print_text(last_gm_message + "\n\n", sender="")
             else:
-                logging.info("There is NOT a last gm message!")
+                #logging.info("There is NOT a last gm message!")
                 self.story_tab.print_text(f"\n")
             
         except Exception as error:
@@ -436,6 +452,10 @@ class QtAppContext:
         total = self.player.perform_skill_check(skill_name)
         #self.story_tab.print_text(msg, sender="System")
         return total
+    
+    def get_day(self) -> int: return self.player.day
+    
+    def get_time(self) -> str: return self.player.time
 
     def _sync_player_state_to_ui(self) -> None:
         """Thread-safe push of Player status into the Qt status header."""
@@ -446,8 +466,10 @@ class QtAppContext:
                 self.win.story_panel.set_status(
                     turn=s.get("turn") or 1,
                     location=s.get("location") or "Character Creation",
-                    day=f"{s.get('day')}" or "Day 1",
+                    day=s.get("formatted_date", f"Day {s.get('day')}"), # Pass the rich date here!
                     time=s.get("time") or "12:00 A.M.",
+                    weather=s.get("weather") or "Sunny",
+                    temperature=s.get("temperature") or 76,
                     dynamic_stats=s.get("tracked_stats", [])
                 )
             except Exception as e:
@@ -497,6 +519,8 @@ def main() -> int:
     win.inventory_panel.app = app_ctx
     win.ai_manager = AIManager(app_ctx)
     win.quests_panel.app = app_ctx
+    win.calendar_panel.app = app_ctx
+    win.processing_panel.app = app_ctx
     win.setWindowTitle(f"{save_name}")
     win.show()
     
@@ -509,6 +533,7 @@ def main() -> int:
         savegame_path = os.path.join(save_path, "savegame.json")
         secret_path = os.path.join(save_path, "secret.txt")
         world_path = os.path.join(save_path, "world.md")
+        sales_ledger_path = os.path.join(save_path, "sales_ledger.md")
         try:
             if os.path.exists(savegame_path):
                 app_ctx.load_savegame_state(save_path)
@@ -520,6 +545,8 @@ def main() -> int:
                 with open(secret_path, "w", encoding="utf-8") as f: f.write("")
             if not os.path.exists(world_path): 
                 with open(world_path, "w", encoding="utf-8") as f: f.write("")
+            if not os.path.exists(sales_ledger_path): 
+                with open(sales_ledger_path, "w", encoding="utf-8") as f: f.write("")
         except Exception as e:
             logging.exception(f"Could not boot selected save: {e}")
 

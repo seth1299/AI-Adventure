@@ -1,6 +1,6 @@
 # qt_ui/quests_panel.py
 
-import logging
+import logging, time_utils
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QTextBrowser
 from PySide6.QtGui import QFont
 from tabulate import tabulate
@@ -45,10 +45,12 @@ class QuestsPanel(QWidget):
                 description = quest.get("description", "No description provided.")
                 turn_in = quest.get("turn_in", "Unknown")
                 reward = quest.get("reward", "Unknown")
+                date_received = quest.get("date_received", "Unknown")
                 
                 # Using a 2-column vertical table format so long descriptions don't cause horizontal overflow
                 table_data = [
                     ["Quest Giver", giver],
+                    ["Date Received", date_received],
                     ["Description", description],
                     ["How to Complete", turn_in],
                     ["Reward", reward]
@@ -76,13 +78,20 @@ class QuestsPanel(QWidget):
             for q in self.app.player.quests:
                 if q.get("name", "").lower() == name.lower():
                     return 
+                
+            # Generate the current date string
+            current_date = time_utils.calculate_calendar_date(
+                self.app.player.day, 
+                getattr(self.app.player, 'calendar_settings', {})
+            )
                     
             self.app.player.quests.append({
                 "name": name,
                 "giver": giver,
                 "description": description,
                 "turn_in": turn_in,
-                "reward": reward
+                "reward": reward,
+                "date_received": current_date
             })
             self.refresh_display()
         except Exception as e:
