@@ -37,10 +37,17 @@ class StatRow(QFrame):
         self.max_input.setValue(max_val)
         
         self.value_input = QSpinBox()
-        self.value_input.setRange(-10000, 10000) 
+        # 1. Dynamically set the range of the value input to strictly match the min and max
+        # This ensures that when the dialog first loads, the value is instantly clamped.
+        self.value_input.setRange(min_val, max_val) 
         self.value_input.setValue(value)
         self.value_input.setReadOnly(True)
         self.value_input.setToolTip("Tracked by AI. Cannot be changed manually.")
+
+        # 2. Connect the min/max boxes so they automatically update the value box's limits in real-time.
+        # If the Player lowers the Max below the current Value, Qt will natively clamp the Value down to match!
+        self.min_input.valueChanged.connect(self.value_input.setMinimum)
+        self.max_input.valueChanged.connect(self.value_input.setMaximum)
         
         self.btn_remove = QPushButton("X")
         self.btn_remove.setFixedWidth(30)

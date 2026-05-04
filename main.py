@@ -11,9 +11,10 @@ from sound_manager import SoundManager
 from config import SAVES_DIR, BASE_SOUNDS_DIR, VALID_SOUND_FILE_NAMES, DEFAULT_RULES
 from qt_ui.main_menu_dialog import MainMenuDialog
 import threading
-from PySide6.QtWidgets import QApplication, QDialog, QProxyStyle, QStyle, QStyleOptionTab
+from PySide6.QtWidgets import QApplication, QDialog
 from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt, QThread, QSize
 from queue import Queue
+from pathlib import Path
 
 class _UiDispatcher(QObject):
     run_now = Signal(object)          # callable
@@ -138,12 +139,12 @@ class QtAppContext:
 
         self.current_adventure_path = None
 
-        self.secret_path = os.path.join(SAVES_DIR, "secret.txt")
-        self.world_path = os.path.join(SAVES_DIR, "world.md")
+        self.secret_path = str(SAVES_DIR / "secret.txt")
+        self.world_path = str(SAVES_DIR / "world.md")
         self.conversation_history = []
 
         self.player = Player()
-        self.sound_manager = SoundManager(BASE_SOUNDS_DIR)
+        self.sound_manager = SoundManager(str(BASE_SOUNDS_DIR))
 
         # API surface AIManager expects
         self.story_tab = QtStoryTabAdapter(win.story_panel, self.ui)
@@ -295,15 +296,17 @@ class QtAppContext:
                 "current_music": self.sound_manager.current_music
             }
             history_path = os.path.join(self.current_adventure_path, "savegame.json")
-            logging.info(f"Saved to {history_path}.")
+            #logging.info(f"Saved to {history_path}.")
             FileManager.save_json_data(history_path, save_data)
         except Exception as error:
             logging.error(f"Qt save error: savegame.json write failed. Details: {error}")
     
     def _resolve_save_path_for_recap(self) -> str | None:
-        """Pick a save folder to read savegame.json from.
+        """
+        Pick a save folder to read savegame.json from.
         - Prefer current_adventure_path if set.
         - Otherwise, pick the most recently modified save folder containing savegame.json.
+        Utilizes pathlib for directory iteration and stat checking.
         """
         if self.current_adventure_path:
             return self.current_adventure_path
@@ -311,20 +314,25 @@ class QtAppContext:
         try:
             best_path: str | None = None
             best_mtime = -1.0
-            for name in os.listdir(SAVES_DIR):
-                p = os.path.join(SAVES_DIR, name)
-                if not os.path.isdir(p):
+            
+            # Iterate over the items in the SAVES_DIR Path object
+            for save_directory in SAVES_DIR.iterdir():
+                if not save_directory.is_dir():
                     continue
-                sg = os.path.join(p, "savegame.json")
-                if not os.path.exists(sg):
+                    
+                savegame_file = save_directory / "savegame.json"
+                if not savegame_file.exists():
                     continue
-                mtime = os.path.getmtime(sg)
-                if mtime > best_mtime:
-                    best_mtime = mtime
-                    best_path = p
+                    
+                # Access the modification time via the Path stat object
+                modification_time = savegame_file.stat().st_mtime
+                if modification_time > best_mtime:
+                    best_mtime = modification_time
+                    best_path = str(save_directory)
+                    
             return best_path
-        except Exception:
-            logging.exception("Failed to resolve save path for recap")
+        except Exception as recap_resolution_error:
+            logging.exception(f"Failed to resolve save path for recap. Exception details: {recap_resolution_error}")
             return None
         
     def load_savegame_state(self, save_path: str) -> dict:
@@ -509,7 +517,7 @@ def main() -> int:
         return 0
 
     save_name = menu.selected_save
-    save_path = os.path.join(SAVES_DIR, save_name)
+    save_path = str(SAVES_DIR / save_name)
 
     win = MainWindow()
     app_ctx = QtAppContext(win)
@@ -530,25 +538,27 @@ def main() -> int:
         FileManager.update_logger_path(save_name)
         app_ctx.player.set_save_path(save_path)
 
-        savegame_path = os.path.join(save_path, "savegame.json")
-        secret_path = os.path.join(save_path, "secret.txt")
-        world_path = os.path.join(save_path, "world.md")
-        sales_ledger_path = os.path.join(save_path, "sales_ledger.md")
+        # Utilize pathlib to construct subsequent paths cleanly
+        save_directory_path = Path(save_path)
+        savegame_path = str(save_directory_path / "savegame.json")
+        secret_path = str(save_directory_path / "secret.txt")
+        world_path = str(save_directory_path / "world.md")
+        sales_ledger_path = str(save_directory_path / "sales_ledger.md")
+        
         try:
             if os.path.exists(savegame_path):
                 app_ctx.load_savegame_state(save_path)
                 win._load_ui_state(save_path)
                 app_ctx.generate_recap()
                 return
-            else: logging.warning("No save game path exists.")
-            if not os.path.exists(secret_path): 
-                with open(secret_path, "w", encoding="utf-8") as f: f.write("")
-            if not os.path.exists(world_path): 
-                with open(world_path, "w", encoding="utf-8") as f: f.write("")
-            if not os.path.exists(sales_ledger_path): 
-                with open(sales_ledger_path, "w", encoding="utf-8") as f: f.write("")
-        except Exception as e:
-            logging.exception(f"Could not boot selected save: {e}")
+            else: 
+                logging.warning("No save game path exists.")
+            FileManager.create_file_if_not_exists(secret_path)
+            FileManager.create_file_if_not_exists(world_path)
+            FileManager.create_file_if_not_exists(sales_ledger_path)
+                
+        except Exception as boot_sequence_error:
+            logging.exception(f"Could not boot selected save. Exception details: {boot_sequence_error}")
 
         app_ctx.current_adventure_path = save_path
         app_ctx.conversation_history = []

@@ -6,65 +6,42 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextBrowser
 from tabulate import tabulate
 from file_manager import FileManager
+from qt_ui.base_panel import BasePanel
+from pathlib import Path
 
-class InventoryPanel(QWidget):
-    """Qt Inventory panel that reads/writes inventory.json and renders a readable table.
-
+class InventoryPanel(BasePanel):
+    """
+    Qt Inventory panel that reads/writes inventory.json and renders a readable table.
+    Inherits toolbar and layout management from BasePanel.
     """
 
     def __init__(self, parent: QWidget | None = None, app_context=None) -> None:
-        super().__init__(parent)
-        self.data_path: str = ""
-        self.app = app_context
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(8)
-
-        # ---- Toolbar ----
-        bar = QHBoxLayout()
-        bar.setSpacing(8)
-
-        self.lbl_title = QLabel("Inventory")
-        self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.lbl_title.hide()
-        bar.addWidget(self.lbl_title, stretch=1)
-
-        self.lbl_state = QLabel("")
-        self.lbl_state.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        bar.addWidget(self.lbl_state)
-
-        self.btn_reload = QPushButton("Reload")
-        self.btn_reload.setFixedWidth(90)
-        self.btn_reload.clicked.connect(self.refresh_display)
-        bar.addWidget(self.btn_reload)
-
-        self.btn_save = QPushButton("Save")
-        self.btn_save.setFixedWidth(90)
-        self.btn_save.clicked.connect(self._save_current)
-        bar.addWidget(self.btn_save)
-
-        root.addLayout(bar)
+        # Pass configuration up to the parent class
+        super().__init__(title="Inventory", parent=parent, app_context=app_context, show_save_button=True)
 
         # ---- Display ----
+        # We append the specific display widget to the inherited root_layout
         self.display = QTextBrowser()
         self.display.setFont(QFont("Consolas", 11))
-        root.addWidget(self.display, stretch=1)
-        self._set_state("No save loaded")
+        self.root_layout.addWidget(self.display, stretch=1)
 
     # ---- Wiring ----
 
-    def set_base_path(self, save_folder: str) -> None:
+    def set_base_path(self, save_folder: str | Path) -> None:
         if not save_folder:
             return
+            
+        save_directory = Path(save_folder)
         try:
-            os.makedirs(save_folder, exist_ok=True)
-        except Exception:
-            logging.exception("Failed to ensure save folder exists")
+            save_directory.mkdir(parents=True, exist_ok=True)
+        except Exception as directory_creation_error:
+            logging.exception(f"Failed to ensure save folder exists: {directory_creation_error}")
 
-        self.data_path = os.path.join(save_folder, "inventory.json")
-        if not os.path.exists(self.data_path):
-            FileManager.save_json_data(self.data_path, {})
+        self.data_path = save_directory / "inventory.json"
+        
+        if not self.data_path.exists():
+            FileManager.save_json_data(str(self.data_path), {})
+            
         self.refresh_display()
         
     def _format_table_html(self, grid_text: str) -> str:
@@ -100,23 +77,24 @@ class InventoryPanel(QWidget):
     # ---- Data I/O ----
 
     def load_data(self) -> dict:
-        if not self.data_path or not os.path.exists(self.data_path):
+        if not self.data_path or not self.data_path.exists():
             return {}
         try:
-            data = FileManager.load_json_data(self.data_path)
+            # Cast Path to string for FileManager compatibility
+            data = FileManager.load_json_data(str(self.data_path))
             return data if isinstance(data, dict) else {}
-        except Exception as e:
-            logging.error(f"InventoryPanel: load failed: {e}")
+        except Exception as json_load_error:
+            logging.error(f"InventoryPanel: load failed: {json_load_error}")
             return {}
 
     def save_data(self, data: dict) -> None:
         if not self.data_path:
             return
         try:
-            FileManager.save_json_data(self.data_path, data)
+            FileManager.save_json_data(str(self.data_path), data)
             self._set_state("Saved")
-        except Exception:
-            logging.exception("InventoryPanel: save failed")
+        except Exception as json_save_error:
+            logging.exception(f"InventoryPanel: save failed: {json_save_error}")
         self.refresh_display()
 
     def _save_current(self) -> None:
@@ -124,13 +102,6 @@ class InventoryPanel(QWidget):
         self.save_data(self.load_data())
 
     # ---- Rendering ----
-    
-    def _get_player(self):
-        """Safely locate the Player object regardless of how the app context was injected."""
-        if not self.app: return None
-        if hasattr(self.app, 'player'): return self.app.player
-        if hasattr(self.app, 'app') and hasattr(self.app.app, 'player'): return self.app.app.player
-        return None
 
     def refresh_display(self) -> None:
         if not self.data_path:

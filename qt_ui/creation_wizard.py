@@ -290,13 +290,13 @@ class CreationWizard(QWizard):
         # Gather skills
         skills = []
         for level, name_w, desc_w in self.skills_page.skill_inputs:
-            s_name = name_w.text().strip()
-            if s_name:  # Only add if the player actually typed a name
-                skills.append({
-                    "level": level,
-                    "name": s_name,
-                    "desc": desc_w.text().strip()
-                })
+            # If the user leaves it blank, we pass "Unknown Skill Name" to force the AI to invent one
+            s_name = name_w.text().strip() or "Unknown Skill Name"
+            skills.append({
+                "level": level,
+                "name": s_name,
+                "desc": desc_w.text().strip() or "Unknown Skill Description"
+            })
 
         return {
             "world": {

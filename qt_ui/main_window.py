@@ -27,6 +27,8 @@ from qt_ui.help_dialog import HelpDialog
 from qt_ui.quest_panel import QuestsPanel
 from qt_ui.calendar_dialog import CalendarManagerDialog
 from .calendar_panel import CalendarPanel
+from qt_ui.equipment_dialog import EquipmentManagerDialog
+from pathlib import Path
 
 class MainWindow(QMainWindow):
     """
@@ -162,6 +164,9 @@ class MainWindow(QMainWindow):
         action_save = game_menu.addAction("Save / Load Game")
         action_save.triggered.connect(self._on_menu_requested)
         
+        action_equipment = game_menu.addAction("Manage Equipment")
+        action_equipment.triggered.connect(self.open_equipment_menu)
+        
         action_currencies = game_menu.addAction("Manage Currencies")
         action_currencies.triggered.connect(self.open_currency_menu)
         
@@ -179,13 +184,33 @@ class MainWindow(QMainWindow):
         game_menu.addSeparator()
         action_help = game_menu.addAction("Help")
         action_help.triggered.connect(self.open_help_menu)
-
         # --- 2. View Menu (NEW) ---
         view_menu = menu_bar.addMenu("View")
         
         # Qt's QDockWidget comes with a built-in toggle action that acts as a checkbox!
         for title, dock in self._docks.items():
             view_menu.addAction(dock.toggleViewAction())
+            
+    def open_equipment_menu(self):
+        """Opens the Equipment Manager and saves the game if changes were made."""
+        if self.app is None: return
+        try:
+            dialog = EquipmentManagerDialog(self, self.app)
+            if dialog.exec(): 
+                # Grab the data from the dialog
+                new_loadout = dialog.get_final_equipment()
+                
+                # Update the player class
+                self.app.player.equipment = new_loadout
+                
+                # Save immediately to lock it in!
+                self.app.save_game()
+                
+                self.story_panel.print_text("System: Equipment loadout updated.", sender="System")
+        except Exception as e:
+            error_msg = f"Error opening equipment menu: {str(e)}"
+            logging.exception(error_msg)
+            self.story_panel.print_text(error_msg, sender="System Error")
 
     def _add_dock(self, title: str, widget: QWidget, area: Qt.DockWidgetArea) -> None:
         dock = QDockWidget(title, self)
@@ -244,14 +269,17 @@ class MainWindow(QMainWindow):
             return
 
         save_name = dlg.selected_save
-        save_path = os.path.join(SAVES_DIR, save_name)
-        savegame_path = os.path.join(save_path, "savegame.json")
+        # Utilize pathlib for path construction
+        save_path_obj = SAVES_DIR / save_name
+        save_path = str(save_path_obj) # Cast to string for compatibility with app context
+        savegame_path = save_path_obj / "savegame.json"
 
         FileManager.update_logger_path(save_name)
-        self.setWindowTitle(f"AI RPG Adventure (Qt) - {save_name}")
+        self.setWindowTitle(f"AI RPG Adventure - {save_name}")
         self.story_panel.set_log_text("")
 
-        if os.path.exists(savegame_path):
+        # Check existence using the Path object
+        if savegame_path.exists():
             self.app.load_savegame_state(save_path)
             self._load_ui_state(save_path)
             self.app.generate_recap()
@@ -292,10 +320,10 @@ class MainWindow(QMainWindow):
     def _save_ui_state(self) -> None:
         """Saves the exact layout, dock positions, window size, and panel visibility."""
         if self.app and getattr(self.app, 'current_adventure_path', None):
-            ini_path = os.path.join(self.app.current_adventure_path, "ui_layout.ini")
+            ini_path = Path(self.app.current_adventure_path) / "ui_layout.ini"
             
             # QSettings handles the complex Qt serialization automatically
-            settings = QSettings(ini_path, QSettings.Format.IniFormat)
+            settings = QSettings(str(ini_path), QSettings.Format.IniFormat)
             settings.setValue("geometry", self.saveGeometry())
             settings.setValue("windowState", self.saveState())
             settings.setValue("volume_level", self.story_panel.music_volume)
@@ -314,12 +342,13 @@ class MainWindow(QMainWindow):
         Includes explicit type-casting for QSettings values to satisfy strict 
         type checkers and prevent runtime crashes from corrupted .ini data.
         """
-        ini_path = os.path.join(save_path, "ui_layout.ini")
-        if not os.path.exists(ini_path):
+        ini_file = Path(save_path) / "ui_layout.ini"
+        if not ini_file.exists():
             return
             
         try:
-            settings = QSettings(ini_path, QSettings.Format.IniFormat)
+            # QSettings requires a string for the file path
+            settings = QSettings(str(ini_file), QSettings.Format.IniFormat)
             
             # --- Layout Restoration ---
             raw_geometry = settings.value("geometry")
@@ -394,7 +423,7 @@ class MainWindow(QMainWindow):
                 self.story_panel.set_voice_by_name(str(raw_voice_name))
 
         except Exception as general_error:
-            logging.error(f"Critical failure while loading UI state from {ini_path}. Details: {general_error}")
+            logging.error(f"Critical failure while loading UI state from {ini_file}. Details: {general_error}")
 
     def open_currency_menu(self):
         try:

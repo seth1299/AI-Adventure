@@ -1,9 +1,10 @@
 # sound_manager.py
 import pygame, os, logging
+from pathlib import Path
 
 class SoundManager:
-    def __init__(self, sounds_dir):
-        self.sounds_dir = sounds_dir
+    def __init__(self, sounds_directory: str | Path):
+        self.sounds_directory = Path(sounds_directory)
         self.current_music = None
         self.is_muted = False
         
@@ -20,37 +21,40 @@ class SoundManager:
         """Streams music. Only one music track plays at a time."""
         if self.is_muted: return
         
-        track_path = os.path.join(self.sounds_dir, filename)
+        track_path = self.sounds_directory / filename
         
         # Don't restart if it's already playing
         if self.current_music == filename and pygame.mixer.music.get_busy():
             return
 
-        if os.path.exists(track_path):
+        # Check existence using the Path object method
+        if track_path.exists() and track_path.is_file():
             try:
-                # Fade out old track over 1 second
                 pygame.mixer.music.fadeout(1000)
-                pygame.mixer.music.load(track_path)
-                # -1 means loop forever, 0 means play once
+                # Pygame generally accepts strings, so we cast the Path object back to a string here
+                pygame.mixer.music.load(str(track_path))
                 loops = -1 if loop else 0
                 pygame.mixer.music.play(loops=loops, fade_ms=1000)
                 self.current_music = filename
-            except Exception as e:
-                logging.exception(f"Error playing music: {e}")
+            except Exception as music_playback_error:
+                logging.exception(f"Error playing music: {music_playback_error}")
         else:
             logging.error(f"Music file not found: {track_path}")
 
-    def play_sfx(self, filename):
+    def play_sfx(self, filename: str) -> None:
         """Plays a sound effect. Multiple SFX can overlap."""
         if self.is_muted: return
         
-        sfx_path = os.path.join(self.sounds_dir, filename)
-        if os.path.exists(sfx_path):
+        # Resolve the path using the pathlib division operator
+        sfx_path = self.sounds_directory / filename
+        
+        if sfx_path.exists() and sfx_path.is_file():
             try:
-                sound = pygame.mixer.Sound(sfx_path)
+                # Pygame Sound prefers strings for file paths
+                sound = pygame.mixer.Sound(str(sfx_path))
                 sound.play()
-            except Exception as e:
-                logging.error(f"Error playing SFX: {e}")
+            except Exception as sfx_playback_error:
+                logging.error(f"Error playing SFX: {sfx_playback_error}")
         else:
             logging.error(f"SFX file not found: {sfx_path}")
 

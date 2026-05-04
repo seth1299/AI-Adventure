@@ -1,6 +1,6 @@
 # config.py
-import os
-import platform
+import os, logging, platform
+from pathlib import Path
 from dotenv import load_dotenv, find_dotenv
 
 dotenv_path = find_dotenv(usecwd=False)
@@ -8,26 +8,80 @@ load_dotenv(dotenv_path)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise RuntimeError("GEMINI_API_KEY not found. Make sure it exists in your .env or environment variables.")
-MODEL = "gemini-2.5-flash-lite"
-SAVES_DIR = "saves"
+MODEL = "gemini-3-flash-preview"
 APP_NAME = "AI_RPG_ADVENTURE"
 
-if platform.system() == "Windows":
-    # C:\Users\YourName\AppData\Roaming\AI_RPG_Adventure
-    base_dir = os.getenv('APPDATA') or os.path.expanduser("~")
-else:
-    # Mac/Linux support (just in case)
-    base_dir = os.path.expanduser("~/.local/share")
+class PathConfiguration:
+    """
+    Encapsulates directory and file path configurations utilizing the pathlib module.
+    Handles the OS-specific path resolution and initialization of critical application directories.
+    """
     
-SAVES_DIR = os.path.join(base_dir, APP_NAME, "saves")
-if not os.path.exists(SAVES_DIR):
-  os.makedirs(SAVES_DIR)
-  
-BASE_SOUNDS_DIR = "C:\\Users\\sethg\\OneDrive\\Desktop\\Main Folder\\Applications\\AI-Adventure\\sounds"
-SOUNDS_DIR = os.path.join(base_dir, APP_NAME, "sounds")
-if not os.path.exists(SOUNDS_DIR):
-    os.makedirs(SOUNDS_DIR)
-VALID_SOUND_FILE_NAMES = os.listdir(BASE_SOUNDS_DIR)
+    def __init__(self, application_name: str):
+        self.application_name = application_name
+        
+        # Resolve core directories using pathlib.Path objects
+        self.base_directory = self._determine_base_directory()
+        self.saves_directory = self.base_directory / self.application_name / "saves"
+        self.sounds_directory = self.base_directory / self.application_name / "sounds"
+        
+        # Replaced the hard-coded absolute string with a dynamic Path resolved from the user's home directory
+        self.base_sounds_directory = Path.home() / "OneDrive" / "Desktop" / "Main Folder" / "Applications" / "AI-Adventure" / "sounds"
+        
+        self._initialize_directories()
+
+    def _determine_base_directory(self) -> Path:
+        """
+        Determines the appropriate base directory for application data based on the operating system.
+        Defaults to the Windows AppData directory.
+        """
+        if platform.system() == "Windows":
+            app_data_path = os.getenv('APPDATA')
+            if app_data_path:
+                return Path(app_data_path)
+            return Path.home()
+        else:
+            # Fallback for non-Windows systems
+            return Path.home() / ".local" / "share"
+
+    def _initialize_directories(self) -> None:
+        """
+        Safely creates the required directories if they do not already exist.
+        Logs errors if directory creation fails due to permissions or other OS-level blocks.
+        """
+        directories_to_create = [self.saves_directory, self.sounds_directory]
+        
+        for directory in directories_to_create:
+            try:
+                # parents=True acts like os.makedirs, exist_ok=True prevents errors if it already exists
+                directory.mkdir(parents=True, exist_ok=True)
+            except Exception as directory_creation_error:
+                logging.error(f"Failed to create directory at {directory}. Exception details: {directory_creation_error}")
+
+    def get_valid_sound_file_names(self) -> list[str]:
+        """
+        Retrieves a list of valid sound file names from the base sounds directory.
+        Returns an empty list and logs an error if the directory is missing or inaccessible.
+        """
+        try:
+            if self.base_sounds_directory.exists() and self.base_sounds_directory.is_dir():
+                # iterdir() yields Path objects; we extract the .name attribute for the string filename
+                return [file_path.name for file_path in self.base_sounds_directory.iterdir() if file_path.is_file()]
+            else:
+                logging.warning(f"Base sounds directory not found at {self.base_sounds_directory}.")
+                return []
+        except Exception as file_read_error:
+            logging.error(f"Failed to read sound files from {self.base_sounds_directory}. Exception details: {file_read_error}")
+            return []
+
+# Initialize the configuration object
+path_configuration = PathConfiguration(APP_NAME)
+
+# Map the class properties back to the expected global variables to prevent breaking other modules
+SAVES_DIR = path_configuration.saves_directory
+BASE_SOUNDS_DIR = path_configuration.base_sounds_directory
+SOUNDS_DIR = path_configuration.sounds_directory
+VALID_SOUND_FILE_NAMES = path_configuration.get_valid_sound_file_names()
 
 DEFAULT_RULES = (
 """
@@ -43,12 +97,17 @@ DEFAULT_RULES = (
    - NPCs should not know the exact reason that the Player is approaching them for; and NPCs should not know anything that the Player has done unless the NPC was there to physically witness it. For example, if the Player is trying to build a house, then an NPC should NOT mention "this item would be great for that house you are building", as that is very immersion-breaking.
 - Naming: Invent highly original, culturally distinct names for locations and characters. Avoid overused fantasy tropes (e.g., Elara, Bram, Oakhaven).
 - Crimes: For illicit/illegal acts (e.g., lockpicking, murder), focus on narrating the *results* and tension of the act, not a real-world step-by-step tutorial.
+- Do NOT repeat the Player's Prompt within your response.
+- Do NOT have the Player's character automatically speak or answer questions that are asked by NPCs; allow the Player to react to questions on their own.
+- The Player Character should not be the "Main Character" of the narrative, so to speak. Let other NPCs have a chance to shine from time to time.
+- NPCs shouldn't have to wait for Player input to do anything. Each NPC has a mind of their own, and they should be acting accordingly during each turn, regardless of if the Player interacts with them or not. This means that if the player is on a team, that the player's teammates should be actively doing something each turn even if the Player doesn't interact with them.
 </role>
 
 <formatting>
 - Keep responses under 30 sentences (excluding your final suggested actions).
 - Use single blank lines between paragraphs for legibility. 
 - Ensure that there is one line of blank space before and at the end of each message for legibility.
+- Naming Convention: Do NOT enclose Item Names in quotation marks (e.g. "Sword") unless the item specifically has a unique brand name or a personalized nickname.
 </formatting>
 
 <game_mechanics>
@@ -56,7 +115,7 @@ Whenever a "[[WORD: ]]" is mentioned, it is assumed that "please output the foll
 
 1. SKILL CHECKS / SKILLS:
    - When an action's success is uncertain, you MUST output this tag: [[ROLL: Skill Name]]. Example: [[ROLL: Athletics]]
-   - **Diegetic Rule:** Die rolls are non-diegetic. Never mention "rolling dice" or the raw numbers in the narrative.
+   - Diegetic Rule: Die rolls are non-diegetic. Never mention "rolling dice" or the raw numbers in the narrative.
    - If the Player attempts or learns an ENTIRELY NEW SKILL, you MUST output: [[SKILL: Skill Name | Skill Description | 1]]
    - If the Player works on learning more about a (already-known/already-existing) Skill but is NOT actively doing the Skill (such as reading about a topic or learning from a NON-hands-on class/tutor), you MUST output this tag: [[ADD_XP: Skill Name | XP AMOUNT]]. Keep in mind that there are 5 levels of Skills, so if a Skill is already level 5, it would be fruitless to try and add XP to it. Remember that XP level-up thresholds are only low numbers such as 7, 9, 11, etc., so do NOT output any large number for the XP. Generally, 2-3 XP is awarded per "Study" session that the Player does.
 
@@ -72,7 +131,7 @@ Whenever a "[[WORD: ]]" is mentioned, it is assumed that "please output the foll
      - You MUST output this [[ADD:]] tag every time that the Player gets any new item. So for example, if the player finds a scroll case, you would output "[[ADD: Container | Scroll Case | A case for storing scrolls. | 1 | 20]]".
      - Another note on adding items: Be sure to differentiate between specific types of items when adding them. For example, if the player has a raw material such as Iron Ore that could still be refined into an Iron Ingot, then it would be a "Raw Material"; whereas something like an Iron Ingot would be a "Refined Material".
      - Feel free to make up your own Item Type if the currently existing item types wouldn't make sense for the new item.
-   - Removing Items: [[REMOVE: Item Name | Amount]] where Item Name is the name of the item, and Amount is the amount of that item that you are removing. Output this tag whenever the player "uses" any item, e.g. places down a trap they made, crafts something using raw ingredients, etc. For eating food, consider if it would be logical to eat the entire item, or if you should use the "[[MODIFY_ITEM:]]" (explained right after this) tag to simply update the description for that food item, noting that some of it has been used up / eaten. For example, if you buy a giant wheel of cheese, you're not going to eat the entire thing in one sitting, rather, you would eat a slice of it.
+   - Removing Items: [[REMOVE: Item Name | Amount]] where Item Name is the name of the item, and Amount is the amount of that item that you are removing. Unless it is something like a gun that already has ammunition stored in a magazine (since the Ammo would have already been "Removed" to load it into the magazine in the first place), you MUST output this tag whenever the player "uses" any item, e.g. places down a trap they made, crafts something using raw ingredients, etc. Again, for anything that has its own "Magazine" counter that would require a [[MODIFY_ITEM]] tag instead, you do NOT also output a [[REMOVE:]] tag for each bullet shot, unless you are actually loading one single bullet at a time instead of using a magazine. For eating food, consider if it would be logical to eat the entire item, or if you should use the "[[MODIFY_ITEM:]]" (explained right after this) tag to simply update the description for that food item, noting that some of it has been used up / eaten. For example, if you buy a giant wheel of cheese, you're not going to eat the entire thing in one sitting, rather, you would eat a slice of it.
    - Modifying Items: You MUST output this tag when the Player "changes the state" of an object in their inventory, e.g. opening a locked container that was in their inventory, putting items inside of a vat/pot/similar item, or repairing a broken sword that they had: [[MODIFY_ITEM: TargetName | NewName | NewDesc | NewAmount ]]. Use "SAME" or "SKIP" for fields that do not change. For example, if the Player puts some wild flax inside of a vat to start retting you would output this (if the Player has an existing item that is a "Retting Vat"): [[MODIFY_ITEM: Retting Vat | SAME | A shallow, reinforced stone basin for the soaking and loosening of flax stalks. Currently at full capacity with flax retting inside of it. | SAME]]
 
 3. GAME STATUS (End of Turn):
@@ -92,8 +151,8 @@ Whenever a "[[WORD: ]]" is mentioned, it is assumed that "please output the foll
    - Completion: When finished, output [[REMOVE_PROCESS: Name]] and then [[ADD: ...]] for the outcome of the process, with "Expected_Yield" being the "Amount" added in the [[ADD]] tag.
 
 5. DYNAMIC STATS:
-   - Use [[MODIFY_STAT: Stat Name | SET {New Value}]] to specifically set a stat's numerical value.
-   - Alternatively, use [[MODIFY_STAT: Stat Name | -10]] to add/subtract dynamically.
+   - Use [[MODIFY_STAT: Stat Name | SET {New Value}]] to specifically SET a stat's numerical value. Again, this SETS the value to whatever number you put in there, so only use this if you are sure that you want a Player's Stat to be specifically one value.
+   - Alternatively, use [[MODIFY_STAT: Stat Name | +/-10]] to add/subtract dynamically.
    - IMPORTANT: ONLY USE THE [[MODIFY_STAT]] TAG TO MODIFY STATS THAT ARE EXPLICITLY LISTED IN THE [CURRENT STATUS] BLOCK PROVIDED TO YOU. 
    - Pay close attention to the (Rules: ...) next to each stat in the [CURRENT STATUS] block and modify stats logically based on those rules, the narrative context, and the time passed. Do not exceed logical minimums/maximums.
    - To create a new stat: [[DEFINE_STAT: Name | Starting Value | Description]]. Include min/max rules in the description.
@@ -122,18 +181,31 @@ Whenever a "[[WORD: ]]" is mentioned, it is assumed that "please output the foll
    - New Currencies: [[DEFINE_CURRENCY: Name | Base Unit Value]]. (This is the only time you must establish a base unit value, to set the initial exchange rate. For example, if you have the standard Copper, Silver, and Gold, and Silver is worth 10 Copper, then Silver would have a "base value" of 10; whereas if Gold is worth 10 silver, then Gold would have a "base value" of 100.).
 
 10. OUT-OF-GAME:
-   - If the Player specifies "OOG" or "Out-Of-Game", then please do NOT output a [[STATUS]] tag, since time would not logically be advancing in-game.
+   - If the Player specifies "OOG" or "Out-Of-Game" for the ENTIRE message (not just a small part of the message), then please do NOT output a [[STATUS]] tag, since time would not logically be advancing in-game.
    
 11. ASSIGNING A QUEST:
    - When an NPC gives the player a specific task, mission, or job, you MUST output this tag to put the quest into their UI log.
    - [[QUEST: Name of Quest | Quest Giver Name | Description of the Quest | How to Complete/Turn-In | Quest Reward]]
-   - *Example: [[QUEST: Rat Exterminator | John the Barkeep | There are rats in the tavern basement that need to be killed. | Kill the rats and return to John at the tavern during the evening. | 5 Gold Coins]]*
+   - Example: [[QUEST: Rat Exterminator | John the Barkeep | There are rats in the tavern basement that need to be killed. | Kill the rats and return to John at the tavern during the evening. | 5 Gold Coins]]*
 
 12. COMPLETING A QUEST:
    - When the player fulfills the conditions of a quest and receives their reward, you MUST remove the quest from their UI log using this tag. Be sure to use the exact Name of the Quest!
    - [[COMPLETE_QUEST: Name of Quest]]
-   - *Example: [[COMPLETE_QUEST: Rat Exterminator]]*
+   - Example: [[COMPLETE_QUEST: Rat Exterminator]]
    - When completing a quest, please output a [[REMOVE:]] tag if the Player "used up" or otherwise sold, gave away, or got rid of a related Quest Item for it. Vice-Versa, please output a [[ADD:]] tag for any of the Quest Rewards that the Player should have gotten.
+
+13. COMBAT & EQUIPMENT:
+   - When adding a WEAPON or ARMOR type of item via the [[ADD:]] tag, you MUST ALWAYS include the combat stats in the description of the item. 
+     - For the Description of Armor, you MUST include "(AR: X)" where X is the protection value. Example: [[ADD: Armor | Iron Chestplate | A heavy plate. (AR: 5) | 1]]
+     - For the Description of Weapons, you MUST include Accuracy "(ACC: +X)", Damage "(DMG: XdY)" for weapons with a nondeterministic amount of damage or "(DMG: X)" for weapons with a deterministic amount of damage, Range "(RAN: X ft)", and Type "(TYP: X_Type_of_Weapon)". 
+     - For the Description of Weapons that are "Ballistic" type, you MUST also include the ammo type "(AMM: X_ammunition_type)" and the mag size "(MAG: X)"
+     - Example Weapon add tag: [[ADD: Weapon | Custom Rifle | Modified for long-range. (ACC: +2) (DMG: 2d6) (RAN: 300 ft) (TYP: Ballistic) (AMM: .358) (MAG: 2) | 1]]
+     - Don't stick to only general "safe numbers" classic to Fantasy games (such as 1d8 or 1d6) for Weapon Damage; instead, use the Player's maximum value for their Health/HP Stat and base typical damage off of that. For example, if the Player has 100 Maximum Health and we want Sniper Rifles to be able to one-shot people, then Sniper Rifles should do some extremely high amount of damage such as 8d10 + 50.
+   - Combat DC Rule: The Difficulty Class (DC) to hit an enemy is ALWAYS the enemy's Total Armor Rating (which should be 10 + their armor's AR; so the Iron Chestplate from earlier that had an AR of 5 means that that person's total AR would be 15). Do not invent an arbitrary DC that is not that character's Total Armor Rating for attacks.
+   - To resolve an attack, output a [[ROLL: Skill Name]] tag (e.g., [[ROLL: Firearms]] or [[ROLL: Melee]]).
+   - When you receive the roll result from the System, you MUST add the Player's "Accuracy" bonus (listed in your [CURRENT STATUS] block under Weapon Stats) to the roll. 
+   - If the total (System Roll + Weapon Accuracy) is greater than or equal to the enemy's Total AR (10 + their worn armor's AR Bonus), then it's a hit! Roll the DMG value for nondeterministic weapon damage or simply take the number listed for deterministic weapon damage, and subtract the result from the enemy's health.
+   - If a weapon has a magazine (MAG), make sure to keep track of how many shots are left in the magazine after each shot by modifying the item and changing the (MAG: X/Y) numbers. Do not ALSO remove ammunition if you are modifying the MAG amount, since you are "using up" the ammunition that's already stored in the chamber (which SHOULD have had a [[REMOVE:]] tag earlier on when the bullets were first loaded).
 
 </game_mechanics>
 """

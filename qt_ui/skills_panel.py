@@ -1,6 +1,3 @@
-# qt_ui/skills_panel.py
-
-# IMPORTS
 from __future__ import annotations
 import logging, os, textwrap
 from PySide6.QtCore import Qt
@@ -8,49 +5,22 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextBrowser
 from tabulate import tabulate
 from file_manager import FileManager
+from qt_ui.base_panel import BasePanel
+from pathlib import Path
 
 # SkillsPanel class
-class SkillsPanel(QWidget):
+class SkillsPanel(BasePanel):
     """Qt Skills panel that reads/writes skills.json and renders a simple table."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.data_path: str = ""
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(8)
-
-        bar = QHBoxLayout()
-        bar.setSpacing(8)
-
-        self.lbl_title = QLabel("Skills")
-        self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.lbl_title.hide()
-        bar.addWidget(self.lbl_title, stretch=1)
-
-        self.lbl_state = QLabel("")
-        self.lbl_state.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        bar.addWidget(self.lbl_state)
-
-        self.btn_reload = QPushButton("Reload")
-        self.btn_reload.setFixedWidth(90)
-        self.btn_reload.clicked.connect(self.refresh_display)
-        bar.addWidget(self.btn_reload)
-
-        self.btn_save = QPushButton("Save")
-        self.btn_save.setFixedWidth(90)
-        self.btn_save.clicked.connect(self._save_current)
-        bar.addWidget(self.btn_save)
-
-        root.addLayout(bar)
-
+    def __init__(self, parent: QWidget | None = None, app_context=None) -> None:
+        super().__init__(title="Skills", parent=parent, app_context=app_context, show_save_button=True)
+        
         self.display = QTextBrowser()
         self.display.setFont(QFont("Consolas", 11))
-        root.addWidget(self.display, stretch=1)
+        self.root_layout.addWidget(self.display, stretch=1)
         self._set_state("No save loaded")
 
-    def set_base_path(self, save_folder: str) -> None:
+    def set_base_path(self, save_folder: str | Path) -> None:
         """Sets the directory path for the save folder.
 
         Args:
@@ -58,14 +28,18 @@ class SkillsPanel(QWidget):
         """
         if not save_folder:
             return
+            
+        save_directory = Path(save_folder)
         try:
-            os.makedirs(save_folder, exist_ok=True)
-        except Exception:
-            logging.exception("Failed to ensure save folder exists")
+            save_directory.mkdir(parents=True, exist_ok=True)
+        except Exception as directory_creation_error:
+            logging.exception(f"Failed to ensure save folder exists: {directory_creation_error}")
 
-        self.data_path = os.path.join(save_folder, "skills.json")
-        if not os.path.exists(self.data_path):
-            FileManager.save_json_data(self.data_path, [])
+        self.data_path = save_directory / "skills.json"
+        
+        if not self.data_path.exists():
+            FileManager.save_json_data(str(self.data_path), [])
+            
         self.refresh_display()
 
     def get_text(self) -> str:
@@ -113,10 +87,12 @@ class SkillsPanel(QWidget):
         Returns:
             list[dict]: The skills.json file.
         """
-        if not self.data_path or not os.path.exists(self.data_path):
+        # Check existence safely via Path object
+        if not self.data_path or not self.data_path.exists():
             return []
         try:
-            data = FileManager.load_json_data(self.data_path)
+            # Cast Path to string for FileManager compatibility
+            data = FileManager.load_json_data(str(self.data_path))
             return data if isinstance(data, list) else []
         except Exception as e:
             logging.error(f"SkillsPanel: load failed: {e}")
@@ -132,10 +108,11 @@ class SkillsPanel(QWidget):
             return
         try:
             data.sort(key=lambda x: str(x.get("Name", "")).lower())
-            FileManager.save_json_data(self.data_path, data)
+            # Cast Path to string for FileManager compatibility
+            FileManager.save_json_data(str(self.data_path), data)
             self._set_state("Saved")
-        except Exception:
-            logging.exception("SkillsPanel: save failed")
+        except Exception as save_error:
+            logging.exception(f"SkillsPanel: save failed: {save_error}")
         self.refresh_display()
 
     def _save_current(self) -> None:

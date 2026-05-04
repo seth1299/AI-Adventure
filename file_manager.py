@@ -2,8 +2,8 @@ import os
 import sys
 import json
 import logging
-import threading
-from config import SAVES_DIR, SOUNDS_DIR, DEFAULT_RULES
+from config import SAVES_DIR
+from pathlib import Path
 
 class FileManager:
     @staticmethod
@@ -13,42 +13,83 @@ class FileManager:
         return os.path.join(base_path, relative_path)
 
     @staticmethod
-    def setup_initial_logging():
-        """Sets up the basic logger on startup."""
-        log_file_path = os.path.join(SAVES_DIR, "Log.txt")
-        logging.basicConfig(
-            filename=log_file_path,
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s', 
-            datefmt='%m/%d/%Y at %I:%M:S %p',
-            filemode='w'
-        )
-
-    @staticmethod
-    def update_logger_path(save_name=None):
-        """Switches the logging output to a specific save folder."""
-        if save_name:
-            save_dir = os.path.join(SAVES_DIR, save_name)
-            if not os.path.exists(save_dir):
-                return
-            new_log_path = os.path.join(save_dir, f"{save_name} Log.txt")
-        else:
-            new_log_path = os.path.join(SAVES_DIR, "Generic Log.txt")
-
-        logger = logging.getLogger()
-        for handler in logger.handlers[:]:
-            if isinstance(handler, logging.FileHandler):
-                handler.close()
-                logger.removeHandler(handler)
+    def setup_initial_logging() -> None:
+        """
+        Sets up the basic logger on startup with a user-friendly timestamp format.
+        Omits leading zeroes for the month, day, and hour, and excludes seconds.
+        """
+        log_file_path = SAVES_DIR / "Log.log"
 
         try:
-            file_handler = logging.FileHandler(new_log_path, mode='w', encoding='utf-8')
+            # Configure the basic logging format. 
+            # %#m, %#d, and %#I are Windows-specific directives to omit leading zeroes.
+            logging.basicConfig(
+                filename=log_file_path,
+                level=logging.INFO,
+                format='%(asctime)s - %(levelname)s - %(message)s', 
+                datefmt='%#m/%#d/%Y at %#I:%M %p',
+                filemode='w'
+            )
+
+        except Exception as logging_initialization_error:
+            # Fallback error handling if the primary log directory is inaccessible
+            fallback_error_log_path = Path.cwd() / "Logging_Error.log"
+            
+            # Using basic file writing for the fallback, as the logging library failed to initialize
+            with open(fallback_error_log_path, 'a') as fallback_log_file:
+                fallback_log_file.write(
+                    f"CRITICAL ERROR: Failed to initialize primary logging at {log_file_path}. "
+                    f"Exception details: {str(logging_initialization_error)}\n"
+                )
+                
+    @staticmethod
+    def create_file_if_not_exists(file_path: str, default_content: str = "") -> None:
+        """
+        Checks if a file exists at the specified path, and creates it with default content if it does not.
+        Utilizes the class's internal write method to maintain consistent error handling and logging.
+
+        Args:
+            file_path (str): The absolute or relative path to the file.
+            default_content (str): The initial text content to write if the file is created. Defaults to an empty string.
+        """
+        try:
+            if not os.path.exists(file_path):
+                # Encapsulating the write operation by calling the existing write_text_file method
+                FileManager.write_text_file(file_path, default_content)
+                logging.info(f"Initialized missing file at: {file_path}")
+        except Exception as file_creation_error:
+            logging.error(f"Failed to check or create file at {file_path}. Exception details: {file_creation_error}")
+
+    @staticmethod
+    def update_logger_path(save_name: str = "") -> None:
+        """
+        Switches the logging output to a specific save folder.
+        
+        Args:
+            save_name (str, optional): The name of the specific save folder. Defaults to None.
+        """
+        try:
+            if save_name:
+                save_directory = SAVES_DIR / save_name
+                if not save_directory.exists():
+                    return
+                new_log_path = save_directory / f"{save_name} Log.txt"
+            else:
+                new_log_path = SAVES_DIR / "Generic Log.txt"
+
+            logger = logging.getLogger()
+            for handler in logger.handlers[:]:
+                if isinstance(handler, logging.FileHandler):
+                    handler.close()
+                    logger.removeHandler(handler)
+
+            file_handler = logging.FileHandler(str(new_log_path), mode='w', encoding='utf-8')
             formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
             file_handler.setFormatter(formatter)
             logger.addHandler(file_handler)
-            #logging.info(f"Logger switched to: {new_log_path}")
-        except Exception as e:
-            print(f"Failed to switch logger: {e}")
+            
+        except Exception as logger_switch_error:
+            logging.error(f"Failed to switch logger path. Exception details: {logger_switch_error}")
 
     # --- RAW I/O METHODS ---
 
