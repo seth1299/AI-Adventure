@@ -5,22 +5,97 @@ import logging
 import os
 import platform
 import sys
-from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
+from dotenv import find_dotenv
+from pydantic import Field, ValidationError, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from dotenv import find_dotenv, load_dotenv
+DOTENV_PATH: Final[str | None] = find_dotenv(usecwd=True) or None
 
+class AppSettings(BaseSettings):
+    """
+    Type-safe application settings loaded from environment variables or a .env file.
 
-@dataclass(frozen=True)
-class AppSettings:
-    """Typed application settings loaded from environment variables."""
+    Pydantic validates these values at startup, so missing required values or
+    invalid path-like values fail early instead of creating hard-to-debug runtime bugs.
+    """
 
-    app_name: str
-    gemini_api_key: str
-    model: str
-    sounds_source_directory: Path | None = None
-    app_data_directory: Path | None = None
+    model_config = SettingsConfigDict(
+        env_file=DOTENV_PATH,
+        env_file_encoding="utf-8",
+        extra="ignore",
+        frozen=True,
+    )
+
+    app_name: str = Field(
+        default="AI_RPG_ADVENTURE",
+        validation_alias="AI_ADVENTURE_APP_NAME",
+        min_length=1,
+    )
+
+    gemini_api_key: str = Field(
+    default="",
+    validation_alias="GEMINI_API_KEY",
+    )
+
+    model: str = Field(
+        default="gemini-3-flash-preview",
+        validation_alias="GEMINI_MODEL",
+        min_length=1,
+    )
+
+    sounds_source_directory: Path | None = Field(
+        default=None,
+        validation_alias="AI_ADVENTURE_SOUNDS_DIR",
+    )
+
+    app_data_directory: Path | None = Field(
+        default=None,
+        validation_alias="AI_ADVENTURE_DATA_DIR",
+    )
+
+    @field_validator("sounds_source_directory", "app_data_directory", mode="before")
+    @classmethod
+    def _normalize_optional_path(cls, value: object) -> Path | None:
+        """
+        Converts blank optional path values to None and expands user paths.
+
+        This lets the .env file contain:
+            AI_ADVENTURE_DATA_DIR=
+        without accidentally treating it as the current directory.
+        """
+        if value is None:
+            return None
+
+        raw_value = str(value).strip()
+        if not raw_value:
+            return None
+
+        return Path(raw_value).expanduser()
+    
+    @field_validator("gemini_api_key")
+    @classmethod
+    def _validate_gemini_api_key(cls, value: str) -> str:
+        """
+        Ensures the Gemini API key is actually configured.
+
+        A blank API key should fail during application startup instead of causing
+        delayed Gemini client failures later.
+        """
+        cleaned_value = value.strip()
+
+        if not cleaned_value:
+            raise ValueError(
+                "GEMINI_API_KEY is missing. Add it to your .env file or environment variables."
+            )
+
+        if cleaned_value.upper().startswith("INVALID"):
+            raise ValueError(
+                "GEMINI_API_KEY still contains the placeholder value."
+            )
+
+        return cleaned_value
 
 
 class Configuration:
@@ -31,41 +106,15 @@ class Configuration:
     """
 
     def __init__(self) -> None:
-        dotenv_path = find_dotenv(usecwd=True)
-        load_dotenv(dotenv_path)
-
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
+        try:
+            self.settings = AppSettings()
+        except ValidationError as error:
+            logging.exception("Invalid application configuration: %s", error)
             raise RuntimeError(
-                "GEMINI_API_KEY not found. Add it to your .env file or environment variables."
-            )
-
-        sounds_dir = self._optional_path_from_env("AI_ADVENTURE_SOUNDS_DIR")
-        app_data_dir = self._optional_path_from_env("AI_ADVENTURE_DATA_DIR")
-
-        self.settings = AppSettings(
-            app_name=os.getenv("AI_ADVENTURE_APP_NAME", "AI_RPG_ADVENTURE"),
-            gemini_api_key=api_key,
-            model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
-            sounds_source_directory=sounds_dir,
-            app_data_directory=app_data_dir,
-        )
+                "Application configuration is invalid. Check your .env file or environment variables."
+            ) from error
 
         self._initialize_directories()
-
-    @staticmethod
-    def _optional_path_from_env(variable_name: str) -> Path | None:
-        """Returns a Path from an environment variable, or None if unset."""
-
-        raw_value = os.getenv(variable_name)
-        if not raw_value:
-            return None
-
-        try:
-            return Path(raw_value).expanduser()
-        except Exception as error:
-            logging.exception("Invalid path in %s: %s", variable_name, error)
-            return None
 
     @cached_property
     def base_directory(self) -> Path:
