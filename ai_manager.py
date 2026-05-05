@@ -204,7 +204,6 @@ After outputting all tags, summarize the first starting turn, describe the surro
             logging.error(f"Error: Could not open secret.txt. Details: {secret_read_error}")
         
         # 2. Gather Status
-        self.app.player.turn += 1
         stats_str = ""
         for stat in self.app.player.tracked_stats:
             if stat.get("enabled", True):
@@ -277,7 +276,6 @@ After outputting all tags, summarize the first starting turn, describe the surro
                     system_instruction=current_rules,
                     temperature = 1.0,
                     thinking_config = types.ThinkingConfig(thinking_budget = -1),
-                    response_modalities = [],
                     tools=[],
                     safety_settings=[types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_NONE)]
                 ),

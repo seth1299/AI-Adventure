@@ -1598,8 +1598,8 @@ class StoryPanel(QWidget):
 
         while self.stats_layout.count():
             child = self.stats_layout.takeAt(0)
-            if child != None:
-                widget_to_delete = child.widget()
+            widget_to_delete = child.widget() if child is not None else None
+
             if widget_to_delete is not None:
                 widget_to_delete.deleteLater()
 

@@ -1,6 +1,6 @@
 # config.py
 from __future__ import annotations
-
+from typing import Final
 import logging
 import os
 import platform
@@ -159,17 +159,30 @@ class Configuration:
             logging.exception("Failed to read sound files: %s", error)
             return []
 
+_configuration: Configuration | None = None
 
-configuration = Configuration()
+
+def get_configuration() -> Configuration:
+    """Returns the application configuration, initializing it once."""
+    global _configuration
+
+    if _configuration is None:
+        _configuration = Configuration()
+
+    return _configuration
+
+
+# Backward-compatible singleton instance.
+configuration: Final[Configuration] = get_configuration()
 
 # Backward-compatible globals.
-GEMINI_API_KEY = configuration.settings.gemini_api_key
-MODEL = configuration.settings.model
-APP_NAME = configuration.settings.app_name
+GEMINI_API_KEY: Final[str] = configuration.settings.gemini_api_key
+MODEL: Final[str] = configuration.settings.model
+APP_NAME: Final[str] = configuration.settings.app_name
 
-SAVES_DIR = configuration.saves_directory
-SOUNDS_DIR = configuration.sounds_directory
-BASE_SOUNDS_DIR = configuration.base_sounds_directory
+SAVES_DIR: Final[Path] = configuration.saves_directory
+SOUNDS_DIR: Final[Path] = configuration.sounds_directory
+BASE_SOUNDS_DIR: Final[Path] = configuration.base_sounds_directory
 
-DEFAULT_RULES = configuration.default_rules
-VALID_SOUND_FILE_NAMES = configuration.get_valid_sound_file_names()
+DEFAULT_RULES: Final[str] = configuration.default_rules
+VALID_SOUND_FILE_NAMES: Final[list[str]] = configuration.get_valid_sound_file_names()

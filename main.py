@@ -5,14 +5,13 @@ import logging
 from PySide6.QtWidgets import QApplication
 from file_manager import FileManager
 from qt_ui.main_window import MainWindow
-from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt
 from player import Player
 from sound_manager import SoundManager
-from config import SAVES_DIR, BASE_SOUNDS_DIR, DEFAULT_RULES
+from config import Configuration, get_configuration
 from qt_ui.dialogs import CreationWizard, MainMenuDialog
 import threading
 from PySide6.QtWidgets import QApplication, QDialog
-from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt, QThread, QSize
+from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt, QThread
 from queue import Queue
 from pathlib import Path
 
@@ -133,18 +132,19 @@ class QtPanelAdapter:
 class QtAppContext:
     """Minimal adapter to let the existing AIManager run under Qt."""
 
-    def __init__(self, win):
+    def __init__(self, win, configuration: Configuration | None = None):
         self.win = win
+        self.configuration = configuration or get_configuration()
         self.ui = _UiDispatcher(win)
 
-        self.current_adventure_path = None
+        self.current_adventure_path: str | None = None
 
-        self.secret_path = str(SAVES_DIR / "secret.txt")
-        self.world_path = str(SAVES_DIR / "world.md")
-        self.conversation_history = []
+        self.secret_path = str(self.configuration.saves_directory / "secret.txt")
+        self.world_path = str(self.configuration.saves_directory / "world.md")
+        self.conversation_history: list[str] = []
 
         self.player = Player()
-        self.sound_manager = SoundManager(str(BASE_SOUNDS_DIR))
+        self.sound_manager = SoundManager(str(self.configuration.base_sounds_directory))
 
         # API surface AIManager expects
         self.story_tab = QtStoryTabAdapter(win.story_panel, self.ui)
@@ -260,7 +260,7 @@ class QtAppContext:
         Returns:
             str: The finalized system-instruction text for Gemini.
         """
-        formatted_rules = DEFAULT_RULES or ""
+        formatted_rules = self.configuration.default_rules or ""
 
         if not formatted_rules.strip():
             logging.error("DEFAULT_RULES is empty. Check prompt_templates/default_rules.md.")
@@ -340,29 +340,42 @@ class QtAppContext:
         """
         if self.current_adventure_path:
             return self.current_adventure_path
+        
+        saves_directory = self.configuration.saves_directory
+        
+        if not saves_directory.exists():
+            logging.warning("Saves directory does not exist: %s", saves_directory)
+            return None
+
+        if not saves_directory.is_dir():
+            logging.warning("Saves path is not a directory: %s", saves_directory)
+            return None
 
         try:
             best_path: str | None = None
             best_mtime = -1.0
             
             # Iterate over the items in the SAVES_DIR Path object
-            for save_directory in SAVES_DIR.iterdir():
+            for save_directory in saves_directory.iterdir():
                 if not save_directory.is_dir():
                     continue
-                    
+
                 savegame_file = save_directory / "savegame.json"
                 if not savegame_file.exists():
                     continue
-                    
-                # Access the modification time via the Path stat object
+
                 modification_time = savegame_file.stat().st_mtime
                 if modification_time > best_mtime:
                     best_mtime = modification_time
                     best_path = str(save_directory)
-                    
+
             return best_path
+
         except Exception as recap_resolution_error:
-            logging.exception(f"Failed to resolve save path for recap. Exception details: {recap_resolution_error}")
+            logging.exception(
+                "Failed to resolve save path for recap. Exception details: %s",
+                recap_resolution_error,
+            )
             return None
         
     def load_savegame_state(self, save_path: str) -> dict:
@@ -546,8 +559,14 @@ def main() -> int:
     if menu.exec() != QDialog.DialogCode.Accepted or not menu.selected_save:
         return 0
 
+    configuration = get_configuration()
+
     save_name = menu.selected_save
-    save_path = str(SAVES_DIR / save_name)
+    save_path_obj = configuration.saves_directory / save_name
+    save_path = str(save_path_obj)
+
+    win = MainWindow()
+    app_ctx = QtAppContext(win, configuration)
 
     win = MainWindow()
     app_ctx = QtAppContext(win)

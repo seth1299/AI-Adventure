@@ -133,12 +133,29 @@ class FileManager:
             return None
 
     @staticmethod
-    def save_json_data(path, data):
-        """Saves a dictionary to a JSON file."""
+    def save_json_data(path: str | Path, data: object) -> None:
+        """Saves JSON data atomically to reduce save-file corruption risk."""
+        target_path = Path(path)
+
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4)
-        except Exception as e:
-            logging.error(f"Error saving JSON {path}: {e}")
-            with open("LAST_SAVE_FAILED.txt", "w") as f:
-                f.write(f"Failed to save {path}: {e}")
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = target_path.with_suffix(target_path.suffix + ".tmp")
+
+            with temp_path.open("w", encoding="utf-8") as file:
+                json.dump(data, file, indent=4)
+                file.flush()
+                os.fsync(file.fileno())
+
+            temp_path.replace(target_path)
+
+        except Exception as error:
+            logging.exception("Error saving JSON %s: %s", target_path, error)
+
+            try:
+                failure_path = target_path.parent / "LAST_SAVE_FAILED.txt"
+                failure_path.write_text(
+                    f"Failed to save {target_path}: {error}",
+                    encoding="utf-8",
+                )
+            except Exception:
+                logging.exception("Failed to write LAST_SAVE_FAILED.txt")

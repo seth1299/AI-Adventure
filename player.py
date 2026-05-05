@@ -131,7 +131,7 @@ class Player:
                 typ_match = re.search(r"\(TYP:\s*([^)]+)\)", desc, re.IGNORECASE)
                 weapon_type = typ_match.group(1) if typ_match else "Energy"
                 
-                if type == "Ballistic":
+                if weapon_type.lower() == "ballistic":
                     amm_match = re.search(r"\(AMM:\s*([^)]+)\)", desc, re.IGNORECASE)
                     ammo_type = amm_match.group(1) if amm_match else "9mm"
                     
