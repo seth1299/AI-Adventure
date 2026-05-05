@@ -1,7 +1,5 @@
 # qt_ui/main_window.py
 from __future__ import annotations
-from qt_ui.currency_dialog import CurrencyManagerDialog
-from qt_ui.stats_dialog import StatsManagerDialog
 from PySide6.QtCore import Qt, QSettings, QByteArray
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -10,25 +8,32 @@ from PySide6.QtWidgets import (
     QDialog,
     QTabWidget
 )
-from .markdown_panel import MarkdownPanel
-from .story_panel import StoryPanel
 from ai_manager import AIManager
-from .main_menu_dialog import MainMenuDialog
 from config import SAVES_DIR
 from file_manager import FileManager
-import os
 import threading
-from .inventory_panel import InventoryPanel
-from .skills_panel import SkillsPanel
-from .processing_panel import ProcessingPanel
-from .recipes_panel import RecipesPanel
 import logging
-from qt_ui.help_dialog import HelpDialog
-from qt_ui.quest_panel import QuestsPanel
-from qt_ui.calendar_dialog import CalendarManagerDialog
-from .calendar_panel import CalendarPanel
-from qt_ui.equipment_dialog import EquipmentManagerDialog
 from pathlib import Path
+from .panels import (
+    CalendarPanel,
+    InventoryPanel,
+    MarkdownPanel,
+    ProcessingPanel,
+    QuestsPanel,
+    RecipesPanel,
+    SkillsPanel,
+    StoryPanel,
+)
+from .dialogs import (
+    AudioSettingsDialog,
+    CalendarManagerDialog,
+    CreationWizard,
+    CurrencyManagerDialog,
+    EquipmentManagerDialog,
+    HelpDialog,
+    MainMenuDialog,
+    StatsManagerDialog,
+)
 
 class MainWindow(QMainWindow):
     """
@@ -295,7 +300,7 @@ class MainWindow(QMainWindow):
             pass
 
         # --- LAUNCH THE WIZARD POPUP ---
-        from qt_ui.creation_wizard import CreationWizard
+
         wizard = CreationWizard(self)
         
         if wizard.exec() == QDialog.DialogCode.Accepted:
@@ -495,7 +500,6 @@ class MainWindow(QMainWindow):
             
     def open_audio_menu(self):
         if not self.app: return
-        from qt_ui.audio_dialog import AudioSettingsDialog
         dialog = AudioSettingsDialog(self, self.story_panel)
         if dialog.exec(): 
             # Save the new layout values immediately if "OK" is clicked

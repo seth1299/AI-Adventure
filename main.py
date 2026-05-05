@@ -8,8 +8,8 @@ from qt_ui.main_window import MainWindow
 from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt
 from player import Player
 from sound_manager import SoundManager
-from config import SAVES_DIR, BASE_SOUNDS_DIR, VALID_SOUND_FILE_NAMES, DEFAULT_RULES
-from qt_ui.main_menu_dialog import MainMenuDialog
+from config import SAVES_DIR, BASE_SOUNDS_DIR, DEFAULT_RULES
+from qt_ui.dialogs import CreationWizard, MainMenuDialog
 import threading
 from PySide6.QtWidgets import QApplication, QDialog
 from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt, QThread, QSize
@@ -149,10 +149,10 @@ class QtAppContext:
         # API surface AIManager expects
         self.story_tab = QtStoryTabAdapter(win.story_panel, self.ui)
         try:
-            if win.history_panel: pass
-            else: logging.exception("NO HISTORY PANEL UI.")
-            if win.quest_panel: pass
-            else: logging.exception("NO QUEST PANEL UI.")
+            if win.history_panel is None:
+                logging.warning("History panel UI is missing.")
+            if win.quests_panel is None:
+                logging.warning("Quests panel UI is missing.")
             if win.quests_panel: pass
             else: logging.exception("NO QUESTS PANEL UI.")
         except Exception as e:
@@ -173,6 +173,20 @@ class QtAppContext:
             }
 
         self._sync_player_state_to_ui()
+        
+    def set_adventure_paths(self, save_path: str | Path) -> None:
+        """
+        Updates save-specific file paths used outside panel-managed files.
+
+        Args:
+            save_path: The active adventure save directory.
+        """
+        save_directory = Path(save_path)
+
+        self.current_adventure_path = str(save_directory)
+        self.secret_path = str(save_directory / "secret.txt")
+        self.world_path = str(save_directory / "World.md")
+        self.sales_ledger_path = str(save_directory / "Sales Ledger.md")
         
     def _reconstruct_merchant_tables(self, text: str) -> str:
         """
@@ -240,33 +254,49 @@ class QtAppContext:
         self.ui.run_later.emit(int(ms), func)
 
     def load_rules(self) -> str:
-        # 1. Fetch the raw rules string from the file manager
-        base_rules = DEFAULT_RULES
-        
-        # 2. Get the current currencies
+        """
+        Loads the GM rules template and injects current runtime values.
+
+        Returns:
+            str: The finalized system-instruction text for Gemini.
+        """
+        formatted_rules = DEFAULT_RULES or ""
+
+        if not formatted_rules.strip():
+            logging.error("DEFAULT_RULES is empty. Check prompt_templates/default_rules.md.")
+            return ""
+
         currency_list = self.player.get_world_currencies()
-        stats_list = self.player.get_status_dict().get("tracked_stats", "UNKNOWN STATS")
-        sounds_list = VALID_SOUND_FILE_NAMES
-        
-        # 3. Format and inject them
+        stats_list = self.player.get_status_dict().get("tracked_stats", [])
+        sounds_list = self.sound_manager.get_valid_track_names()
+
         if currency_list:
-            currency_names = ", ".join([f"{c.get('name', 'Unit')} (Value: {c.get('value', 1)})" for c in currency_list])
-            formatted_rules = base_rules.replace("{DYNAMIC_CURRENCIES}", currency_names)
+            currency_names = ", ".join(
+                f"{currency.get('name', 'Unit')} (Value: {currency.get('value', 1)})"
+                for currency in currency_list
+                if isinstance(currency, dict)
+            )
         else:
-            formatted_rules = base_rules.replace("{DYNAMIC_CURRENCIES}", "No currencies defined yet.")
-            
+            currency_names = "No currencies defined yet."
+
         if stats_list:
-            stats_names = ", ".join([stat.get("name", "UNKNOWN STAT") for stat in stats_list])
-            formatted_rules = base_rules.replace("{DYNAMIC_STATS}", stats_names)
+            stats_names = ", ".join(
+                stat.get("name", "UNKNOWN STAT")
+                for stat in stats_list
+                if isinstance(stat, dict)
+            )
         else:
-            formatted_rules = base_rules.replace("{DYNAMIC_STATS}", "No stats defined yet.")
-            
+            stats_names = "No stats defined yet."
+
         if sounds_list:
-            sounds_names = ", ".join(sound for sound in sounds_list)
-            formatted_rules = base_rules.replace("{VALID_SOUND_FILE_NAMES}", sounds_names)
+            sounds_names = ", ".join(sounds_list)
         else:
-            formatted_rules = base_rules.replace("{VALID_SOUND_FILE_NAMES}", "No sounds defined yet.")
-            
+            sounds_names = "No sounds defined yet."
+
+        formatted_rules = formatted_rules.replace("{DYNAMIC_CURRENCIES}", currency_names)
+        formatted_rules = formatted_rules.replace("{DYNAMIC_STATS}", stats_names)
+        formatted_rules = formatted_rules.replace("{VALID_SOUND_FILE_NAMES}", sounds_names)
+
         return formatted_rules
 
     def save_game(self) -> None:
@@ -340,7 +370,7 @@ class QtAppContext:
         Loads savegame.json, hydrates the Player object, and syncs UI.
         No longer overwrites conversation_history from JSON.
         """
-        self.current_adventure_path = save_path
+        self.set_adventure_paths(save_path)
         self.player.set_save_path(save_path)
 
         savegame_path = os.path.join(save_path, "savegame.json")
@@ -353,7 +383,7 @@ class QtAppContext:
             logging.error(f"Failed to load karmic streak: {error}")
             self.player.karmic_streak = 0
             
-        saved_music = save_data.get("current_music", "C:\\Users\\sethg\\OneDrive\\Desktop\\Main Folder\\Applications\\AI-Adventure\\sounds\\Town Village City.mp3")
+        saved_music = save_data.get("current_music")
         if saved_music:
             self.sound_manager.play_music(saved_music)
             
@@ -553,9 +583,11 @@ def main() -> int:
                 return
             else: 
                 logging.warning("No save game path exists.")
-            FileManager.create_file_if_not_exists(secret_path)
-            FileManager.create_file_if_not_exists(world_path)
-            FileManager.create_file_if_not_exists(sales_ledger_path)
+            app_ctx.set_adventure_paths(save_path)
+
+            FileManager.create_file_if_not_exists(app_ctx.secret_path)
+            FileManager.create_file_if_not_exists(app_ctx.world_path, "# World\n\n")
+            FileManager.create_file_if_not_exists(app_ctx.sales_ledger_path, "# Sales Ledger\n\n")
                 
         except Exception as boot_sequence_error:
             logging.exception(f"Could not boot selected save. Exception details: {boot_sequence_error}")
@@ -568,7 +600,6 @@ def main() -> int:
         except Exception:
             logging.exception("Failed to set base path for panels")
 
-        from qt_ui.creation_wizard import CreationWizard
         wizard = CreationWizard(win)
         if wizard.exec() == QDialog.DialogCode.Accepted:
             wizard_data = wizard.get_wizard_data()

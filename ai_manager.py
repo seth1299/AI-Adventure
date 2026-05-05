@@ -1,18 +1,21 @@
 from google import genai
 from google.genai import types
 import threading, re, os, logging, csv
-from config import GEMINI_API_KEY, MODEL, VALID_SOUND_FILE_NAMES
+from config import GEMINI_API_KEY, MODEL
 from tabulate import tabulate
 from rapidfuzz import process, fuzz
 from pathlib import Path
 
 class AIManager:
-    def __init__(self, app):
+    def __init__(self, app) -> None:
+        """Initializes the Gemini API client used by the AI manager."""
         self.app = app
+        self.client: genai.Client | None = None
+        
         try:
             self.client = genai.Client(api_key=GEMINI_API_KEY)
-        except Exception as e:
-            logging.error(f"Failed to initialize Gemini Client: {e}")
+        except Exception as error:
+            logging.exception("Failed to initialize Gemini Client: %s", error)
 
     def clean_quotes(self, text):
         """Replaces smart quotes and unicode dashes with standard ASCII equivalents."""
@@ -36,14 +39,31 @@ class AIManager:
         
         # 2. Inject Stats directly
         self.app.player.tracked_stats = []
-        for stat in data['stats']:
-            if stat['enabled']:
-                self.app.player.tracked_stats.append({
-                    "name": stat['name'],
-                    "value": stat['value'],
+
+        for stat in data.get("stats", []):
+            if not stat.get("enabled", True):
+                continue
+
+            try:
+                stat_value = int(stat.get("value", 100))
+                stat_min = int(stat.get("min", 0))
+                stat_max = int(stat.get("max", 100))
+            except (TypeError, ValueError) as error:
+                logging.exception("Invalid wizard stat value: %s", error)
+                stat_value = 100
+                stat_min = 0
+                stat_max = 100
+
+            self.app.player.tracked_stats.append(
+                {
+                    "name": stat.get("name", "Unknown Stat"),
+                    "value": max(stat_min, min(stat_max, stat_value)),
+                    "min": stat_min,
+                    "max": stat_max,
                     "enabled": True,
-                    "description": stat['description']
-                })
+                    "description": stat.get("description", ""),
+                }
+    )
                 
         # 3. Inject Currencies directly
         self.app.player.world_currencies = []
@@ -90,7 +110,8 @@ class AIManager:
         self.app._sync_player_state_to_ui()
         
         # 7. Build the prompt
-        valid_sounds_str = ", ".join(VALID_SOUND_FILE_NAMES) if VALID_SOUND_FILE_NAMES else "No music available."
+        valid_sound_names = self.app.sound_manager.get_valid_track_names()
+        valid_sounds_str = ", ".join(valid_sound_names) if valid_sound_names else "No music available."
         focus_text = ', '.join(data['focus']) if data['focus'] else "Balanced (Combat, Exploration, Trading/Economy, Social/Roleplay)"
         
         prompt = f"""
@@ -149,8 +170,8 @@ Output the following tags to set up the starting gameplay state:
 
 [[SKILL: Name | Description | Level]] (Output this tag for EACH skill listed in the "Provided Starting Skills" section. If the Name or Description is "Unknown", creatively invent a fitting one based on the character's background. Keep the Level exactly as provided, remembering that the higher the level is for a Skill, the better the Player is at that Skill, so please reserve the higher level Skills for things that the Player Character may be good at, depending on their background.)
 [[ADD: Type | Name | Description | Amount]] (Add logical starting equipment. Repeat this tag for each item that the Player will start out with.)
-[[GIVE_COIN: X]] (Give the player a logical amount of starting base currency for their background. Repeat this tag if you are adding different types of coins.)
-[[STATUS: {data['starting_location'] or 'Unknown'} | AUTO]]
+[[CHANGE_CURRENCY: X]] (Give the player a logical amount of starting base currency for their background.)
+[[STATUS: {data['starting_location'] or 'Unknown'} | AUTO | AUTO]]
 [[MUSIC: FILENAME_PLACEHOLDER]] (You MUST output this tag to set the starting music. Replace FILENAME_PLACEHOLDER with exactly one of these options: {valid_sounds_str})
 
 After outputting all tags, summarize the first starting turn, describe the surroundings vividly, and finish by asking "What do you do now?" and suggesting a few possible actions.
@@ -237,6 +258,16 @@ After outputting all tags, summarize the first starting turn, describe the surro
         current_rules = self.app.load_rules()
             
         try:
+            """Sends the prompt to Gemini and processes all resulting tags."""
+            if self.client is None:
+                logging.error("Gemini Client is unavailable; query skipped.")
+                self.app.after(0, lambda: self.app.story_tab.set_controls_state(True))
+                self.app.story_tab.print_text(
+                    "Gemini client failed to initialize. Check your API key and log file.",
+                    sender="System",
+                )
+                return
+        
             if is_startup:
                 self.app.story_tab.set_controls_state(False, "GM is thinking...")
                 
@@ -372,22 +403,32 @@ After outputting all tags, summarize the first starting turn, describe the surro
                     final_display_text = f"{main_body}\n\n**{marker}**\n\n{options_string.strip()}"
                     break
             final_history_text = clean_pattern.sub("", history_ai_text)
-            final_history_text = re.sub(r'\n{3,}', '\n\n', final_history_text).strip()
-            if final_display_text and len(final_display_text) > 8:
-                self.app.story_tab.print_text(final_display_text, sender="")
-            else: logging.warning(f"No text to save in message \n\n{final_display_text}")
-                
-                
+            final_history_text = re.sub(r"\n{3,}", "\n\n", final_history_text).strip()
+
+            history_body_to_save = final_history_text
+
+            for marker in trim_markers:
+                if marker in history_body_to_save:
+                    history_body_to_save = history_body_to_save.split(marker, 1)[0].strip()
+                    break
+
             if "History" in self.app.notebook_widgets:
                 hist_panel = self.app.notebook_widgets["History"]
                 current_hist = hist_panel.get_text()
-                    
-                # If this is the first turn, we don't want to log "**Player:** System: Generate Start"
+
                 if is_startup:
-                    new_exchange = f"**System: Start of Game**\n\n**GM:** {text_to_save.strip()}\n\n// NEW EXCHANGE\n\n"
+                    new_exchange = (
+                        f"**System: Start of Game**\n\n"
+                        f"**GM:** {history_body_to_save.strip()}\n\n"
+                        f"// NEW EXCHANGE\n\n"
+                    )
                 else:
-                    new_exchange = f"{user_text}\n\n{text_to_save.strip()}\n\n// NEW EXCHANGE\n\n"
-                    
+                    new_exchange = (
+                        f"{user_text}\n\n"
+                        f"{history_body_to_save.strip()}\n\n"
+                        f"// NEW EXCHANGE\n\n"
+                    )
+
                 self.app.after(0, lambda ch=current_hist, ne=new_exchange: hist_panel.set_text(ch + ne))
                 
             try:

@@ -35,7 +35,11 @@ class Player:
         """Loads state from the Status dictionary in savegame.json."""
         self.location = data.get("location", "Unknown")
         self.turn = int(data.get("turn", 1))
-        self.day = data.get("day", 1)
+        try:
+            self.day = int(data.get("day", 1) or 1)
+        except Exception as error:
+            logging.exception("Invalid saved day value: %s", error)
+            self.day = 1
         self.time = data.get("time", "Start")
         self.weather = data.get("weather", "Sunny")
         self.temperature = data.get("temperature", 76)
@@ -121,11 +125,11 @@ class Player:
                 
                 # Look for (RAN: 1d8) or (RAN: 15) in the description
                 ran_match = re.search(r"\(RAN:\s*([^)]+)\)", desc, re.IGNORECASE)
-                range = ran_match.group(1) if ran_match else "Melee"
+                weapon_range = ran_match.group(1) if ran_match else "Melee"
                 
                 # Look for (TYP) in the description
                 typ_match = re.search(r"\(TYP:\s*([^)]+)\)", desc, re.IGNORECASE)
-                type = typ_match.group(1) if typ_match else "Energy"
+                weapon_type = typ_match.group(1) if typ_match else "Energy"
                 
                 if type == "Ballistic":
                     amm_match = re.search(r"\(AMM:\s*([^)]+)\)", desc, re.IGNORECASE)
@@ -134,9 +138,9 @@ class Player:
                     mag_match = re.search(r"\(MAG:\s*([^)]+)\)", desc, re.IGNORECASE)
                     mag_size = mag_match.group(1) if mag_match else "6"
                     
-                    weapon_info.append(f"{name} (Accuracy: {accuracy}, Damage: {damage}), Range: {range}, Type: {type}, Ammo Type: {ammo_type}, Magazine Size: {mag_size}")
+                    weapon_info.append(f"{name} (Accuracy: {accuracy}, Damage: {damage}), Range: {weapon_range}, Type: {weapon_type}, Ammo Type: {ammo_type}, Magazine Size: {mag_size}")
                 else:
-                    weapon_info.append(f"{name} (Accuracy: {accuracy}, Damage: {damage}), Range: {range}, Type: {type}")
+                    weapon_info.append(f"{name} (Accuracy: {accuracy}, Damage: {damage}), Range: {weapon_range}, Type: {weapon_type}")
 
         if not weapon_info:
             return "Unarmed (Accuracy: +0, Damage: 1, Range: Melee, Type: Energy)"
@@ -405,13 +409,14 @@ class Player:
 
         # Handle XP & Leveling
         if level < 5:
-            skill_entry["XP"] = xp + 1
+            new_xp = xp + 1
 
-            if xp >= threshold:
+            if new_xp >= threshold:
                 skill_entry["Level"] = level + 1
-                skill_entry["XP"] = 0
+                skill_entry["XP"] = 0 # Reset XP to 0 when leveling up
                 skill_entry["Threshold"] = threshold + 2
-                #logging.info(f"Leveled up {name} Skill from level {level} to {skill_entry["Level"]}!")
+            else:
+                skill_entry["XP"] = new_xp
 
         self.save_skills_data(data)
         skill_bonus = int(skill_entry.get("Level", 0) or 0)
