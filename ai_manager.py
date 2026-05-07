@@ -3,7 +3,6 @@ from google.genai import types
 import threading, re, os, logging, csv
 from config import GEMINI_API_KEY, MODEL
 from tabulate import tabulate
-from rapidfuzz import process, fuzz
 from pathlib import Path
 
 class AIManager:
@@ -113,6 +112,8 @@ class AIManager:
         valid_sound_names = self.app.sound_manager.get_valid_track_names()
         valid_sounds_str = ", ".join(valid_sound_names) if valid_sound_names else "No music available."
         focus_text = ', '.join(data['focus']) if data['focus'] else "Balanced (Combat, Exploration, Trading/Economy, Social/Roleplay)"
+        currency_prompt_text = self._build_starting_currency_prompt(data.get("currencies", []))
+        stat_prompt_text = self._build_starting_stat_prompt(data.get("stats", []))
         
         prompt = f"""
 System: Initialize a new RPG adventure using the following parameters.
@@ -134,6 +135,12 @@ Provided Character Information:
 
 Provided Starting Skills:
 {skills_prompt_text}
+
+Provided Starting Currencies:
+{currency_prompt_text}
+
+Provided Tracked Stats:
+{stat_prompt_text}
 
 Starting Location: {data['starting_location'] or 'Unknown Starting Location'}
 Final Comments/Rules: {data['final_comments'] or 'N/A'}
@@ -169,8 +176,10 @@ Output the following tags to set up the starting gameplay state:
 ]] (You must output this tag. Output the exact Markdown formatting shown inside this tag, replacing the "(Filled value)" text with creative and/or logical values based off of the \"Provided Character Information\" section above, remembering to ONLY change the information if it is \"Unknown\".).
 
 [[SKILL: Name | Description | Level]] (Output this tag for EACH skill listed in the "Provided Starting Skills" section. If the Name or Description is "Unknown", creatively invent a fitting one based on the character's background. Keep the Level exactly as provided, remembering that the higher the level is for a Skill, the better the Player is at that Skill, so please reserve the higher level Skills for things that the Player Character may be good at, depending on their background.)
+[[DEFINE_CURRENCY: Name | Base Unit Value]] (Output this tag for each starting currency ONLY if no valid currencies were provided by the player. The smallest/base currency must have value 1.)
+[[DEFINE_STAT: Name | Starting Value | Description]] (Output this tag for each starting tracked stat ONLY if no valid stats were provided by the player and tracked stats are useful for this campaign.)
+[[CHANGE_CURRENCY: X]] where X is a single integer number of base currency units. Do not include coin names. Do not split denominations.
 [[ADD: Type | Name | Description | Amount]] (Add logical starting equipment. Repeat this tag for each item that the Player will start out with.)
-[[CHANGE_CURRENCY: X]] (Give the player a logical amount of starting base currency for their background.)
 [[STATUS: {data['starting_location'] or 'Unknown'} | AUTO | AUTO]]
 [[MUSIC: FILENAME_PLACEHOLDER]] (You MUST output this tag to set the starting music. Replace FILENAME_PLACEHOLDER with exactly one of these options: {valid_sounds_str})
 
@@ -188,9 +197,22 @@ After outputting all tags, summarize the first starting turn, describe the surro
         # 1. Gather Context from Tabs
         context_data = ""
         for name, widget in self.app.notebook_widgets.items():
-            if name not in ["Story", "Journal", "History"]:
-                if hasattr(widget, 'get_text'):
-                    context_data += f"\n[{name.upper()}]:\n{widget.get_text().strip()}\n"
+            if name in ["Story", "Journal", "History"]:
+                continue
+
+            try:
+                panel_context = ""
+
+                if hasattr(widget, "get_ai_context"):
+                    panel_context = widget.get_ai_context().strip()
+                elif hasattr(widget, "get_text"):
+                    panel_context = widget.get_text().strip()
+
+                if panel_context:
+                    context_data += f"\n[{name.upper()}]:\n{panel_context}\n"
+
+            except Exception as error:
+                logging.exception("Failed to gather AI context from %s panel: %s", name, error)
                     
         try:
             # Convert the string path to a Path object to check existence
@@ -214,29 +236,21 @@ After outputting all tags, summarize the first starting turn, describe the surro
         rich_date = status_dict.get("formatted_date", f"Day {status_dict.get('day')}")
         calendar_context = ""
         cal_settings = status_dict.get("calendar_settings", {})
-        armor_rating = self.app.player.get_armor_rating()
-        weapon_stats = self.app.player.get_weapon_stats()
-        equipped_str = ""
         if cal_settings and cal_settings.get("weekdays") and cal_settings.get("months"):
             weekdays_str = ", ".join(cal_settings["weekdays"])
             # Format: "MonthName (30 days), OtherMonth (20 days)"
             months_str = ", ".join([f"{m.get('name')} ({m.get('days')} days)" for m in cal_settings["months"]])
             calendar_context = f"\nWorld Calendar Rules -> Weekdays in order: [{weekdays_str}]. Months in order: [{months_str}]. DO NOT USE REAL-WORLD CALENDAR INFORMATION UNLESS THAT IS WHAT WAS JUST GIVEN TO YOU."
-        for slot, item in self.app.player.equipment.items():
-            item_name = item.get("name", "Empty") if item else "Empty"
-            equipped_str += f"{slot}: {item_name}, "
-        equipped_str = equipped_str.rstrip(", ")
+        stats_block = stats_str.strip() if stats_str.strip() else "None"
+        calendar_block = f"{calendar_context}\n" if calendar_context else ""
         status_context = (
             f"\n[CURRENT STATUS]\n"
             f"Player's current Location: {self.app.player.location}\n"
             f"Current in-game Date: {rich_date}\n"
             f"Current in-game Time: {self.app.player.time}\n"
             f"Current in-game Turn: {self.app.player.turn}\n"
-            f"Stats: {stats_str}"
-            f"{calendar_context}"
-            f"Total Armor Rating: {armor_rating}\n"
-            f"Equipped Gear: {equipped_str}\n"
-            f"Weapon Stats: {weapon_stats}\n"
+            f"Here are the Player's 'Stats' that you MUST track using the provided Rules for EACH stat provided: {stats_block}"
+            f"{calendar_block}"
         )
         context_data += status_context
 
@@ -245,13 +259,113 @@ After outputting all tags, summarize the first starting turn, describe the surro
         if "History" in self.app.notebook_widgets:
             history_text = self.app.notebook_widgets["History"].get_text().strip()
         recent_history = history_text[-6000:] if len(history_text) > 6000 else history_text
-        full_prompt = f"\nPast Conversation History:\n{recent_history}\nPlease remember to consider the following in your response: {context_data}\nYOUR FINAL END GOAL: Using all of the above context and information, here is the user's actual prompt: \"{user_text}\""
+        full_prompt = f"\nPast Conversation History:\n{recent_history}\nPlease remember to consider the following in your response: {context_data}\n\n===\nYOUR FINAL END GOAL: Using all of the above context and information, here is the user's actual prompt: \"{user_text}\""
         
-        logging.info(f"\n\nFULL PROMPT\n\n{full_prompt}\n\n")
+        # logging.info(f"\n\nFULL PROMPT\n\n{full_prompt}\n\n")
         
         # 4. Thread the request
         threading.Thread(target=self.query_ai, args=(full_prompt, user_text), daemon=True).start()
 
+    def _build_starting_currency_prompt(self, currencies: list[dict] | None) -> str:
+        """
+        Builds the startup currency instruction block for Gemini.
+
+        If the player provided currencies in the wizard, those are treated as fixed.
+        If they provided none, Gemini must define a logical currency system using
+        DEFINE_CURRENCY tags.
+        """
+        if not currencies:
+            return (
+                "No starting currencies were provided by the player.\n"
+                "You MUST invent a logical currency system for this world.\n"
+                "Output [[DEFINE_CURRENCY: Name | Base Unit Value]] once for each denomination.\n"
+                "At minimum, define one base currency with value 1.\n"
+                "For fantasy worlds, a normal example would be Copper Piece = 1, Silver Piece = 10, Gold Piece = 100.\n"
+                "For modern or sci-fi worlds, use genre-appropriate currency names."
+            )
+
+        rows: list[str] = []
+        for currency in currencies:
+            if not isinstance(currency, dict):
+                logging.warning("Skipped malformed currency row during startup prompt: %r", currency)
+                continue
+
+            name = str(currency.get("name", "")).strip()
+            if not name:
+                continue
+
+            try:
+                value = max(1, int(currency.get("value", 1)))
+            except (TypeError, ValueError):
+                logging.exception("Invalid currency value during startup prompt: %r", currency)
+                value = 1
+
+            rows.append(f"- {name} | Base Unit Value: {value}")
+
+        if not rows:
+            return (
+                "No valid starting currencies were provided by the player.\n"
+                "You MUST invent a logical currency system using [[DEFINE_CURRENCY: Name | Base Unit Value]]."
+            )
+
+        return (
+            "The player already defined these currencies. Do NOT redefine them unless explicitly told to later.\n"
+            + "\n".join(rows)
+        )
+
+    def _build_starting_stat_prompt(self, stats: list[dict] | None) -> str:
+        """
+        Builds the startup tracked-stat instruction block for Gemini.
+
+        If the player provided tracked stats, those are treated as fixed.
+        If they provided none, Gemini may define appropriate starting stats using
+        DEFINE_STAT tags.
+        """
+        if not stats:
+            return (
+                "No tracked stats were provided by the player.\n"
+                "If this genre benefits from tracked stats, you SHOULD define a small useful set using "
+                "[[DEFINE_STAT: Name | Starting Value | Description]].\n"
+                "Examples: Health, Stamina, Hunger, Sanity, Reputation, Heat, Morale.\n"
+                "Only define stats that will actually matter for this campaign."
+            )
+
+        rows: list[str] = []
+        for stat in stats:
+            if not isinstance(stat, dict):
+                logging.warning("Skipped malformed stat row during startup prompt: %r", stat)
+                continue
+
+            name = str(stat.get("name", "")).strip()
+            if not name:
+                continue
+
+            try:
+                value = int(stat.get("value", 100))
+                minimum = int(stat.get("min", 0))
+                maximum = int(stat.get("max", 100))
+            except (TypeError, ValueError):
+                logging.exception("Invalid stat values during startup prompt: %r", stat)
+                value = 100
+                minimum = 0
+                maximum = 100
+
+            description = str(stat.get("description", "")).strip() or "No description provided."
+            rows.append(
+                f"- {name} | Current Value: {value} | Min: {minimum} | Max: {maximum} | Rules: {description}"
+            )
+
+        if not rows:
+            return (
+                "No valid tracked stats were provided by the player.\n"
+                "If this genre benefits from tracked stats, define them using [[DEFINE_STAT: Name | Starting Value | Description]]."
+            )
+
+        return (
+            "The player already defined these tracked stats. Do NOT redefine them unless explicitly told to later.\n"
+            + "\n".join(rows)
+        )
+    
     def query_ai(self, prompt, user_text, recursion_depth=0, is_startup=False):
         """Sends the prompt to Gemini and processes all resulting tags."""
         current_rules = self.app.load_rules()
@@ -400,6 +514,12 @@ After outputting all tags, summarize the first starting turn, describe the surro
                     # Reconstruct the string with bolding for the question and proper list spacing
                     final_display_text = f"{main_body}\n\n**{marker}**\n\n{options_string.strip()}"
                     break
+                
+            if final_display_text and len(final_display_text.strip()) > 8:
+                self.app.story_tab.print_text(final_display_text, sender="")
+            else:
+                logging.warning("AI response contained no displayable narrative after tag cleanup.")
+                
             final_history_text = clean_pattern.sub("", history_ai_text)
             final_history_text = re.sub(r"\n{3,}", "\n\n", final_history_text).strip()
 
@@ -442,9 +562,69 @@ After outputting all tags, summarize the first starting turn, describe the surro
 class TagParser:
     def __init__(self, app):
         self.app = app
+        
+    def _strip_currency_transaction_tags(self, ai_text: str) -> str:
+        """
+        Removes currency transaction tags after they have already been processed.
+
+        This prevents later parsing stages from accidentally re-processing or
+        misinterpreting currency transaction tags while preserving other tags like
+        DEFINE_CURRENCY.
+        """
+        if not ai_text:
+            return ""
+
+        return re.sub(
+            r"\[\[CHANGE_CURRENCY:\s*-?\d+\s*\]\]",
+            "",
+            ai_text,
+            flags=re.DOTALL,
+        )
+
+
+    def _process_inventory_tags(self, ai_text: str) -> None:
+        """
+        Processes inventory mutation tags exactly once.
+
+        This method should only be called after CHANGE_CURRENCY has been processed,
+        because failed payments may need to block inventory changes.
+        """
+        if not ai_text:
+            logging.warning("TagParser._process_inventory_tags called with empty text.")
+            return
+
+        inventory_panel = self.app.notebook_widgets.get("Inventory")
+
+        if inventory_panel is None:
+            logging.error("Inventory tags ignored because the Inventory panel is missing.")
+            return
+
+        for match in re.finditer(r"\[\[ADD:\s*(.*?)\]\]", ai_text, re.DOTALL):
+            inventory_panel.autonomous_add(match.group(1))
+
+        for match in re.finditer(r"\[\[REMOVE:\s*(.*?)\]\]", ai_text, re.DOTALL):
+            inventory_panel.autonomous_remove(match.group(1))
+
+        for match in re.finditer(r"\[\[MODIFY_ITEM:\s*(.*?)\]\]", ai_text, re.DOTALL):
+            inventory_panel.modify_item(match.group(1))
 
     def process_standard_tags(self, ai_text, is_startup: bool = False) -> None:
         """Processes typical gameplay tags and returns the cleaned text."""
+        
+        if not ai_text:
+            logging.warning("TagParser.process_standard_tags called with empty text.")
+            return
+
+        inventory_mutations_allowed = self._process_currency_tags(ai_text)
+        ai_text_without_currency_transactions = self._strip_currency_transaction_tags(ai_text)
+
+        if inventory_mutations_allowed:
+            self._process_inventory_tags(ai_text_without_currency_transactions)
+        else:
+            logging.warning("Skipped inventory mutations because a currency transaction failed.")
+
+        # Continue processing non-inventory tags using the text with CHANGE_CURRENCY removed.
+        ai_text = ai_text_without_currency_transactions
         
         # --- Initial World and Character Profile Generation ---
         for match in re.finditer(r"\[\[WORLD_PROFILE:\s*(.*?)\]\]", ai_text, re.DOTALL):
@@ -462,19 +642,6 @@ class TagParser:
                 char_panel.set_text(new_char_md)
                 # Instantly write the properly formatted Markdown file to disk
                 self.app.after(0, lambda p=char_panel: p.save_now())
-        
-        # Inventory
-        for match in re.finditer(r"\[\[ADD:\s*(.*?)\]\]", ai_text, re.DOTALL):
-            res = self.app.notebook_widgets["Inventory"].autonomous_add(match.group(1))
-            #self.app.story_tab.print_text(res, sender="GM")
-
-        for match in re.finditer(r"\[\[REMOVE:\s*(.*?)\]\]", ai_text, re.DOTALL):
-            res = self.app.notebook_widgets["Inventory"].autonomous_remove(match.group(1))
-            #self.app.story_tab.print_text(res, sender="GM")
-            
-        for match in re.finditer(r"\[\[MODIFY_ITEM:\s*(.*?)\]\]", ai_text, re.DOTALL):
-            if "Inventory" in self.app.notebook_widgets:
-                self.app.notebook_widgets["Inventory"].modify_item(match.group(1))
             
         for match in re.finditer(r"\[\[MODIFY_STAT:\s*(.*?)\s*\|\s*(.*?)\]\]", ai_text):
             stat_name, stat_val = match.group(1).strip(), match.group(2).strip()
@@ -628,20 +795,24 @@ class TagParser:
                     
         for match in re.finditer(r"\[\[UPDATE_WORLD:\s*(.*?)\]\]", ai_text, re.DOTALL):
             new_world_lore = match.group(1).strip()
-            
+
+            if not new_world_lore:
+                continue
+
             try:
-                if self.app.world_path:
-                    world_file_path = Path(self.app.world_path)
-                    
-                    # Append the new lore to the Markdown file
-                    with world_file_path.open("a", encoding="utf-8") as world_file:
-                        world_file.write(f"\n{new_world_lore}\n")
-                        
-                    # ... UI update logic remains unchanged ...
-                else:
-                    logging.error("Error: self.app.world_path is None.")
+                world_panel = self.app.notebook_widgets.get("World")
+                if world_panel is None:
+                    logging.error("UPDATE_WORLD ignored because the World panel is missing.")
+                    continue
+
+                current_world_text = world_panel.get_text().rstrip()
+                updated_world_text = f"{current_world_text}\n\n{new_world_lore}\n"
+
+                world_panel.set_text(updated_world_text)
+                world_panel.save_now()
+
             except Exception as world_update_error:
-                logging.error(f"Error: Couldn't update world: {world_update_error}")
+                logging.exception("Could not update World panel from UPDATE_WORLD tag: %s", world_update_error)
                 
         for match in re.finditer(r"\[\[DEFINE_CURRENCY:\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text, re.DOTALL):
             c_name = match.group(1).strip()
@@ -651,55 +822,9 @@ class TagParser:
             existing = next((c for c in self.app.player.world_currencies if c.get("name", "").lower() == c_name.lower()), None)
             if not existing:
                 self.app.player.world_currencies.append({"name": c_name, "value": c_val})
-
-                
-        for match in re.finditer(r"\[\[CHANGE_CURRENCY:\s*(-?\d+)\]\]", ai_text, re.DOTALL):
-            amount_str = match.group(1).strip()
-            try:
-                amount = int(amount_str)
-                success, msg = self.app.player.change_currency(amount)
-                #self.app.story_tab.print_text(msg, sender="System")
                 self.app.after(0, lambda: self.app._sync_player_state_to_ui())
                 if "Inventory" in self.app.notebook_widgets:
                     self.app.after(0, lambda: self.app.notebook_widgets["Inventory"].refresh_display())
-
-            except ValueError:
-                logging.error(f"System Error: Invalid currency amount: {amount_str}")
-                
-        for match in re.finditer(r"\[\[GIVE_COIN:\s*(.*?)\s*\|\s*(-?\d+)\]\]", ai_text, re.DOTALL):
-            ai_coin_name = match.group(1).strip()
-            try:
-                coin_amount = int(match.group(2).strip())
-                coin_value = 1 # Default fallback to base units
-                
-                if self.app.player.world_currencies:
-                    # 1. Create a simple list of valid currency names to check against
-                    valid_names = [cur.get("name", "") for cur in self.app.player.world_currencies]
-                    
-                    # 2. Use RapidFuzz to find the closest match
-                    # extractOne returns a tuple: (best_match_string, score_out_of_100, original_index)
-                    best_match = process.extractOne(ai_coin_name, valid_names, scorer=fuzz.WRatio)
-                    
-                    # 3. Check if the match is "close enough" (70% is usually a good threshold)
-                    if best_match and best_match[1] >= 70:
-                        matched_index = best_match[2]
-                        matched_coin_dict = self.app.player.world_currencies[matched_index]
-                        coin_value = int(matched_coin_dict.get("value", 1))
-                        #logging.info(f"Fuzzy matched AI coin '{ai_coin_name}' to '{best_match[0]}' with score {best_match[1]}")
-                    else:
-                        logging.warning(f"Could not fuzzy match AI coin '{ai_coin_name}'. Defaulting to base unit 1.")
-                        
-                # 4. Let Python do the math safely
-                total_base_change = coin_amount * coin_value
-                success, msg = self.app.player.change_currency(total_base_change)
-                
-                # 5. Sync the UI
-                self.app.after(0, lambda: self.app._sync_player_state_to_ui())
-                if "Inventory" in self.app.notebook_widgets:
-                    self.app.after(0, lambda: self.app.notebook_widgets["Inventory"].refresh_display())
-                    
-            except ValueError:
-                logging.error(f"System Error: Invalid coin amount for GIVE_COIN tag.")
                 
         # Allow for multi-line and negative numbers just in case
         for match in re.finditer(r"\[\[DEFINE_STAT:\s*(.*?)\s*\|\s*(-?\d+)\s*\|\s*(.*?)\]\]", ai_text, re.DOTALL):
@@ -710,8 +835,55 @@ class TagParser:
             # Check if stat already exists before appending to prevent double-parsing
             existing = next((stat for stat in self.app.player.tracked_stats if stat.get("name", "").lower() == s_name.lower()), None)
             if not existing:
-                self.app.player.tracked_stats.append({"name": s_name, "value": s_val, "enabled": True, "description": s_desc})
+                self.app.player.tracked_stats.append(
+                    {
+                        "name": s_name,
+                        "value": s_val,
+                        "min": 0,
+                        "max": 100,
+                        "enabled": True,
+                        "description": s_desc,
+                    }
+                )
+                self.app.after(0, lambda: self.app._sync_player_state_to_ui())
                 
+    def _process_currency_tags(self, ai_text: str) -> bool:
+        """
+        Processes currency tags before inventory mutations.
+
+        Returns:
+            bool: True if inventory-changing tags may safely continue.
+                False if a failed payment should block item changes.
+        """
+        inventory_mutations_allowed = True
+
+        for match in re.finditer(r"\[\[CHANGE_CURRENCY:\s*(-?\d+)\]\]", ai_text, re.DOTALL):
+            amount_str = match.group(1).strip()
+
+            try:
+                amount = int(amount_str)
+            except ValueError:
+                logging.error("Invalid CHANGE_CURRENCY amount: %r", amount_str)
+                continue
+
+            success, message = self.app.player.change_currency(amount)
+
+            if not success and amount < 0:
+                inventory_mutations_allowed = False
+                logging.warning("Currency transaction blocked: %s", message)
+
+                if getattr(self.app, "story_tab", None) is not None:
+                    self.app.story_tab.print_text(f"System: {message}", sender="System")
+
+            self.app.after(0, lambda: self.app._sync_player_state_to_ui())
+
+            if "Inventory" in self.app.notebook_widgets:
+                self.app.after(0, lambda: self.app.notebook_widgets["Inventory"].refresh_display())
+
+        return inventory_mutations_allowed
+    
+    
+    
     def process_inline_tags(self, ai_text, is_history=False):
         """Processes tags that need to be replaced with actual text before displaying."""
         
@@ -726,90 +898,126 @@ class TagParser:
                 return match.group(0) 
             
         def replace_merchant(match):
+            """
+            Converts a [[MERCHANT: ...]] tag into a readable merchant table.
+
+            Merchant entry format:
+                "Item Name | Description | PriceBaseUnits | Quantity"
+
+            PriceBaseUnits must be a plain non-negative integer measured in the
+            world's base currency unit. Natural-language prices like "5 Copper Pieces"
+            are rejected and logged instead of being displayed.
+            """
             raw_data = match.group(1).strip()
             if not raw_data:
                 return ""
-            
-            # 1. Handle multi-line strings cleanly by splitting into lines first
-            raw_lines = [line.strip() for line in raw_data.split('\n') if line.strip()]
-            
-            parsed_items = []
+
+            raw_lines = [line.strip() for line in raw_data.split("\n") if line.strip()]
+
+            parsed_items: list[str] = []
+
             for line in raw_lines:
                 try:
-                    # csv.reader safely handles commas between items (e.g., 'Item1', 'Item2')
-                    # while ignoring commas inside quoted descriptions.
                     items_in_line = list(csv.reader([line], skipinitialspace=True))[0]
+
                     for item in items_in_line:
-                        clean_item = item.strip().strip('\'"')
+                        clean_item = item.strip().strip("'\"")
                         if clean_item:
                             parsed_items.append(clean_item)
-                except Exception as e:
-                    logging.error(f"Failed to parse line in merchant tag: {e}")
-                    # Failsafe: if csv.reader fails, just add the whole line
-                    clean_line = line.strip().strip('\'"')
+
+                except Exception as error:
+                    logging.exception("Failed to parse line in MERCHANT tag: %s", error)
+
+                    clean_line = line.strip().strip("'\"")
                     if clean_line:
                         parsed_items.append(clean_line)
 
-            table_data = []
-            history_items = []
-            max_cols = 3 # We start by expecting at least Name, Desc, Price
-            headers = ["Item Name", "Description", "Price"]
+            table_data: list[list[str]] = []
+            history_items: list[str] = []
+
+            headers = ["Item Name", "Description", "Price", "Quantity / Stock"]
+            max_cols = len(headers)
 
             for item in parsed_items:
-                # Split by pipe and clean whitespace
-                parts = [p.strip() for p in item.split('|')]
-                
-                if len(parts) >= 3:
-                    name = parts[0]
-                    description = parts[1]
-                    price_raw = parts[2]
-                    
-                    try:
-                        price_val = int(price_raw)
-                        formatted_price = self.app.player.get_formatted_currency(price_val)
-                    except ValueError:
-                        formatted_price = price_raw 
-                        
-                    row_data = [name, description, formatted_price]
-                    
-                    # --- FIX: Dynamically capture any extra columns the AI generates! ---
-                    if len(parts) > 3:
-                        row_data.extend(parts[3:])
-                        max_cols = max(max_cols, len(row_data))
-                        
-                    table_data.append(row_data)
-                    history_items.append(f"'{name}' - {description} ({formatted_price})") 
-                elif len(parts) > 0 and parts[0]:
-                    # Fallback if the AI really messes up the formatting
-                    table_data.append(parts)
-                    history_items.append(f"'{parts[0]}'")
-            
+                parts = [part.strip() for part in item.split("|")]
+
+                if len(parts) < 3:
+                    logging.warning(
+                        "Skipped malformed MERCHANT entry. Expected at least 3 fields: %r",
+                        item,
+                    )
+                    continue
+
+                name = parts[0]
+                description = parts[1]
+                price_raw = parts[2]
+
+                if not name or not description:
+                    logging.warning(
+                        "Skipped MERCHANT entry with blank name or description: %r",
+                        item,
+                    )
+                    continue
+
+                # Strictly accept only unsigned base-unit integers: 0, 1, 25, 100, etc.
+                # Rejects: "-5", "+5", "5.0", "5 Copper Pieces", "Free", "AUTO".
+                if re.fullmatch(r"\d+", price_raw) is None:
+                    logging.warning(
+                        "Skipped MERCHANT entry with invalid price %r. Price must be a non-negative integer in base currency units. Entry: %r",
+                        price_raw,
+                        item,
+                    )
+                    continue
+
+                try:
+                    price_value = int(price_raw)
+                except (TypeError, ValueError) as error:
+                    logging.exception(
+                        "Skipped MERCHANT entry because price could not be converted to int. Price: %r. Error: %s",
+                        price_raw,
+                        error,
+                    )
+                    continue
+
+                formatted_price = (
+                    "Free"
+                    if price_value == 0
+                    else self.app.player.get_formatted_currency(price_value)
+                )
+
+                quantity = parts[3] if len(parts) > 3 else ""
+
+                row_data = [name, description, formatted_price, quantity]
+
+                if len(parts) > 4:
+                    row_data.extend(parts[4:])
+                    max_cols = max(max_cols, len(row_data))
+
+                table_data.append(row_data)
+                history_items.append(f"'{name}' - {description} ({formatted_price})")
+
             if not table_data:
-                return "\n*(This merchant has nothing for sale.)*\n"
-                
-            # Pad all rows with empty strings so they match max_cols (prevents Tabulate from crashing)
+                logging.warning("MERCHANT tag contained no valid merchant entries: %r", raw_data)
+                return "\n*(Merchant table omitted because no valid merchant entries were provided.)*\n"
+
             for row in table_data:
                 while len(row) < max_cols:
                     row.append("")
-                    
-            # Dynamically add headers for the extra columns
+
             while len(headers) < max_cols:
-                # The 4th column is almost always Quantity/Stock based on AI behavior
-                if len(headers) == 3:
-                    headers.append("Quantity / Stock")
-                else:
-                    headers.append("Extra Info")
-                
+                headers.append("Extra Info")
+
             if is_history:
                 items_str = ", ".join(history_items)
                 return f"\n*(OOG: A merchant table is listed detailing the following items: {items_str}.)*\n"
-            else:
-                grid = tabulate(table_data, headers=headers, tablefmt="rounded_grid")
-                formatted_html = (
-                f"<pre style=\"font-family: Consolas, 'Courier New', monospace; "
+
+            grid = tabulate(table_data, headers=headers, tablefmt="rounded_grid")
+            formatted_html = (
+                "<pre style=\"font-family: Consolas, 'Courier New', monospace; "
                 f"line-height: 1.0; padding: 6px;\">\n\n{grid}\n</pre>\n\n"
-                )
-                return f"\n{formatted_html}\n"
+            )
+
+            return f"\n{formatted_html}\n"
                 
         # Find all instances of [[DISPLAY_CURRENCY: X]] and swap them
         modified_text = re.sub(r"\[\[DISPLAY_CURRENCY:\s*(-?\d+)\]\]", replace_currency, ai_text)

@@ -154,6 +154,23 @@ class BasePanel(QWidget):
     def get_text(self) -> str:
         """Returns context text for AIManager."""
         raise NotImplementedError("Subclasses must implement get_text().")
+    
+    def get_ai_context(self) -> str:
+        """
+        Returns plain text intended for AI prompt context.
+
+        Subclasses that render decorative tables should override this method so
+        the AI receives compact structured data instead of UI formatting.
+        """
+        try:
+            return self.get_text()
+        except Exception as error:
+            logging.exception(
+                "%s failed to provide AI context: %s",
+                self.__class__.__name__,
+                error,
+            )
+            return ""
 
     def _save_current(self) -> None:
         """Handles the toolbar Save button."""
@@ -253,7 +270,8 @@ class MarkdownPanel(BasePanel):
         """Returns editor contents as cleaned Markdown."""
         try:
             raw_markdown = self.editor.toMarkdown()
-            return raw_markdown.replace("`", "")
+            raw_markdown = raw_markdown.replace("`", "")
+            return raw_markdown
         except Exception as error:
             logging.error(f"Error retrieving Markdown text: {error}")
             return ""
@@ -272,7 +290,7 @@ class MarkdownPanel(BasePanel):
 
         self._mark_dirty()
 
-    def set_base_path(self, save_folder: str | Path) -> None:
+    def set_base_path(self, save_folder: str | Path, is_first_load: bool = False) -> None:
         """Points this panel at ``<save_folder>/<name>.md`` and loads it."""
         save_directory = self._ensure_save_directory(save_folder)
         if save_directory is None:
@@ -285,7 +303,7 @@ class MarkdownPanel(BasePanel):
         """Reloads from disk, preserving the old toolbar behavior."""
         self.reload_from_disk(force=True)
 
-    def reload_from_disk(self, force: bool = False) -> None:
+    def reload_from_disk(self, force: bool = False, is_first_load: bool = False) -> None:
         """Reloads Markdown from disk, optionally prompting before discarding edits."""
         if not self.filename:
             return
@@ -367,7 +385,241 @@ class MarkdownPanel(BasePanel):
         else:
             self._set_state("")
 
+class HistoryMarkdownPanel(MarkdownPanel):
+    """
+    Markdown panel for History.md.
 
+    Stores the raw History.md text, including internal exchange markers, while
+    displaying a cleaned version in the UI.
+    """
+
+    EXCHANGE_MARKER: ClassVar[str] = "// NEW EXCHANGE"
+    PLAYER_TEXT_MARKER: ClassVar[str] = ">"
+    _MARKER_LINE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"(?m)^[ \t]*// NEW EXCHANGE[ \t]*(?:\r?\n)?"
+    )
+    _PLAYER_TEXT_LINE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"^[ \t]*>[ \t]?(.*)$"
+    )
+
+    def __init__(self, parent: QWidget | None = None, app_context: Any = None) -> None:
+        self._raw_markdown_text = ""
+        super().__init__("History", parent=parent, app_context=app_context)
+
+        # The History panel is an automatically-managed log. Keeping it read-only
+        # prevents visible edits from desyncing from the hidden raw markers.
+        self.editor.setReadOnly(True)
+        self.editor.setToolTip(
+            "History is managed automatically. Internal exchange markers are saved "
+            "to History.md but hidden in this view."
+        )
+
+    def get_text(self) -> str:
+        """
+        Returns the raw History.md text.
+
+        This intentionally includes // NEW EXCHANGE so AIManager, recap generation,
+        and History.md saving can still use the exchange boundary marker.
+        """
+        return self._raw_markdown_text
+
+    def set_text(self, markdown_string: str) -> None:
+        """
+        Stores raw History.md text while showing a marker-free display version.
+        """
+        raw_text = str(markdown_string or "")
+        self._raw_markdown_text = raw_text
+
+        self._loading = True
+        try:
+            self.editor.blockSignals(True)
+            self.editor.setMarkdown(self._to_visible_markdown(raw_text))
+        except Exception as error:
+            logging.exception("HistoryMarkdownPanel: failed to set text: %s", error)
+        finally:
+            self.editor.blockSignals(False)
+            self._loading = False
+
+        self._mark_dirty()
+        
+    def _collapse_and_escape_player_response_blocks(self, markdown_text: str | None) -> str:
+        """
+        Collapses consecutive Markdown quote lines into one visible player response.
+
+        This converts raw History.md blocks like:
+
+            > First part of the player action
+            > second part of the player action
+            > third part of the player action
+
+        into display Markdown like:
+
+            \\> First part of the player action second part of the player action third part of the player action
+
+        Args:
+            markdown_text: Markdown text intended for UI display.
+
+        Returns:
+            Markdown text where player quote blocks are shown as literal '> ' text
+            instead of Markdown block quotes.
+        """
+        if markdown_text is None:
+            logging.warning("HistoryMarkdownPanel._collapse_and_escape_player_response_blocks called with None.")
+            return ""
+
+        output_lines: list[str] = []
+        player_response_lines: list[str] = []
+
+        def flush_player_response() -> None:
+            """
+            Writes the currently buffered player response into output_lines.
+            """
+            if not player_response_lines:
+                return
+
+            collapsed_response = " ".join(
+                line.strip()
+                for line in player_response_lines
+                if line.strip()
+            ).strip()
+
+            if collapsed_response:
+                output_lines.append(f"\\> {collapsed_response}")
+            else:
+                output_lines.append("\\>")
+
+            player_response_lines.clear()
+
+        for line in str(markdown_text).splitlines():
+            player_line_match = self._PLAYER_TEXT_LINE_PATTERN.match(line)
+
+            if player_line_match:
+                player_response_lines.append(player_line_match.group(1))
+                continue
+
+            flush_player_response()
+            output_lines.append(line)
+
+        flush_player_response()
+
+        return "\n".join(output_lines)
+        
+    def _escape_player_prompt_markers(self, markdown_text: str) -> str:
+        """
+        Escapes leading player prompt markers so Markdown displays them as literal
+        '> ' text instead of rendering them as block quotes.
+
+        Args:
+            markdown_text: Markdown text intended for UI display.
+
+        Returns:
+            Markdown text with leading player prompt markers escaped.
+        """
+        if markdown_text is None:
+            logging.warning("HistoryMarkdownPanel._escape_player_prompt_markers called with None.")
+            return ""
+
+        def replace_prompt_marker(match: re.Match[str]) -> str:
+            leading_whitespace = match.group(1) or ""
+            return f"{leading_whitespace}\\> "
+
+        return self._PLAYER_TEXT_LINE_PATTERN.sub(replace_prompt_marker, markdown_text)
+
+    def append_raw_markdown(self, markdown_string: str | None) -> None:
+        """
+        Appends raw Markdown to the history log.
+
+        Args:
+            markdown_string: Raw Markdown to append. May contain internal exchange markers.
+        """
+        if markdown_string is None:
+            logging.warning("HistoryMarkdownPanel.append_raw_markdown called with None.")
+            return
+
+        self.set_text(self._raw_markdown_text + str(markdown_string))
+
+    def reload_from_disk(self, force: bool = False, is_first_load: bool = False) -> None:
+        """
+        Reloads History.md from disk.
+
+        The raw file keeps // NEW EXCHANGE, but the editor displays a cleaned version.
+        """
+        if not self.filename:
+            return
+
+        if self._dirty and not force:
+            response = QMessageBox.question(
+                self,
+                "Discard changes?",
+                f"{self.name} has unsaved changes. Reloading will discard them. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if response != QMessageBox.StandardButton.Yes:
+                return
+
+        raw_content = FileManager.read_text_file(self.filename)
+        if not raw_content.strip():
+            raw_content = "# History\n\n"
+
+        self._raw_markdown_text = raw_content
+
+        self._loading = True
+        try:
+            self.editor.blockSignals(True)
+            self.editor.setMarkdown(self._to_visible_markdown(raw_content))
+        except Exception as error:
+            logging.exception("HistoryMarkdownPanel: failed to reload Markdown: %s", error)
+        finally:
+            self.editor.blockSignals(False)
+            self._loading = False
+
+        self._dirty = False
+        self._autosave.stop()
+        self._update_state_label()
+
+    def save_now(self) -> None:
+        """
+        Saves the raw History.md text, including hidden exchange markers.
+        """
+        if not self.filename:
+            logging.warning("HistoryMarkdownPanel: cannot save because filename is not set.")
+            return
+
+        try:
+            raw_text = self._raw_markdown_text or "# History\n\n"
+            FileManager.write_text_file(self.filename, raw_text)
+            self._dirty = False
+            self._autosave.stop()
+            self._update_state_label(saved=True)
+        except Exception as error:
+            logging.exception("HistoryMarkdownPanel save failed: %s", error)
+
+    def _to_visible_markdown(self, raw_markdown: str | None) -> str:
+        """
+        Converts raw History.md into UI-facing Markdown.
+
+        Args:
+            raw_markdown: Raw History.md text.
+
+        Returns:
+            Markdown text with internal exchange marker lines converted into
+            visible separators and player response quote blocks displayed as
+            literal '> ' text.
+        """
+        raw_text = str(raw_markdown or "")
+
+        # Convert hidden exchange markers into visible horizontal rules.
+        visible_markdown = self._MARKER_LINE_PATTERN.sub("\n\n***\n\n", raw_text)
+
+        # Convert one or more consecutive '> ' lines into one escaped player line.
+        visible_markdown = self._collapse_and_escape_player_response_blocks(visible_markdown)
+
+        visible_markdown = re.sub(r"[ \t]+\n", "\n", visible_markdown)
+        visible_markdown = re.sub(r"\n{3,}", "\n\n", visible_markdown).strip()
+
+        return visible_markdown or "# History\n\n"
+    
 class InventoryPanel(JsonFilePanel):
     """Inventory panel backed by ``inventory.json``."""
 
@@ -384,6 +636,91 @@ class InventoryPanel(JsonFilePanel):
     def get_text(self) -> str:
         """Returns the current inventory display as Markdown for AI context."""
         return self.display.toMarkdown()
+    
+    def get_ai_context(self) -> str:
+        """
+        Returns inventory data as compact plain text for the AI prompt.
+
+        This intentionally avoids the QTextBrowser display output so the model does
+        not receive decorative table borders or wrapped UI text.
+        """
+        lines: list[str] = ["### INVENTORY"]
+
+        try:
+            data = self.load_data()
+            player = self._get_player()
+
+            if player is not None:
+                try:
+                    base_currency = int(getattr(player, "base_currency", 0) or 0)
+                except (TypeError, ValueError) as error:
+                    logging.exception("InventoryPanel: invalid base currency for context: %s", error)
+                    base_currency = 0
+
+                formatted_currency = str(base_currency)
+                if hasattr(player, "get_formatted_currency"):
+                    try:
+                        formatted_currency = player.get_formatted_currency(base_currency)
+                    except Exception as error:
+                        logging.exception("InventoryPanel: failed to format currency: %s", error)
+
+                lines.append(f"Wealth: {base_currency} base units ({formatted_currency}).")
+
+                world_currencies = getattr(player, "world_currencies", []) or []
+                if isinstance(world_currencies, list) and world_currencies:
+                    lines.append("Currency denominations:")
+                    clean_currencies = [
+                        currency
+                        for currency in world_currencies
+                        if isinstance(currency, dict)
+                    ]
+
+                    for currency in sorted(
+                        clean_currencies,
+                        key=lambda item: self._safe_positive_int(item.get("value"), default=1),
+                    ):
+                        currency_name = str(currency.get("name", "Unknown Coin")).strip() or "Unknown Coin"
+                        currency_value = self._safe_positive_int(currency.get("value"), default=1)
+                        lines.append(f"- {currency_name}: {currency_value} base units.")
+
+            if not isinstance(data, dict) or not data:
+                lines.append("Inventory items: none.")
+                return "\n".join(lines)
+
+            lines.append("Inventory items:")
+
+            for category, items in sorted(data.items(), key=lambda pair: str(pair[0]).lower()):
+                category_name = str(category).strip() or "Uncategorized"
+
+                if not isinstance(items, list):
+                    logging.warning("InventoryPanel: skipped malformed category %s.", category_name)
+                    continue
+
+                for item in items:
+                    if isinstance(item, dict):
+                        item_name = str(item.get("name", "Unknown Item")).strip() or "Unknown Item"
+                        item_description = str(item.get("desc", "No description.")).strip() or "No description."
+                        item_amount = str(item.get("amount", "1")).strip() or "1"
+                    elif isinstance(item, list):
+                        item_name = str(item[0]).strip() if len(item) > 0 else "Unknown Item"
+                        item_description = str(item[1]).strip() if len(item) > 1 else "No description."
+                        item_amount = str(item[2]).strip() if len(item) > 2 else "1"
+                    else:
+                        logging.warning("InventoryPanel: skipped malformed inventory item: %r", item)
+                        continue
+
+                    lines.append(
+                        f"- Category: {category_name}; "
+                        f"Name: {item_name}; "
+                        f"Amount: {item_amount}; "
+                        f"Description: {item_description}"
+                    )
+
+        except Exception as error:
+            logging.exception("InventoryPanel.get_ai_context failed: %s", error)
+            lines.append("Inventory context unavailable due to an internal error.")
+
+        return "\n".join(lines)
 
     def refresh_display(self) -> None:
         """Redraws currency and inventory item tables."""
@@ -673,6 +1010,68 @@ class SkillsPanel(JsonFilePanel):
     def get_text(self) -> str:
         """Returns the current skills display as Markdown for AI context."""
         return self.display.toMarkdown()
+    
+    def get_ai_context(self) -> str:
+        """
+        Returns skills as compact plain text for the AI prompt.
+
+        This preserves full names, descriptions, levels, XP, and thresholds without
+        sending decorative UI table formatting to the model.
+        """
+        lines: list[str] = ["### SKILLS"]
+
+        try:
+            data = self.load_data()
+
+            if not isinstance(data, list) or not data:
+                lines.append("No known skills.")
+                return "\n".join(lines)
+
+            for skill in sorted(
+                data,
+                key=lambda item: str(item.get("Name", "")).lower() if isinstance(item, dict) else "",
+            ):
+                if not isinstance(skill, dict):
+                    logging.warning("SkillsPanel: skipped malformed skill entry: %r", skill)
+                    continue
+
+                name = str(skill.get("Name", "Unknown Skill")).strip() or "Unknown Skill"
+                description = str(skill.get("Description", "No description.")).strip() or "No description."
+
+                try:
+                    level = int(skill.get("Level", 0) or 0)
+                except (TypeError, ValueError) as error:
+                    logging.exception("SkillsPanel: invalid skill level for %s: %s", name, error)
+                    level = 0
+
+                try:
+                    xp = int(skill.get("XP", 0) or 0)
+                except (TypeError, ValueError) as error:
+                    logging.exception("SkillsPanel: invalid skill XP for %s: %s", name, error)
+                    xp = 0
+
+                try:
+                    threshold = int(skill.get("Threshold", 0) or 0)
+                except (TypeError, ValueError) as error:
+                    logging.exception("SkillsPanel: invalid skill threshold for %s: %s", name, error)
+                    threshold = 0
+
+                if level >= 5:
+                    progression_text = "MAX LEVEL"
+                else:
+                    progression_text = f"XP {xp}/{threshold}"
+
+                lines.append(
+                    f"- {name}: Level bonus +{level}; "
+                    f"{progression_text}; "
+                    f"Description: {description}"
+                )
+
+        except Exception as error:
+            logging.exception("SkillsPanel.get_ai_context failed: %s", error)
+            lines.append("Skills context unavailable due to an internal error.")
+
+        return "\n".join(lines)
 
     def save_data(self, data: list[dict[str, Any]]) -> None:
         """Sorts skills before writing them to disk."""
@@ -813,6 +1212,80 @@ class ProcessingPanel(JsonFilePanel):
     def get_text(self) -> str:
         """Returns ongoing task information as Markdown for AI context."""
         return self.display.toMarkdown()
+    
+    def get_ai_context(self) -> str:
+        """
+        Returns active processes and projects as compact plain text for the AI prompt.
+        """
+        lines: list[str] = ["### ONGOING TASKS"]
+
+        try:
+            data = self.load_data()
+
+            if not isinstance(data, list) or not data:
+                lines.append("No active processes or projects.")
+                return "\n".join(lines)
+
+            for item in data:
+                if not isinstance(item, dict):
+                    logging.warning("ProcessingPanel: skipped malformed task entry: %r", item)
+                    continue
+
+                name = str(item.get("name", "Unknown Task")).strip() or "Unknown Task"
+                task_type = str(item.get("type", "process")).strip() or "process"
+                status = str(item.get("status", "Unknown")).strip() or "Unknown"
+                description = str(item.get("desc", "No description.")).strip() or "No description."
+                expected_yield = str(item.get("yield", "Unknown")).strip() or "Unknown"
+
+                if task_type == "process":
+                    ready_day = str(item.get("ready_on_day", "Unknown")).strip() or "Unknown"
+                    ready_time = str(item.get("ready_on_time", "Unknown")).strip() or "Unknown"
+
+                    lines.append(
+                        f"- {name}: Type: process; "
+                        f"Status: {status}; "
+                        f"Ready on day: {ready_day}; "
+                        f"Ready at time: {ready_time}; "
+                        f"Yield: {expected_yield}; "
+                        f"Description: {description}"
+                    )
+                    continue
+
+                skill = str(item.get("skill", "Unknown Skill")).strip() or "Unknown Skill"
+
+                try:
+                    work_required = float(item.get("work_required", 0.0) or 0.0)
+                except (TypeError, ValueError) as error:
+                    logging.exception("ProcessingPanel: invalid work_required for %s: %s", name, error)
+                    work_required = 0.0
+
+                try:
+                    work_done = float(item.get("work_done", 0.0) or 0.0)
+                except (TypeError, ValueError) as error:
+                    logging.exception("ProcessingPanel: invalid work_done for %s: %s", name, error)
+                    work_done = 0.0
+
+                try:
+                    skill_level = int(item.get("skill_level_at_start", 0) or 0)
+                except (TypeError, ValueError) as error:
+                    logging.exception("ProcessingPanel: invalid skill level for %s: %s", name, error)
+                    skill_level = 0
+
+                lines.append(
+                    f"- {name}: Type: project; "
+                    f"Status: {status}; "
+                    f"Skill: {skill}; "
+                    f"Skill level at start: {skill_level}; "
+                    f"Work done: {work_done:g}/{work_required:g} minutes; "
+                    f"Yield: {expected_yield}; "
+                    f"Description: {description}"
+                )
+
+        except Exception as error:
+            logging.exception("ProcessingPanel.get_ai_context failed: %s", error)
+            lines.append("Processing context unavailable due to an internal error.")
+
+        return "\n".join(lines)
 
     def add_timed_process(
         self,
@@ -1417,6 +1890,50 @@ class QuestsPanel(BasePanel):
     def get_text(self) -> str:
         """Returns active quest text for AI context."""
         return self.display.toPlainText()
+    
+    def get_ai_context(self) -> str:
+        """
+        Returns quest data as compact plain text for the AI prompt.
+        """
+        lines: list[str] = ["### QUESTS"]
+
+        try:
+            player = self._get_player()
+            if player is None:
+                lines.append("No player loaded.")
+                return "\n".join(lines)
+
+            quests = getattr(player, "quests", []) or []
+            if not isinstance(quests, list) or not quests:
+                lines.append("No active quests.")
+                return "\n".join(lines)
+
+            for quest in quests:
+                if not isinstance(quest, dict):
+                    logging.warning("QuestsPanel: skipped malformed quest entry: %r", quest)
+                    continue
+
+                name = str(quest.get("name", "Unknown Quest")).strip() or "Unknown Quest"
+                giver = str(quest.get("giver", "Unknown")).strip() or "Unknown"
+                date_received = str(quest.get("date_received", "Unknown")).strip() or "Unknown"
+                description = str(quest.get("description", "No description provided.")).strip()
+                turn_in = str(quest.get("turn_in", "Unknown")).strip() or "Unknown"
+                reward = str(quest.get("reward", "Unknown")).strip() or "Unknown"
+
+                lines.append(
+                    f"- {name}: "
+                    f"Giver: {giver}; "
+                    f"Date received: {date_received}; "
+                    f"Description: {description}; "
+                    f"How to complete: {turn_in}; "
+                    f"Reward: {reward}"
+                )
+
+        except Exception as error:
+            logging.exception("QuestsPanel.get_ai_context failed: %s", error)
+            lines.append("Quest context unavailable due to an internal error.")
+
+        return "\n".join(lines)
 
 
 class StoryPanel(QWidget):
@@ -1835,6 +2352,7 @@ __all__ = [
     "JsonFilePanel",
     "MarkdownPanel",
     "InventoryPanel",
+    "HistoryMarkdownPanel",
     "SkillsPanel",
     "ProcessingPanel",
     "RecipesPanel",

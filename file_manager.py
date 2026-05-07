@@ -2,11 +2,11 @@ import os
 import sys
 import json
 import logging
-from config import SAVES_DIR
+from config import SAVES_DIR, APP_NAME
 from pathlib import Path
 
 class FileManager:
-    LOG_FILE_NAME = "AI_Adventure.log"
+    LOG_FILE_NAME = f"{APP_NAME}.log"
 
     @staticmethod
     def _configure_single_log_file(log_file_path: Path) -> None:
@@ -21,7 +21,7 @@ class FileManager:
                 handler.close()
                 logger.removeHandler(handler)
 
-        file_handler = logging.FileHandler(str(log_file_path), mode="a", encoding="utf-8")
+        file_handler = logging.FileHandler(str(log_file_path), mode="w", encoding="utf-8")
         formatter = logging.Formatter(
             "%(asctime)s - %(levelname)s - %(name)s - %(message)s",
             datefmt="%m/%d/%Y at %I:%M %p",

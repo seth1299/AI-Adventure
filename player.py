@@ -22,14 +22,6 @@ class Player:
         self.temperature = 76
         self.quests = []
         # Dictionary to track equipped items by slot
-        self.equipment = {
-            "Head": None,
-            "Chest": None,
-            "Legs": None,
-            "Main Hand": None,
-            "Off Hand": None,
-            "Accessory": None
-        }
 
     def load_from_dict(self, data):
         """Loads state from the Status dictionary in savegame.json."""
@@ -54,9 +46,6 @@ class Player:
             
         if "tracked_stats" in data:
             self.tracked_stats = data["tracked_stats"]
-            
-        if "equipment" in data:
-            self.equipment = data["equipment"]
 
     def get_status_dict(self):
         """Returns the dictionary format required for the UI and saving."""
@@ -72,81 +61,8 @@ class Player:
             "tracked_stats": self.tracked_stats,
             "world_currencies": self.world_currencies,
             "calendar_settings": self.calendar_settings,
-            "quests": self.quests,
-            "equipment": self.equipment
+            "quests": self.quests
         }
-        
-    def get_armor_rating(self) -> int:
-        """
-        Calculates the total armor rating based on currently equipped items.
-        It scans the item descriptions for a specific regex pattern like (AR: 5).
-        
-        Returns:
-            int: The total calculated armor value.
-        """
-        import re
-        total_armor = 10
-        
-        for slot, item in self.equipment.items():
-            if item and isinstance(item, dict):
-                description = item.get("desc", "")
-                # Looks for "(AR: X)" in the item's description, case-insensitive
-                match = re.search(r"\(AR:\s*(\d+)\)", description, re.IGNORECASE)
-                if match:
-                    try:
-                        total_armor += int(match.group(1))
-                    except ValueError:
-                        logging.error(f"Failed to parse Armor Rating from string: {match.group(1)}")
-                        
-        return total_armor
-    
-    def get_weapon_stats(self) -> str:
-        """
-        Scans equipped weapons (Main Hand, Off Hand) for Accuracy (ACC) and Damage (DMG) tags.
-        Returns a formatted string to feed into the AI's context block.
-        """
-        import re
-        weapon_info = []
-
-        # Only check the slots that can reasonably hold a weapon
-        for slot in ["Main Hand", "Off Hand"]:
-            item = self.equipment.get(slot)
-            if item and isinstance(item, dict):
-                name = item.get("name", "Unknown Weapon")
-                desc = item.get("desc", "")
-                
-                # Look for (ACC: +2) or (ACC: -1) in the description
-                acc_match = re.search(r"\(ACC:\s*([+-]?\d+)\)", desc, re.IGNORECASE)
-                accuracy = acc_match.group(1) if acc_match else "+0"
-                
-                # Look for (DMG: 1d8) or (DMG: 15) in the description
-                dmg_match = re.search(r"\(DMG:\s*([^)]+)\)", desc, re.IGNORECASE)
-                damage = dmg_match.group(1) if dmg_match else "1"
-                
-                # Look for (RAN: 1d8) or (RAN: 15) in the description
-                ran_match = re.search(r"\(RAN:\s*([^)]+)\)", desc, re.IGNORECASE)
-                weapon_range = ran_match.group(1) if ran_match else "Melee"
-                
-                # Look for (TYP) in the description
-                typ_match = re.search(r"\(TYP:\s*([^)]+)\)", desc, re.IGNORECASE)
-                weapon_type = typ_match.group(1) if typ_match else "Energy"
-                
-                if weapon_type.lower() == "ballistic":
-                    amm_match = re.search(r"\(AMM:\s*([^)]+)\)", desc, re.IGNORECASE)
-                    ammo_type = amm_match.group(1) if amm_match else "9mm"
-                    
-                    mag_match = re.search(r"\(MAG:\s*([^)]+)\)", desc, re.IGNORECASE)
-                    mag_size = mag_match.group(1) if mag_match else "6"
-                    
-                    weapon_info.append(f"{name} (Accuracy: {accuracy}, Damage: {damage}), Range: {weapon_range}, Type: {weapon_type}, Ammo Type: {ammo_type}, Magazine Size: {mag_size}")
-                else:
-                    weapon_info.append(f"{name} (Accuracy: {accuracy}, Damage: {damage}), Range: {weapon_range}, Type: {weapon_type}")
-
-        if not weapon_info:
-            return "Unarmed (Accuracy: +0, Damage: 1, Range: Melee, Type: Energy)"
-            
-        # Join multiple weapons with a pipe for easy reading
-        return " | ".join(weapon_info)
     
     def get_world_currencies(self):
         if self.world_currencies: return self.world_currencies
@@ -187,17 +103,9 @@ class Player:
 
         # Find the stat, or dynamically create it if the AI invents one!
         target_stat = next((s for s in self.tracked_stats if s["name"].lower() == stat.lower()), None)
-        if not target_stat:
-            # Added min and max defaults for dynamically created stats
-            target_stat = {
-                "name": stat.title(), 
-                "value": 100, 
-                "min": 0, 
-                "max": 100, 
-                "enabled": True, 
-                "desc": "A dynamically tracked status."
-            }
-            self.tracked_stats.append(target_stat)
+        if target_stat is None:
+            logging.warning("Ignored MODIFY_STAT for undefined stat: %s", stat)
+            return
 
         new_val = target_stat["value"]
         try:

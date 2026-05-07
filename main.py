@@ -2,7 +2,6 @@
 import sys
 import os
 import logging
-from PySide6.QtWidgets import QApplication
 from file_manager import FileManager
 from qt_ui.main_window import MainWindow
 from player import Player
@@ -104,6 +103,35 @@ class QtPanelAdapter:
             return str(self._ui.call_blocking(lambda: self._panel.get_text()))
         except Exception as error:
             logging.error(f"Failed to retrieve text from panel: {error}")
+            return ""
+        
+    def get_ai_context(self) -> str:
+        """
+        Safely retrieves model-facing plain text from the underlying panel.
+
+        Falls back to get_text() for panels that do not need a separate AI-context
+        formatter.
+        """
+        if self._panel is None:
+            logging.warning("QtPanelAdapter.get_ai_context called with no panel.")
+            return ""
+
+        context_getter = getattr(self._panel, "get_ai_context", None)
+
+        if not callable(context_getter):
+            context_getter = getattr(self._panel, "get_text", None)
+
+        if not callable(context_getter):
+            logging.warning(
+                "Panel %s has neither get_ai_context() nor get_text().",
+                self._panel.__class__.__name__,
+            )
+            return ""
+
+        try:
+            return str(self._ui.call_blocking(lambda: context_getter()))
+        except Exception as error:
+            logging.exception("Failed to retrieve AI context from panel: %s", error)
             return ""
 
     def set_text(self, text: str) -> None:
@@ -378,6 +406,8 @@ class QtAppContext:
             )
             return None
         
+    first_loaded_game_history = ""    
+        
     def load_savegame_state(self, save_path: str) -> dict:
         """
         Loads savegame.json, hydrates the Player object, and syncs UI.
@@ -409,15 +439,28 @@ class QtAppContext:
 
         # Player status
         status_data = save_data.get("Status") or {}
+
         if isinstance(status_data, dict) and status_data:
             self.player.load_from_dict(status_data)
 
-        # Deprecated: We no longer load conversation history from the JSON.
-        self.conversation_history = []
+        legacy_currencies = save_data.get("Currencies")
+        if not self.player.world_currencies and isinstance(legacy_currencies, list):
+            self.player.world_currencies = legacy_currencies
+
+        if not self.player.world_currencies:
+            self.player.world_currencies = [
+                {"name": "Copper Piece", "value": 1},
+                {"name": "Silver Piece", "value": 10},
+                {"name": "Gold Piece", "value": 100}
+            ]
             
         try:
             for widget_name in self.notebook_widgets:
-                self.notebook_widgets[widget_name].set_base_path(save_path)
+                if "History" in widget_name:
+                    self.notebook_widgets[widget_name].set_base_path(save_path)
+                    self.first_loaded_game_history = self.notebook_widgets[widget_name].get_text()
+                else:
+                    self.notebook_widgets[widget_name].set_base_path(save_path)
         except Exception as error:
             logging.error(f"Failed to load widget base paths: {error}")
 
@@ -444,10 +487,13 @@ class QtAppContext:
             # Extract the last GM response directly from the History tab's markdown
             if "History" in self.notebook_widgets:
                 # Replace \r to prevent Qt from applying weird spacing/fallback fonts
-                history_text = self.notebook_widgets["History"].get_text().replace('\r', '').strip()
+                if self.first_loaded_game_history != "":
+                    history_text = self.notebook_widgets["History"].get_text().replace('\r', '').strip()
+                else:
+                    history_text = self.first_loaded_game_history
                 
                 if history_text:
-                    # Split exchanges using the established '---' divider
+                    # Split exchanges using the established divider
                     exchanges = [exchange.strip() for exchange in history_text.split("// NEW EXCHANGE") if exchange.strip()]
                     if exchanges:
                         last_exchange = exchanges[-1]
@@ -471,14 +517,16 @@ class QtAppContext:
             if last_gm_message:
                 #logging.info("There is a last gm message, reconstructing merchant tables now!")
                 last_gm_message = self._reconstruct_merchant_tables(last_gm_message)
-                self.story_tab.print_text(last_gm_message + "\n\n", sender="")
+                self.story_tab.print_text(last_gm_message + "\n\nWhat do you do now?", sender="")
             else:
                 #logging.info("There is NOT a last gm message!")
-                self.story_tab.print_text(f"\n")
+                self.story_tab.print_text(f"What do you do now?\n")
             
         except Exception as error:
             logging.error(f"Generate recap failed: {error}")
             self.story_tab.print_text("Recap failed (see logs).", sender="System")
+            
+        self.first_loaded_game_history = ""
             
     def _format_recap_text(self, text):
         if not text: return ""
@@ -526,11 +574,13 @@ class QtAppContext:
             except Exception as e:
                 logging.exception(f"Could not set story panel status: {e}")
             
-        if "Quests" in self.notebook_widgets:
-                quests_widget = self.notebook_widgets["Quests"]
-                if hasattr(quests_widget, "refresh_display"):
-                    quests_widget.refresh_display()
-        else: logging.warning("No notebook widget named Quests exists.")
+        for widget_name in ("Quests", "Calendar"):
+            widget = self.notebook_widgets.get(widget_name)
+            if widget is not None and hasattr(widget, "refresh_display"):
+                try:
+                    widget.refresh_display()
+                except Exception as error:
+                    logging.exception("Failed to refresh %s panel: %s", widget_name, error)
 
         # AIManager calls this from worker threads; dispatch to UI thread.
         try:
@@ -568,16 +618,23 @@ def main() -> int:
     win = MainWindow()
     app_ctx = QtAppContext(win, configuration)
 
-    win = MainWindow()
-    app_ctx = QtAppContext(win)
-
     from ai_manager import AIManager
     win.app = app_ctx
-    win.inventory_panel.app = app_ctx
+    for panel in (
+    win.inventory_panel,
+    win.skills_panel,
+    win.processing_panel,
+    win.recipes_panel,
+    win.character_panel,
+    win.world_panel,
+    win.journal_panel,
+    win.history_panel,
+    win.quests_panel,
+    win.sales_ledger_panel,
+    win.calendar_panel,
+    ):
+        panel.app = app_ctx
     win.ai_manager = AIManager(app_ctx)
-    win.quests_panel.app = app_ctx
-    win.calendar_panel.app = app_ctx
-    win.processing_panel.app = app_ctx
     win.setWindowTitle(f"{save_name}")
     win.show()
     

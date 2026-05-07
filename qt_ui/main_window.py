@@ -23,13 +23,13 @@ from .panels import (
     RecipesPanel,
     SkillsPanel,
     StoryPanel,
+    HistoryMarkdownPanel
 )
 from .dialogs import (
     AudioSettingsDialog,
     CalendarManagerDialog,
     CreationWizard,
     CurrencyManagerDialog,
-    EquipmentManagerDialog,
     HelpDialog,
     MainMenuDialog,
     StatsManagerDialog,
@@ -65,7 +65,7 @@ class MainWindow(QMainWindow):
         self._docks: dict[str, QDockWidget] = {}
         self.world_panel = MarkdownPanel("World")
         self.journal_panel = MarkdownPanel("Journal")
-        self.history_panel = MarkdownPanel("History")
+        self.history_panel = HistoryMarkdownPanel()
         self.inventory_panel = InventoryPanel(app_context=self.app)
         self.skills_panel = SkillsPanel()
         self.processing_panel = ProcessingPanel(app_context=self.app)
@@ -169,9 +169,6 @@ class MainWindow(QMainWindow):
         action_save = game_menu.addAction("Save / Load Game")
         action_save.triggered.connect(self._on_menu_requested)
         
-        action_equipment = game_menu.addAction("Manage Equipment")
-        action_equipment.triggered.connect(self.open_equipment_menu)
-        
         action_currencies = game_menu.addAction("Manage Currencies")
         action_currencies.triggered.connect(self.open_currency_menu)
         
@@ -195,27 +192,6 @@ class MainWindow(QMainWindow):
         # Qt's QDockWidget comes with a built-in toggle action that acts as a checkbox!
         for title, dock in self._docks.items():
             view_menu.addAction(dock.toggleViewAction())
-            
-    def open_equipment_menu(self):
-        """Opens the Equipment Manager and saves the game if changes were made."""
-        if self.app is None: return
-        try:
-            dialog = EquipmentManagerDialog(self, self.app)
-            if dialog.exec(): 
-                # Grab the data from the dialog
-                new_loadout = dialog.get_final_equipment()
-                
-                # Update the player class
-                self.app.player.equipment = new_loadout
-                
-                # Save immediately to lock it in!
-                self.app.save_game()
-                
-                self.story_panel.print_text("System: Equipment loadout updated.", sender="System")
-        except Exception as e:
-            error_msg = f"Error opening equipment menu: {str(e)}"
-            logging.exception(error_msg)
-            self.story_panel.print_text(error_msg, sender="System Error")
 
     def _add_dock(self, title: str, widget: QWidget, area: Qt.DockWidgetArea) -> None:
         dock = QDockWidget(title, self)

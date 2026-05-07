@@ -1,1 +1,14 @@
-pyinstaller --noconfirm --noconsole --onefile --clean --add-data "sounds;sounds" --add-data "game_icon.ico;." --icon=game_icon.ico --name "Text Adventure" main.py
+@echo off
+setlocal
+
+pyinstaller ^
+  --noconfirm ^
+  --noconsole ^
+  --onefile ^
+  --clean ^
+  --name "Text Adventure" ^
+  --icon "game_icon.ico" ^
+  --add-data "game_icon.ico;." ^
+  --add-data "sounds;sounds" ^
+  --add-data "prompt_templates\default_rules.md;prompt_templates" ^
+  main.py
