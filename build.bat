@@ -1,6 +1,8 @@
 @echo off
 setlocal
 
+pip install -r requirements.txt
+
 pyinstaller ^
   --noconfirm ^
   --noconsole ^
