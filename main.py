@@ -1,7 +1,5 @@
 # qt_main.py
-import sys
-import os
-import logging
+import sys, os, logging, shutil, threading, tempfile
 from file_manager import FileManager
 from qt_ui.main_window import MainWindow
 from player import Player
@@ -13,7 +11,6 @@ from qt_ui.dialogs import (
     MainMenuDialog,
     NewGameSourceDialog,
 )
-import threading
 from PySide6.QtWidgets import QApplication, QDialog
 from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt, QThread
 from queue import Queue
@@ -178,6 +175,9 @@ class QtAppContext:
 
         self.player = Player()
         self.sound_manager = SoundManager(str(self.configuration.base_sounds_directory))
+        
+        self.pending_adventure_final_path: Path | None = None
+        self.pending_adventure_staging_path: Path | None = None
 
         # API surface AIManager expects
         self.story_tab = QtStoryTabAdapter(win.story_panel, self.ui)
@@ -220,6 +220,129 @@ class QtAppContext:
         self.secret_path = str(save_directory / "secret.txt")
         self.world_path = str(save_directory / "World.md")
         self.sales_ledger_path = str(save_directory / "Sales Ledger.md")
+        
+    def begin_pending_adventure(
+    self,
+    final_save_path: str | Path,
+    staging_save_path: str | Path,
+) -> None:
+        """
+        Binds the app to a temporary staging folder for new-game generation.
+
+        The real save folder is not created until commit_pending_adventure() runs.
+        """
+        final_path = Path(final_save_path)
+        staging_path = Path(staging_save_path)
+
+        if final_path.exists():
+            raise FileExistsError(f"Adventure already exists: {final_path}")
+
+        try:
+            staging_path.mkdir(parents=True, exist_ok=True)
+
+            self.pending_adventure_final_path = final_path
+            self.pending_adventure_staging_path = staging_path
+
+            self.set_adventure_paths(staging_path)
+
+            if hasattr(self.player, "set_save_path"):
+                self.player.set_save_path(str(staging_path))
+
+            for widget_name, widget in self.notebook_widgets.items():
+                try:
+                    widget.set_base_path(str(staging_path))
+                except Exception as error:
+                    logging.exception(
+                        "Failed to stage base path for %s panel: %s",
+                        widget_name,
+                        error,
+                    )
+
+        except Exception as error:
+            logging.exception("Failed to begin pending adventure: %s", error)
+            raise
+
+
+    def commit_pending_adventure(self) -> None:
+        """
+        Moves the staged new adventure into the real Saves directory.
+
+        This should only be called after the AI startup prompt has completed and
+        the staged save files have been written successfully.
+        """
+        final_path = self.pending_adventure_final_path
+        staging_path = self.pending_adventure_staging_path
+
+        if final_path is None or staging_path is None:
+            logging.warning("commit_pending_adventure called with no pending adventure.")
+            return
+
+        if not staging_path.exists() or not staging_path.is_dir():
+            raise FileNotFoundError(f"Pending adventure staging folder is missing: {staging_path}")
+
+        if final_path.exists():
+            raise FileExistsError(f"Cannot commit pending adventure because it already exists: {final_path}")
+
+        try:
+            final_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Save one last time while still bound to the staging folder.
+            self.save_game()
+
+            shutil.move(str(staging_path), str(final_path))
+
+            self.set_adventure_paths(final_path)
+
+            if hasattr(self.player, "set_save_path"):
+                self.player.set_save_path(str(final_path))
+
+            for widget_name, widget in self.notebook_widgets.items():
+                try:
+                    widget.set_base_path(str(final_path))
+                except Exception as error:
+                    logging.exception(
+                        "Failed to bind committed save path for %s panel: %s",
+                        widget_name,
+                        error,
+                    )
+
+            FileManager.update_logger_path(final_path.name)
+
+            if getattr(self, "win", None) is not None:
+                self.after(
+                    0,
+                    lambda path_name=final_path.name: self.win.setWindowTitle(
+                        f"AI RPG Adventure - {path_name}"
+                    ),
+                )
+
+            logging.info("Committed pending adventure to %s", final_path)
+
+        except Exception as error:
+            logging.exception("Failed to commit pending adventure: %s", error)
+            raise
+
+        finally:
+            self.pending_adventure_final_path = None
+            self.pending_adventure_staging_path = None
+
+
+    def discard_pending_adventure(self) -> None:
+        """
+        Deletes the temporary new-game staging folder after cancellation or startup failure.
+        """
+        staging_path = self.pending_adventure_staging_path
+
+        try:
+            if staging_path is not None and staging_path.exists():
+                shutil.rmtree(staging_path)
+                logging.info("Discarded pending adventure staging folder: %s", staging_path)
+        except Exception as error:
+            logging.exception("Failed to discard pending adventure: %s", error)
+        finally:
+            self.pending_adventure_final_path = None
+            self.pending_adventure_staging_path = None
+            self.current_adventure_path = None
         
     def _reconstruct_merchant_tables(self, text: str) -> str:
         """
@@ -655,60 +778,109 @@ def main() -> int:
     win.story_panel.volume_changed.connect(app_ctx.sound_manager.set_volume)
 
     def _boot_selected_save() -> None:
-        FileManager.update_logger_path(save_name)
-        app_ctx.player.set_save_path(save_path)
+        """
+        Boots an existing save or starts a new-game creation flow.
 
-        # Utilize pathlib to construct subsequent paths cleanly
+        Important:
+        - Existing saves bind directly to their completed save folder.
+        - New saves use a temporary staging folder.
+        - The real save folder is not created until the AI startup prompt succeeds.
+        """
         save_directory_path = Path(save_path)
-        savegame_path = str(save_directory_path / "savegame.json")
-        secret_path = str(save_directory_path / "secret.txt")
-        world_path = str(save_directory_path / "world.md")
-        sales_ledger_path = str(save_directory_path / "sales_ledger.md")
-        
+        savegame_path = save_directory_path / "savegame.json"
+
+        def cancel_startup_creation(message: str = "System: New game creation cancelled.") -> None:
+            """Cancels startup new-game creation without leaving a real save folder behind."""
+            try:
+                app_ctx.discard_pending_adventure()
+            except Exception as error:
+                logging.exception("Failed to discard pending adventure during cancellation: %s", error)
+
+            win.story_panel.print_text(message, sender="System")
+            QApplication.quit()
+
         try:
-            if os.path.exists(savegame_path):
+            # Existing completed save: safe to bind to the real save folder.
+            if savegame_path.exists():
+                FileManager.update_logger_path(save_name)
+                app_ctx.player.set_save_path(save_path)
                 app_ctx.load_savegame_state(save_path)
                 win._load_ui_state(save_path)
                 app_ctx.generate_recap()
                 return
-            else: 
-                logging.warning("No save game path exists.")
-            app_ctx.set_adventure_paths(save_path)
 
-            FileManager.create_file_if_not_exists(app_ctx.secret_path)
-            FileManager.create_file_if_not_exists(app_ctx.world_path, "# World\n\n")
-            FileManager.create_file_if_not_exists(app_ctx.sales_ledger_path, "# Sales Ledger\n\n")
-                
-        except Exception as boot_sequence_error:
-            logging.exception(f"Could not boot selected save. Exception details: {boot_sequence_error}")
+            # New save: do not create or bind to the real save folder yet.
+            app_ctx.conversation_history = []
 
-        app_ctx.current_adventure_path = save_path
-        app_ctx.conversation_history = []
-        try:
-            for w in app_ctx.notebook_widgets.values():
-                w.set_base_path(save_path)
-        except Exception:
-            logging.exception("Failed to set base path for panels")
+            source_dialog = NewGameSourceDialog(win)
+            if source_dialog.exec() != QDialog.DialogCode.Accepted:
+                cancel_startup_creation()
+                return
 
-        source_dialog = NewGameSourceDialog(win)
-        if source_dialog.exec() != QDialog.DialogCode.Accepted:
-            sys.exit(0)
+            template_data = CreationTemplateStore.load_template(source_dialog.selected_template_path)
 
-        template_data = CreationTemplateStore.load_template(source_dialog.selected_template_path)
+            wizard = CreationWizard(win, template_data=template_data)
+            if wizard.exec() != QDialog.DialogCode.Accepted:
+                cancel_startup_creation()
+                return
 
-        wizard = CreationWizard(win, template_data=template_data)
-        if wizard.exec() == QDialog.DialogCode.Accepted:
             wizard_data = wizard.get_wizard_data()
-            CreationTemplateStore.save_creation_settings(save_directory_path, wizard_data)
-            app_ctx.player.world_currencies = wizard_data["currencies"]
-            app_ctx.player.tracked_stats = wizard_data["stats"]
+
+            staging_path = Path(
+                tempfile.mkdtemp(prefix=f"ai_adventure_pending_{save_name}_")
+            )
+
+            app_ctx.begin_pending_adventure(
+                final_save_path=save_directory_path,
+                staging_save_path=staging_path,
+            )
+
+            app_ctx.player.world_currencies = wizard_data.get("currencies", [])
+            app_ctx.player.tracked_stats = wizard_data.get("stats", [])
+
+            calendar_data = wizard_data.get("calendar", {})
+            calendar_settings = (
+                calendar_data.get("settings", {})
+                if isinstance(calendar_data, dict)
+                else {}
+            )
+
+            if (
+                isinstance(calendar_settings, dict)
+                and calendar_settings.get("weekdays")
+                and calendar_settings.get("months")
+            ):
+                app_ctx.player.calendar_settings = calendar_settings
+
             app_ctx._sync_player_state_to_ui()
-            
-            if win.ai_manager != None:
-                threading.Thread(target=win.ai_manager.start_new_game_from_wizard, args=(wizard_data,), daemon=True).start()
-        else:
-            # If the user closes the wizard without finishing, exit or return to menu
-            sys.exit(0)
+            win.story_panel.print_text("System: Compiling universe parameters...", sender="System")
+
+            if win.ai_manager is None:
+                app_ctx.discard_pending_adventure()
+                win.story_panel.print_text(
+                    "System: New game creation failed because the AI manager is unavailable.",
+                    sender="System",
+                )
+                return
+
+            threading.Thread(
+                target=win.ai_manager.start_new_game_from_wizard,
+                args=(wizard_data,),
+                daemon=True,
+            ).start()
+
+        except Exception as boot_sequence_error:
+            logging.exception("Could not boot selected save: %s", boot_sequence_error)
+
+            try:
+                app_ctx.discard_pending_adventure()
+            except Exception as discard_error:
+                logging.exception("Failed to discard pending adventure: %s", discard_error)
+
+            win.story_panel.print_text(
+                "System: Could not start or load the selected adventure. Check the log file.",
+                sender="System",
+            )
     
     QTimer.singleShot(0, _boot_selected_save)
     return app.exec()

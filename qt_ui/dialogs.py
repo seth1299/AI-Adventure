@@ -6,9 +6,7 @@ row widgets plus the new-game wizard in one import location.
 
 from __future__ import annotations
 
-import logging
-import os
-import shutil
+import logging, copy, os, shutil
 from pathlib import Path
 from typing import Any
 from file_manager import FileManager
@@ -43,6 +41,102 @@ from PySide6.QtWidgets import (
 )
 
 from config import SAVES_DIR
+DEFAULT_GREGORIAN_CALENDAR: dict[str, Any] = {
+    "weekdays": [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    ],
+    "months": [
+        {"name": "January", "days": 31, "season": "Winter"},
+        {"name": "February", "days": 28, "season": "Winter"},
+        {"name": "March", "days": 31, "season": "Spring"},
+        {"name": "April", "days": 30, "season": "Spring"},
+        {"name": "May", "days": 31, "season": "Spring"},
+        {"name": "June", "days": 30, "season": "Summer"},
+        {"name": "July", "days": 31, "season": "Summer"},
+        {"name": "August", "days": 31, "season": "Summer"},
+        {"name": "September", "days": 30, "season": "Fall"},
+        {"name": "October", "days": 31, "season": "Fall"},
+        {"name": "November", "days": 30, "season": "Fall"},
+        {"name": "December", "days": 31, "season": "Winter"},
+    ],
+}
+
+
+def get_default_gregorian_calendar() -> dict[str, Any]:
+    """Returns a safe copy of the default Gregorian calendar."""
+
+    return copy.deepcopy(DEFAULT_GREGORIAN_CALENDAR)
+
+
+def normalize_calendar_settings(raw_settings: dict[str, Any] | None) -> dict[str, Any]:
+    """
+    Normalizes calendar settings while allowing partial custom calendars.
+
+    Blank weekdays fall back to Gregorian weekdays.
+    Blank month names or seasons fall back to the matching Gregorian month.
+    Missing month data falls back to the Gregorian calendar.
+    """
+
+    defaults = get_default_gregorian_calendar()
+
+    if not isinstance(raw_settings, dict):
+        logging.warning("Calendar settings were not a dictionary. Falling back to Gregorian calendar.")
+        return defaults
+
+    raw_weekdays = raw_settings.get("weekdays", [])
+    weekdays = [
+        str(day).strip()
+        for day in raw_weekdays
+        if str(day).strip()
+    ] if isinstance(raw_weekdays, list) else []
+
+    if not weekdays:
+        weekdays = defaults["weekdays"]
+
+    raw_months = raw_settings.get("months", [])
+    months: list[dict[str, Any]] = []
+
+    if isinstance(raw_months, list):
+        for index, raw_month in enumerate(raw_months):
+            if not isinstance(raw_month, dict):
+                logging.warning("Skipped malformed calendar month: %r", raw_month)
+                continue
+
+            fallback_month = defaults["months"][index % len(defaults["months"])]
+
+            month_name = str(raw_month.get("name", "") or fallback_month["name"]).strip()
+            season_name = str(raw_month.get("season", "") or fallback_month["season"]).strip()
+
+            try:
+                month_days = max(1, int(raw_month.get("days", fallback_month["days"])))
+            except (TypeError, ValueError):
+                logging.exception("Invalid month length in calendar row: %r", raw_month)
+                month_days = int(fallback_month["days"])
+
+            if not month_name:
+                continue
+
+            months.append(
+                {
+                    "name": month_name,
+                    "days": month_days,
+                    "season": season_name or "Unknown Season",
+                }
+            )
+
+    if not months:
+        months = defaults["months"]
+
+    return {
+        "weekdays": weekdays,
+        "months": months,
+    }
 
 # ---- Merged from qt_ui/currency_dialog.py ----
 class CurrencyRow(QWidget):
@@ -645,6 +739,16 @@ class CreationTemplateStore:
         stats = source.get("stats")
         skills = source.get("skills")
         
+        calendar = source.get("calendar") if isinstance(source.get("calendar"), dict) else {}
+
+        legacy_calendar_settings = source.get("calendar_settings")
+        if not calendar and isinstance(legacy_calendar_settings, dict):
+            calendar = {
+                "mode": "custom",
+                "settings": legacy_calendar_settings,
+                "ai_notes": "",
+            }
+        
         if world is not None and character is not None and source is not None:
             return {
                 "world": {
@@ -656,6 +760,7 @@ class CreationTemplateStore:
                 "focus": focus if isinstance(focus, list) else [],
                 "currencies": currencies if isinstance(currencies, list) else [],
                 "stats": stats if isinstance(stats, list) else [],
+                "calendar": cls.normalize_calendar_data(calendar),
                 "character": {
                     "name": str(character.get("name", "") or ""),
                     "age": str(character.get("age", "") or ""),
@@ -676,6 +781,39 @@ class CreationTemplateStore:
             if source is None:
                 logging.exception("COULD NOT FIND SOURCE FOR CUSTOM TEMPLATE!")
             return {}
+        
+    @classmethod
+    def normalize_calendar_data(cls, calendar_data: dict[str, Any] | None) -> dict[str, Any]:
+        """Normalizes calendar template data."""
+
+        if not isinstance(calendar_data, dict):
+            return {
+                "mode": "gregorian",
+                "settings": get_default_gregorian_calendar(),
+                "ai_notes": "",
+            }
+
+        mode = str(calendar_data.get("mode", "gregorian") or "gregorian").strip()
+
+        if mode not in {"gregorian", "custom", "ai_generate"}:
+            logging.warning("Unknown calendar mode %r. Falling back to gregorian.", mode)
+            mode = "gregorian"
+
+        raw_settings = calendar_data.get("settings", {})
+        has_settings = isinstance(raw_settings, dict) and bool(raw_settings)
+
+        if mode == "ai_generate" and not has_settings:
+            settings = {}
+        elif mode == "gregorian":
+            settings = get_default_gregorian_calendar()
+        else:
+            settings = normalize_calendar_settings(raw_settings if isinstance(raw_settings, dict) else None)
+
+        return {
+            "mode": mode,
+            "settings": settings,
+            "ai_notes": str(calendar_data.get("ai_notes", "") or ""),
+        }
 
 # ---- Merged from qt_ui/main_menu_dialog.py ----
 class MainMenuDialog(QDialog):
@@ -724,8 +862,10 @@ class MainMenuDialog(QDialog):
         return self._selected_save
 
     def refresh_list(self) -> None:
+        """Refreshes the visible list of completed adventures only."""
         try:
-            os.makedirs(SAVES_DIR, exist_ok=True)
+            saves_directory = Path(SAVES_DIR)
+            saves_directory.mkdir(parents=True, exist_ok=True)
         except Exception:
             logging.exception("Failed to ensure saves dir exists")
             return
@@ -734,11 +874,11 @@ class MainMenuDialog(QDialog):
 
         try:
             saves = [
-                d
-                for d in os.listdir(SAVES_DIR)
-                if os.path.isdir(os.path.join(SAVES_DIR, d))
+                save_dir.name
+                for save_dir in saves_directory.iterdir()
+                if save_dir.is_dir() and (save_dir / "savegame.json").exists()
             ]
-            saves.sort(key=lambda s: s.lower())
+            saves.sort(key=lambda save_name: save_name.lower())
         except Exception:
             logging.exception("Failed to list saves")
             saves = []
@@ -748,8 +888,8 @@ class MainMenuDialog(QDialog):
             self.list.setEnabled(False)
         else:
             self.list.setEnabled(True)
-            for s in saves:
-                self.list.addItem(s)
+            for save_name in saves:
+                self.list.addItem(save_name)
 
     def _current_selection(self) -> str | None:
         if not self.list.isEnabled():
@@ -770,6 +910,12 @@ class MainMenuDialog(QDialog):
         self.accept()
 
     def _new_adventure(self) -> None:
+        """
+        Selects a new adventure name without creating the save folder.
+
+        Completed saves are blocked. Incomplete orphan folders may be removed
+        so a cancelled/failed new-game attempt does not permanently reserve a name.
+        """
         text, ok = QInputDialog.getText(self, "New Adventure", "Name your adventure:")
         if not ok:
             return
@@ -778,17 +924,46 @@ class MainMenuDialog(QDialog):
         if not name:
             return
 
-        full = os.path.join(SAVES_DIR, name)
-        if os.path.exists(full):
+        final_save_path = Path(SAVES_DIR) / name
+        savegame_path = final_save_path / "savegame.json"
+
+        if savegame_path.exists():
             QMessageBox.warning(self, "New Adventure", "That adventure already exists.")
             return
 
-        try:
-            os.makedirs(full, exist_ok=True)
-        except Exception:
-            logging.exception("Failed to create new save folder")
-            QMessageBox.critical(self, "New Adventure", "Failed to create the save folder (see logs).")
-            return
+        if final_save_path.exists():
+            response = QMessageBox.question(
+                self,
+                "Incomplete Adventure Found",
+                (
+                    f"An incomplete adventure folder named '{name}' already exists.\n\n"
+                    "This usually means new-game creation was cancelled or failed before "
+                    "savegame.json was finalized.\n\n"
+                    "Remove the incomplete folder and reuse this name?"
+                ),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+
+            if response != QMessageBox.StandardButton.Yes:
+                return
+
+            try:
+                if final_save_path.is_dir():
+                    shutil.rmtree(final_save_path)
+                else:
+                    final_save_path.unlink()
+
+                logging.info("Removed incomplete adventure folder: %s", final_save_path)
+
+            except Exception as error:
+                logging.exception("Failed to remove incomplete adventure folder: %s", error)
+                QMessageBox.critical(
+                    self,
+                    "New Adventure",
+                    "Could not remove the incomplete adventure folder. Check the log file.",
+                )
+                return
 
         self._selected_save = name
         self.accept()
@@ -1124,7 +1299,7 @@ class PillarsPage(QWizardPage):
 class CharacterPage(QWizardPage):
     def __init__(self):
         super().__init__()
-        self.setTitle("Step 5: Character Bio")
+        self.setTitle("Step 6: Character Bio")
         self.setSubTitle("Tell me about your character. Leave blank for the AI to decide.")
         
         layout = QVBoxLayout(self)
@@ -1154,7 +1329,7 @@ class CharacterPage(QWizardPage):
 class SkillsPage(QWizardPage):
     def __init__(self):
         super().__init__()
-        self.setTitle("Step 6: Skills")
+        self.setTitle("Step 7: Skills")
         self.setSubTitle("Define your starting skills. Leave descriptions blank to let the AI decide.")
         
         # We need a scroll area because there are 16 skills
@@ -1197,7 +1372,7 @@ class SkillsPage(QWizardPage):
 class FinalPage(QWizardPage):
     def __init__(self):
         super().__init__()
-        self.setTitle("Step 7: Final Details")
+        self.setTitle("Step 8: Final Details")
         self.setSubTitle("Where do you begin, and do you have any final rules?")
         
         layout = QVBoxLayout(self)
@@ -1351,6 +1526,227 @@ class StatsPage(QWizardPage):
         self.rows_layout.removeWidget(row)
         self.rows.remove(row)
         row.deleteLater()
+        
+class CalendarPage(QWizardPage):
+    """Wizard page for choosing or defining the starting world calendar."""
+
+    MODE_GREGORIAN = "gregorian"
+    MODE_CUSTOM = "custom"
+    MODE_AI_GENERATE = "ai_generate"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setTitle("Step 5: Calendar")
+        self.setSubTitle(
+            "Choose the world's calendar. You can keep Gregorian, customize it, "
+            "or let the AI generate one from the world setup."
+        )
+
+        self.rows: list[MonthRow] = []
+
+        layout = QVBoxLayout(self)
+
+        self.gregorian_radio = QRadioButton("Use the default Gregorian calendar")
+        self.custom_radio = QRadioButton("Customize the calendar")
+        self.ai_radio = QRadioButton("Let the AI generate the calendar")
+
+        self.gregorian_radio.setChecked(True)
+
+        layout.addWidget(self.gregorian_radio)
+        layout.addWidget(self.custom_radio)
+        layout.addWidget(self.ai_radio)
+
+        self.custom_group = QGroupBox("Custom Calendar Details")
+        custom_layout = QVBoxLayout(self.custom_group)
+
+        custom_layout.addWidget(
+            QLabel(
+                "Weekdays, one per line. Leave this blank to use the Gregorian weekdays."
+            )
+        )
+
+        self.weekdays_text = QTextEdit()
+        self.weekdays_text.setTabChangesFocus(True)
+        self.weekdays_text.setPlaceholderText(
+            "Monday\nTuesday\nWednesday\nThursday\nFriday\nSaturday\nSunday"
+        )
+        custom_layout.addWidget(self.weekdays_text)
+
+        custom_layout.addWidget(
+            QLabel(
+                "Months are read in order. Blank names or seasons fall back to Gregorian defaults."
+            )
+        )
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+
+        self.scroll_widget = QWidget()
+        self.rows_layout = QVBoxLayout(self.scroll_widget)
+        self.rows_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self.scroll_area.setWidget(self.scroll_widget)
+        custom_layout.addWidget(self.scroll_area)
+
+        button_row = QHBoxLayout()
+
+        self.btn_add_month = QPushButton("+ Add Month")
+        self.btn_add_month.clicked.connect(lambda: self.add_month_row())
+
+        self.btn_restore_gregorian = QPushButton("Restore Gregorian Months")
+        self.btn_restore_gregorian.clicked.connect(self.restore_gregorian_rows)
+
+        button_row.addWidget(self.btn_add_month)
+        button_row.addWidget(self.btn_restore_gregorian)
+        custom_layout.addLayout(button_row)
+
+        layout.addWidget(self.custom_group, stretch=1)
+
+        layout.addWidget(QLabel("AI Calendar Notes (optional):"))
+        self.ai_notes_input = QTextEdit()
+        self.ai_notes_input.setTabChangesFocus(True)
+        self.ai_notes_input.setPlaceholderText(
+            "Example: Use a lunar calendar with short months, religious feast days, "
+            "and harsh winter seasons."
+        )
+        layout.addWidget(self.ai_notes_input)
+
+        self.restore_gregorian_rows()
+
+        self.gregorian_radio.toggled.connect(self._update_enabled_state)
+        self.custom_radio.toggled.connect(self._update_enabled_state)
+        self.ai_radio.toggled.connect(self._update_enabled_state)
+        self._update_enabled_state()
+
+    def _update_enabled_state(self) -> None:
+        """Enables only the controls relevant to the selected calendar mode."""
+
+        self.custom_group.setEnabled(self.custom_radio.isChecked())
+        self.ai_notes_input.setEnabled(self.ai_radio.isChecked())
+
+    def restore_gregorian_rows(self) -> None:
+        """Resets the custom calendar editor to Gregorian defaults."""
+
+        default_calendar = get_default_gregorian_calendar()
+        self.weekdays_text.setPlainText("\n".join(default_calendar["weekdays"]))
+        self.clear_month_rows()
+
+        for month in default_calendar["months"]:
+            self.add_month_row(
+                name=str(month.get("name", "")),
+                days=int(month.get("days", 30)),
+                season=str(month.get("season", "")),
+            )
+
+    def add_month_row(self, name: str = "", days: int = 30, season: str = "") -> None:
+        """Adds one editable month row."""
+
+        row = MonthRow(name=name, days=days, season=season)
+        self.rows_layout.addWidget(row)
+        self.rows.append(row)
+        row.btn_remove.clicked.connect(lambda: self.remove_month_row(row))
+
+    def remove_month_row(self, row: MonthRow | None) -> None:
+        """Removes a month row safely."""
+
+        if row is None:
+            logging.warning("CalendarPage.remove_month_row called with None.")
+            return
+
+        try:
+            self.rows_layout.removeWidget(row)
+
+            if row in self.rows:
+                self.rows.remove(row)
+
+            row.hide()
+            row.setParent(None)
+            row.deleteLater()
+
+        except Exception as error:
+            logging.exception("Failed to remove calendar month row: %s", error)
+
+    def clear_month_rows(self) -> None:
+        """Removes all month rows from the custom calendar editor."""
+
+        for row in list(self.rows):
+            self.remove_month_row(row)
+
+        self.rows.clear()
+
+    def _collect_custom_settings(self) -> dict[str, Any]:
+        """Collects custom calendar data, using defaults for blank pieces."""
+
+        raw_weekdays = self.weekdays_text.toPlainText().strip().splitlines()
+        weekdays = [day.strip() for day in raw_weekdays if day.strip()]
+
+        months = []
+        for row in self.rows:
+            data = row.get_data()
+            months.append(data)
+
+        return normalize_calendar_settings(
+            {
+                "weekdays": weekdays,
+                "months": months,
+            }
+        )
+
+    def get_data(self) -> dict[str, Any]:
+        """Returns calendar wizard data for template saving and game startup."""
+
+        if self.ai_radio.isChecked():
+            return {
+                "mode": self.MODE_AI_GENERATE,
+                "settings": {},
+                "ai_notes": self.ai_notes_input.toPlainText().strip(),
+            }
+
+        if self.custom_radio.isChecked():
+            return {
+                "mode": self.MODE_CUSTOM,
+                "settings": self._collect_custom_settings(),
+                "ai_notes": self.ai_notes_input.toPlainText().strip(),
+            }
+
+        return {
+            "mode": self.MODE_GREGORIAN,
+            "settings": get_default_gregorian_calendar(),
+            "ai_notes": "",
+        }
+
+    def apply_data(self, calendar_data: dict[str, Any] | None) -> None:
+        """Pre-fills the page from a saved creation template."""
+
+        if not isinstance(calendar_data, dict):
+            self.gregorian_radio.setChecked(True)
+            self.restore_gregorian_rows()
+            self._update_enabled_state()
+            return
+
+        mode = str(calendar_data.get("mode", self.MODE_GREGORIAN) or self.MODE_GREGORIAN)
+        raw_settings = calendar_data.get("settings", {})
+        settings = normalize_calendar_settings(raw_settings if isinstance(raw_settings, dict) else None)
+
+        if mode == self.MODE_AI_GENERATE:
+            self.ai_radio.setChecked(True)
+        elif mode == self.MODE_CUSTOM:
+            self.custom_radio.setChecked(True)
+        else:
+            self.gregorian_radio.setChecked(True)
+
+        self.weekdays_text.setPlainText("\n".join(settings["weekdays"]))
+        self.clear_month_rows()
+
+        for month in settings["months"]:
+            self.add_month_row(
+                name=str(month.get("name", "")),
+                days=int(month.get("days", 30)),
+                season=str(month.get("season", "")),
+            )
+
+        self.ai_notes_input.setPlainText(str(calendar_data.get("ai_notes", "") or ""))
+        self._update_enabled_state()
 
 class CreationWizard(QWizard):
     def __init__(self, parent=None, template_data: dict[str, Any] | None = None):
@@ -1358,6 +1754,7 @@ class CreationWizard(QWizard):
         self.setWizardStyle(QWizard.WizardStyle.ClassicStyle)
         self.setWindowTitle("New Adventure Setup")
         self.resize(700, 600)
+        
         
         # --- ROBUST DARK THEME STYLESHEET ---
         self.setStyleSheet("""
@@ -1391,6 +1788,7 @@ class CreationWizard(QWizard):
         self.pillars_page = PillarsPage()
         self.currency_page = CurrencyPage()
         self.stats_page = StatsPage()
+        self.calendar_page = CalendarPage()
         self.char_page = CharacterPage()
         self.skills_page = SkillsPage()
         self.final_page = FinalPage()
@@ -1399,6 +1797,7 @@ class CreationWizard(QWizard):
         self.addPage(self.pillars_page)
         self.addPage(self.currency_page)
         self.addPage(self.stats_page)
+        self.addPage(self.calendar_page)
         self.addPage(self.char_page)
         self.addPage(self.skills_page)
         self.addPage(self.final_page)
@@ -1426,10 +1825,20 @@ class CreationWizard(QWizard):
             self._apply_stats_data(data.get("stats", []))
             self._apply_character_data(data.get("character", {}))
             self._apply_skills_data(data.get("skills", []))
+            self._apply_calendar_data(data.get("calendar", {}))
             self._apply_final_data(data)
 
         except Exception as error:
             logging.exception("Failed to apply creation template data: %s", error)
+            
+    def _apply_calendar_data(self, calendar_data: dict[str, Any]) -> None:
+        """Applies calendar-related template data."""
+
+        if self.calendar_page is None:
+            logging.warning("CreationWizard._apply_calendar_data called before calendar_page exists.")
+            return
+
+        self.calendar_page.apply_data(calendar_data)
 
     def _apply_world_data(self, world: dict[str, Any]) -> None:
         """Applies world-related template data."""
@@ -1647,6 +2056,7 @@ class CreationWizard(QWizard):
             "focus": pillars,
             "currencies": currencies,
             "stats": stats,
+            "calendar": self.calendar_page.get_data(),
             "character": {
                 "name": self.char_page.name_input.text().strip(),
                 "age": self.char_page.age_input.text().strip(),

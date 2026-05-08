@@ -1,9 +1,10 @@
 from google import genai
 from google.genai import types
-import threading, re, os, logging, csv
+import threading, re, os, logging, csv, json
 from config import GEMINI_API_KEY, MODEL
 from tabulate import tabulate
 from pathlib import Path
+from typing import Any
 
 class AIManager:
     def __init__(self, app) -> None:
@@ -69,23 +70,19 @@ class AIManager:
         for c in data['currencies']:
             self.app.player.world_currencies.append({"name": c['name'], "value": c['value']})
             
-        self.app.player.calendar_settings = {
-            "weekdays": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
-            "months": [
-                {"name": "January", "days": 31, "season": "Winter"},
-                {"name": "February", "days": 28, "season": "Winter"},
-                {"name": "March", "days": 31, "season": "Spring"},
-                {"name": "April", "days": 30, "season": "Spring"},
-                {"name": "May", "days": 31, "season": "Spring"},
-                {"name": "June", "days": 30, "season": "Summer"},
-                {"name": "July", "days": 31, "season": "Summer"},
-                {"name": "August", "days": 31, "season": "Summer"},
-                {"name": "September", "days": 30, "season": "Fall"},
-                {"name": "October", "days": 31, "season": "Fall"},
-                {"name": "November", "days": 30, "season": "Fall"},
-                {"name": "December", "days": 31, "season": "Winter"}
-            ]
+        resolved_calendar_settings = self._resolve_calendar_settings_from_wizard(data)
+        self.app.player.calendar_settings = resolved_calendar_settings
+
+        calendar_data = data.get("calendar", {}) if isinstance(data.get("calendar"), dict) else {}
+        calendar_mode = str(calendar_data.get("mode", "gregorian") or "gregorian")
+
+        data["calendar"] = {
+            "mode": "custom" if calendar_mode == "ai_generate" else calendar_mode,
+            "settings": resolved_calendar_settings,
+            "ai_notes": str(calendar_data.get("ai_notes", "") or ""),
         }
+
+        self._save_resolved_creation_settings(data)
             
         # 4. Process Skills for the AI Prompt (Do NOT inject them directly yet!)
         skills_prompt_text = ""
@@ -104,8 +101,7 @@ class AIManager:
         self.app.notebook_widgets["World"].set_text("*(Generating World Profile...)*")
         self.app.notebook_widgets["Character"].set_text("*(Generating Character Biography...)*")
 
-        # 6. Save initial state instantly so UI panels refresh
-        self.app.save_game()
+        # 6. Refresh the UI, but do not create the final save yet.
         self.app._sync_player_state_to_ui()
         
         # 7. Build the prompt
@@ -114,6 +110,7 @@ class AIManager:
         focus_text = ', '.join(data['focus']) if data['focus'] else "Balanced (Combat, Exploration, Trading/Economy, Social/Roleplay)"
         currency_prompt_text = self._build_starting_currency_prompt(data.get("currencies", []))
         stat_prompt_text = self._build_starting_stat_prompt(data.get("stats", []))
+        calendar_prompt_text = self._build_starting_calendar_prompt(self.app.player.calendar_settings)
         
         creative_ideas = self.app.load_creative_ideas()
         
@@ -143,6 +140,9 @@ Provided Starting Currencies:
 
 Provided Tracked Stats:
 {stat_prompt_text}
+
+Provided Calendar Information:
+{calendar_prompt_text}
 
 Starting Location: {data['starting_location'] or 'Unknown Starting Location'}
 Final Comments/Rules: {data['final_comments'] or 'N/A'}
@@ -272,6 +272,229 @@ After outputting all tags, summarize the first starting turn, describe the surro
         # 4. Thread the request
         threading.Thread(target=self.query_ai, args=(full_prompt, user_text), daemon=True).start()
 
+    def _get_default_gregorian_calendar(self) -> dict[str, Any]:
+        """Returns the fallback Gregorian calendar."""
+
+        return {
+            "weekdays": [
+                "Monday",
+                "Tuesday",
+                "Wednesday",
+                "Thursday",
+                "Friday",
+                "Saturday",
+                "Sunday",
+            ],
+            "months": [
+                {"name": "January", "days": 31, "season": "Winter"},
+                {"name": "February", "days": 28, "season": "Winter"},
+                {"name": "March", "days": 31, "season": "Spring"},
+                {"name": "April", "days": 30, "season": "Spring"},
+                {"name": "May", "days": 31, "season": "Spring"},
+                {"name": "June", "days": 30, "season": "Summer"},
+                {"name": "July", "days": 31, "season": "Summer"},
+                {"name": "August", "days": 31, "season": "Summer"},
+                {"name": "September", "days": 30, "season": "Fall"},
+                {"name": "October", "days": 31, "season": "Fall"},
+                {"name": "November", "days": 30, "season": "Fall"},
+                {"name": "December", "days": 31, "season": "Winter"},
+            ],
+        }
+
+    def _normalize_calendar_settings(self, raw_settings: Any) -> dict[str, Any]:
+        """Validates and normalizes calendar data before storing it on Player."""
+
+        fallback = self._get_default_gregorian_calendar()
+
+        if not isinstance(raw_settings, dict):
+            logging.warning("Calendar settings were not a dict. Falling back to Gregorian.")
+            return fallback
+
+        raw_weekdays = raw_settings.get("weekdays", [])
+        weekdays = [
+            str(day).strip()
+            for day in raw_weekdays
+            if str(day).strip()
+        ] if isinstance(raw_weekdays, list) else []
+
+        if not weekdays:
+            weekdays = fallback["weekdays"]
+
+        raw_months = raw_settings.get("months", [])
+        months: list[dict[str, Any]] = []
+
+        if isinstance(raw_months, list):
+            for index, raw_month in enumerate(raw_months):
+                if not isinstance(raw_month, dict):
+                    logging.warning("Skipped malformed generated calendar month: %r", raw_month)
+                    continue
+
+                fallback_month = fallback["months"][index % len(fallback["months"])]
+
+                name = str(raw_month.get("name", "") or fallback_month["name"]).strip()
+                season = str(raw_month.get("season", "") or fallback_month["season"]).strip()
+
+                try:
+                    days = max(1, int(raw_month.get("days", fallback_month["days"])))
+                except (TypeError, ValueError):
+                    logging.exception("Invalid generated month length: %r", raw_month)
+                    days = int(fallback_month["days"])
+
+                if not name:
+                    continue
+
+                months.append(
+                    {
+                        "name": name,
+                        "days": days,
+                        "season": season or "Unknown Season",
+                    }
+                )
+
+        if not months:
+            months = fallback["months"]
+
+        return {
+            "weekdays": weekdays,
+            "months": months,
+        }
+
+    def _resolve_calendar_settings_from_wizard(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Gets the final calendar settings from wizard data."""
+
+        calendar_data = data.get("calendar", {}) if isinstance(data.get("calendar"), dict) else {}
+        mode = str(calendar_data.get("mode", "gregorian") or "gregorian")
+
+        if mode == "ai_generate":
+            generated_calendar = self._generate_calendar_settings(data)
+            if generated_calendar:
+                return self._normalize_calendar_settings(generated_calendar)
+
+            logging.warning("AI calendar generation failed. Falling back to Gregorian.")
+            return self._get_default_gregorian_calendar()
+
+        raw_settings = calendar_data.get("settings", {})
+        return self._normalize_calendar_settings(raw_settings)
+
+    def _generate_calendar_settings(self, data: dict[str, Any]) -> dict[str, Any] | None:
+        """Uses Gemini to generate a calendar JSON object during new-game creation."""
+
+        if self.client is None:
+            logging.warning("Cannot generate calendar because Gemini client is unavailable.")
+            return None
+
+        calendar_data = data.get("calendar", {}) if isinstance(data.get("calendar"), dict) else {}
+        ai_notes = str(calendar_data.get("ai_notes", "") or "").strip()
+
+        world = data.get("world", {}) if isinstance(data.get("world"), dict) else {}
+
+        prompt = (
+            "Generate a fictional RPG world calendar as JSON only.\n"
+            "Do not include Markdown. Do not include commentary. Return one JSON object.\n\n"
+            "Required schema:\n"
+            "{\n"
+            '  "weekdays": ["Day Name", "Day Name"],\n'
+            '  "months": [\n'
+            '    {"name": "Month Name", "days": 30, "season": "Season Name"}\n'
+            "  ]\n"
+            "}\n\n"
+            "Rules:\n"
+            "- Use 4 to 10 weekdays.\n"
+            "- Use 4 to 16 months.\n"
+            "- Month days must be positive integers.\n"
+            "- Seasons should be useful for weather and temperature logic.\n"
+            "- Avoid real-world month names unless Gregorian or Earth-like realism is requested.\n\n"
+            f"World genre: {world.get('genre', '')}\n"
+            f"World setting: {world.get('setting', '')}\n"
+            f"Technology level: {world.get('tech', '')}\n"
+            f"Species/races: {world.get('species', '')}\n"
+            f"User calendar notes: {ai_notes or 'None provided.'}\n"
+        )
+
+        try:
+            response = self.client.models.generate_content(
+                model=MODEL,
+                config=types.GenerateContentConfig(
+                    temperature=0.9,
+                    response_mime_type="application/json",
+                ),
+                contents=prompt,
+            )
+
+            raw_text = self.clean_quotes(response.text or "")
+            if not raw_text.strip():
+                logging.warning("AI calendar generation returned empty text.")
+                return None
+
+            return self._load_json_object_from_text(raw_text)
+
+        except Exception as error:
+            logging.exception("Failed to generate calendar settings: %s", error)
+            return None
+
+    def _load_json_object_from_text(self, raw_text: str) -> dict[str, Any] | None:
+        """Parses a JSON object from model output."""
+
+        try:
+            parsed = json.loads(raw_text)
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            pass
+
+        try:
+            start_index = raw_text.find("{")
+            end_index = raw_text.rfind("}")
+
+            if start_index < 0 or end_index <= start_index:
+                logging.warning("No JSON object found in calendar response: %s", raw_text)
+                return None
+
+            parsed = json.loads(raw_text[start_index:end_index + 1])
+            return parsed if isinstance(parsed, dict) else None
+
+        except Exception as error:
+            logging.exception("Failed to parse generated calendar JSON: %s", error)
+            return None
+
+    def _save_resolved_creation_settings(self, data: dict[str, Any]) -> None:
+        """
+        Saves resolved wizard data into the currently active adventure folder.
+
+        During new-game creation, current_adventure_path points at the temporary
+        staging folder. When startup succeeds, that staged folder is moved into the
+        final save folder.
+        """
+        save_directory = getattr(self.app, "current_adventure_path", None)
+        if not save_directory:
+            logging.warning("Cannot save resolved creation settings because no save path is active.")
+            return
+
+        try:
+            from qt_ui.dialogs import CreationTemplateStore
+
+            CreationTemplateStore.save_creation_settings(save_directory, data)
+
+        except Exception as error:
+            logging.exception("Failed to save resolved creation settings: %s", error)
+
+    def _build_starting_calendar_prompt(self, calendar_settings: dict[str, Any]) -> str:
+        """Builds a compact startup prompt block describing the world calendar."""
+
+        normalized_calendar = self._normalize_calendar_settings(calendar_settings)
+
+        weekdays = ", ".join(normalized_calendar["weekdays"])
+        months = ", ".join(
+            f"{month.get('name', 'Unknown Month')} ({month.get('days', 30)} days, {month.get('season', 'Unknown Season')})"
+            for month in normalized_calendar["months"]
+        )
+
+        return (
+            "The world calendar is already defined. Use it exactly.\n"
+            f"Weekdays in order: {weekdays}\n"
+            f"Months in order: {months}\n"
+            "Do not use real-world calendar assumptions unless this calendar uses real-world names."
+        )
+    
     def _build_starting_currency_prompt(self, currencies: list[dict] | None) -> str:
         """
         Builds the startup currency instruction block for Gemini.
@@ -460,10 +683,6 @@ After outputting all tags, summarize the first starting turn, describe the surro
             display_ai_text = tag_parser.process_inline_tags(ai_text, is_history=False)
             history_ai_text = tag_parser.process_inline_tags(ai_text, is_history=True)
             ai_text = display_ai_text
-            
-            if is_startup:
-                self.app.story_tab.set_controls_state(True, "What do you do now?")
-                self.app.after(1500, lambda: self.app.win.open_help_menu())
 
             # 1. RECURSIVE LOGIC (Rolls & Projects)
             roll_match = re.search(r"\[\[ROLL:\s*(.*?)\]\]", ai_text)
@@ -492,7 +711,12 @@ After outputting all tags, summarize the first starting turn, describe the surro
                     f"CRITICAL: The tags from your draft were NOT executed yet. You MUST output ALL necessary tags (like [[STATUS:]], [[REMOVE:]], [[ADD:]], etc.) again in this final response!]"
                 )
                 
-                self.query_ai(follow_up, user_text, recursion_depth + 1)
+                self.query_ai(
+                    follow_up,
+                    user_text,
+                    recursion_depth + 1,
+                    is_startup=is_startup,
+                )
                 return 
             
             if project_match and recursion_depth < 2:
@@ -520,7 +744,12 @@ After outputting all tags, summarize the first starting turn, describe the surro
                     f"CRITICAL: The tags from your draft were NOT executed yet. You MUST output ALL necessary tags again in this final response!]"
                 )
                 
-                self.query_ai(follow_up, user_text, recursion_depth + 1)
+                self.query_ai(
+                    follow_up,
+                    user_text,
+                    recursion_depth + 1,
+                    is_startup=is_startup,
+                )
                 return
 
             # 2. PROCESS STANDARD TAGS
@@ -603,11 +832,35 @@ After outputting all tags, summarize the first starting turn, describe the surro
                 
             try:
                 self.app.save_game()
-            except Exception as e:
-                logging.error(f"Auto-save failed: {e}")
+
+                if is_startup and hasattr(self.app, "commit_pending_adventure"):
+                    self.app.commit_pending_adventure()
+
+            except Exception as error:
+                logging.exception("Auto-save or pending-adventure commit failed: %s", error)
+
+                if is_startup and hasattr(self.app, "discard_pending_adventure"):
+                    self.app.discard_pending_adventure()
+
+                self.app.story_tab.print_text(
+                    "System: New game creation failed before the save could be finalized.",
+                    sender="System",
+                )
+                return
+
+            if is_startup:
+                self.app.story_tab.set_controls_state(True, "What do you do now?")
+
+                if getattr(self.app, "win", None) is not None:
+                    self.app.after(1500, lambda: self.app.win.open_help_menu())
 
         except Exception as error:
             logging.exception("AI Error: %s", error)
+            
+            if is_startup and hasattr(self.app, "discard_pending_adventure"):
+                logging.exception("System: New game creation failed. No save file was created.")
+                self.app.discard_pending_adventure()
+            
         finally:
             self.app.after(0, lambda: self.app.story_tab.set_controls_state(True))
             

@@ -1706,16 +1706,35 @@ class CalendarPanel(BasePanel):
         self.root_layout.addWidget(self.display, stretch=1)
 
     def set_base_path(self, save_folder: str | Path) -> None:
-        """Calendar is derived from player state, so no save file is needed."""
+        """
+        Marks the panel as attached to the active save.
+
+        Calendar data is stored on the Player object, so this panel does not need
+        its own file path.
+        """
+        if not save_folder:
+            logging.warning("CalendarPanel.set_base_path called without a save folder.")
+            self._set_state("No save loaded")
+            return
+
+        self._set_state("")
         self.refresh_display()
 
     def refresh_display(self) -> None:
         """Builds an HTML calendar grid from the current player date."""
         player = self._get_player()
         calendar_settings = getattr(player, "calendar_settings", {}) if player is not None else {}
-        if not player or not calendar_settings:
-            self.display.setHtml("<p><i>(No calendar configured. Use the Game Menu to set one up.)</i></p>")
+        if player is None:
+            self.display.setHtml("<p><i>(No player loaded.)</i></p>")
+            self._set_state("No player loaded")
             return
+
+        if not calendar_settings:
+            self.display.setHtml("<p><i>(No calendar configured. Use the Game Menu to set one up.)</i></p>")
+            self._set_state("No calendar configured")
+            return
+
+        self._set_state("")
 
         current_day = getattr(player, "day", 1) or 1
         try:
@@ -1789,7 +1808,18 @@ class QuestsPanel(BasePanel):
         self.text_display = self.display
 
     def set_base_path(self, save_folder: str | Path) -> None:
-        """Quests are stored on the Player object, so no panel file is needed."""
+        """
+        Marks the panel as attached to the active save.
+
+        Quests are stored on the Player object, so this panel does not need its
+        own file path.
+        """
+        if not save_folder:
+            logging.warning("QuestsPanel.set_base_path called without a save folder.")
+            self._set_state("No save loaded")
+            return
+
+        self._set_state("")
         self.refresh_display()
 
     def refresh_display(self) -> None:
@@ -1797,6 +1827,7 @@ class QuestsPanel(BasePanel):
         player = self._get_player()
         if player is None:
             self.display.setMarkdown("*(No player loaded.)*")
+            self._set_state("No player loaded")
             return
 
         try:
@@ -1804,10 +1835,12 @@ class QuestsPanel(BasePanel):
             if not isinstance(quests, list):
                 logging.warning("QuestsPanel: player.quests is not a list: %r", quests)
                 self.display.setMarkdown("*(Quest data is malformed. See log.)*")
+                self._set_state("Error")
                 return
 
             if not quests:
                 self.display.setMarkdown("*You currently have no active quests.*")
+                self._set_state("")
                 return
 
             display_text = ""
@@ -1824,12 +1857,16 @@ class QuestsPanel(BasePanel):
                     ["How to Complete", quest.get("turn_in", "Unknown")],
                     ["Reward", quest.get("reward", "Unknown")],
                 ]
+
                 grid = tabulate(table_data, tablefmt="rounded_grid")
                 display_text += f"### {name}\n\n{self._format_table_html(grid)}\n"
 
             self.display.setMarkdown(display_text.strip() or "*You currently have no active quests.*")
+            self._set_state("")
+
         except Exception as error:
-            logging.exception(f"Critical error during refreshing quest panel display: {error}")
+            logging.exception("Critical error during refreshing quest panel display: %s", error)
+            self._set_state("Error")
 
     def add_quest(self, name: str, giver: str, description: str, turn_in: str, reward: str) -> None:
         """Adds a quest to the player's log if it does not already exist."""

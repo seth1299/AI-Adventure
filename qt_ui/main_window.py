@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 from ai_manager import AIManager
 from config import SAVES_DIR
 from file_manager import FileManager
-import threading
+import threading, tempfile
 import logging
 from pathlib import Path
 from .panels import (
@@ -252,32 +252,23 @@ class MainWindow(QMainWindow):
             return
 
         save_name = dlg.selected_save
-        # Utilize pathlib for path construction
         save_path_obj = SAVES_DIR / save_name
-        save_path = str(save_path_obj) # Cast to string for compatibility with app context
+        save_path = str(save_path_obj)
         savegame_path = save_path_obj / "savegame.json"
 
-        FileManager.update_logger_path(save_name)
-        self.setWindowTitle(f"AI RPG Adventure - {save_name}")
         self.story_panel.set_log_text("")
 
-        # Check existence using the Path object
         if savegame_path.exists():
+            FileManager.update_logger_path(save_name)
+            self.setWindowTitle(f"AI RPG Adventure - {save_name}")
+
             self.app.load_savegame_state(save_path)
             self._load_ui_state(save_path)
             self.app.generate_recap()
             return
 
-        # New game flow
-        self.app.current_adventure_path = save_path
+        # New game flow: do not create the real save folder yet.
         self.app.conversation_history = []
-        try:
-            for w in self.app.notebook_widgets.values():
-                w.set_base_path(save_path)
-        except Exception:
-            pass
-
-        # --- LAUNCH THE WIZARD POPUP ---
 
         source_dialog = NewGameSourceDialog(self)
         if source_dialog.exec() != QDialog.DialogCode.Accepted:
@@ -285,26 +276,54 @@ class MainWindow(QMainWindow):
             return
 
         template_data = CreationTemplateStore.load_template(source_dialog.selected_template_path)
-
         wizard = CreationWizard(self, template_data=template_data)
-        
-        if wizard.exec() == QDialog.DialogCode.Accepted:
-            wizard_data = wizard.get_wizard_data()
-            CreationTemplateStore.save_creation_settings(save_path_obj, wizard_data)
-            
-            # Assign Currencies and Stats to Player
-            self.app.player.world_currencies = wizard_data["currencies"]
-            self.app.player.tracked_stats = wizard_data["stats"]
-            
-            self.app._sync_player_state_to_ui()
-            self.story_panel.print_text("System: Compiling universe parameters...", sender="System")
-            
-            if self.ai_manager is not None:
-                threading.Thread(
-                    target=self.ai_manager.start_new_game_from_wizard, 
-                    args=(wizard_data,), 
-                    daemon=True
-                ).start()
+
+        if wizard.exec() != QDialog.DialogCode.Accepted:
+            self.story_panel.print_text("System: New game creation cancelled.", sender="System")
+            return
+
+        wizard_data = wizard.get_wizard_data()
+
+        try:
+            staging_path = Path(
+                tempfile.mkdtemp(prefix=f"ai_adventure_pending_{save_name}_")
+            )
+
+            self.app.begin_pending_adventure(
+                final_save_path=save_path_obj,
+                staging_save_path=staging_path,
+            )
+
+        except Exception as error:
+            logging.exception("Failed to prepare pending adventure: %s", error)
+            self.story_panel.print_text(
+                "System: Could not prepare the new adventure. Check the log file.",
+                sender="System",
+            )
+            return
+
+        self.app.player.world_currencies = wizard_data["currencies"]
+        self.app.player.tracked_stats = wizard_data["stats"]
+
+        calendar_data = wizard_data.get("calendar", {})
+        calendar_settings = calendar_data.get("settings", {}) if isinstance(calendar_data, dict) else {}
+
+        if (
+            isinstance(calendar_settings, dict)
+            and calendar_settings.get("weekdays")
+            and calendar_settings.get("months")
+        ):
+            self.app.player.calendar_settings = calendar_settings
+
+        self.app._sync_player_state_to_ui()
+        self.story_panel.print_text("System: Compiling universe parameters...", sender="System")
+
+        if self.ai_manager is not None:
+            threading.Thread(
+                target=self.ai_manager.start_new_game_from_wizard,
+                args=(wizard_data,),
+                daemon=True,
+            ).start()
         else:
             self.story_panel.print_text("System: New game creation cancelled.", sender="System")
     
