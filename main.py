@@ -7,7 +7,12 @@ from qt_ui.main_window import MainWindow
 from player import Player
 from sound_manager import SoundManager
 from config import Configuration, get_configuration
-from qt_ui.dialogs import CreationWizard, MainMenuDialog
+from qt_ui.dialogs import (
+    CreationTemplateStore,
+    CreationWizard,
+    MainMenuDialog,
+    NewGameSourceDialog,
+)
 import threading
 from PySide6.QtWidgets import QApplication, QDialog
 from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt, QThread
@@ -326,6 +331,15 @@ class QtAppContext:
         formatted_rules = formatted_rules.replace("{VALID_SOUND_FILE_NAMES}", sounds_names)
 
         return formatted_rules
+    
+    def load_creative_ideas(self) -> str:
+        creative_ideas = self.configuration.creative_ideas or ""
+        
+        if not creative_ideas.strip():
+            logging.warning("No creative ideas document found.")
+            return ""
+        else:
+            return creative_ideas
 
     def save_game(self) -> None:
         """
@@ -676,9 +690,16 @@ def main() -> int:
         except Exception:
             logging.exception("Failed to set base path for panels")
 
-        wizard = CreationWizard(win)
+        source_dialog = NewGameSourceDialog(win)
+        if source_dialog.exec() != QDialog.DialogCode.Accepted:
+            sys.exit(0)
+
+        template_data = CreationTemplateStore.load_template(source_dialog.selected_template_path)
+
+        wizard = CreationWizard(win, template_data=template_data)
         if wizard.exec() == QDialog.DialogCode.Accepted:
             wizard_data = wizard.get_wizard_data()
+            CreationTemplateStore.save_creation_settings(save_directory_path, wizard_data)
             app_ctx.player.world_currencies = wizard_data["currencies"]
             app_ctx.player.tracked_stats = wizard_data["stats"]
             app_ctx._sync_player_state_to_ui()

@@ -9,3 +9,9 @@ shiboken6==6.11.0
 pyinstaller
 dotenv
 pydantic
+edge_tts
+pygame
+pydantic_settings
+google.genai
+tabulate
+markdown

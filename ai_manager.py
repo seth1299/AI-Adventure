@@ -115,8 +115,10 @@ class AIManager:
         currency_prompt_text = self._build_starting_currency_prompt(data.get("currencies", []))
         stat_prompt_text = self._build_starting_stat_prompt(data.get("stats", []))
         
+        creative_ideas = self.app.load_creative_ideas()
+        
         prompt = f"""
-System: Initialize a new RPG adventure using the following parameters.
+Initialize a new RPG adventure using the following parameters.
 CRITICAL INSTRUCTION: If any parameter below starts with "Unknown" or "None provided", you must creatively invent a fitting value for it. DO NOT use common AI fantasy names. Keep any parameters that are already provided by the player EXACTLY as they are.
 
 Provided World Information:
@@ -145,7 +147,11 @@ Provided Tracked Stats:
 Starting Location: {data['starting_location'] or 'Unknown Starting Location'}
 Final Comments/Rules: {data['final_comments'] or 'N/A'}
 
-INSTRUCTIONS:
+{f"Please use the following data to help you compile all of the information about the world and such. You do NOT need to limit yourself to only using names from this list, but please consider all of the names and use them when creating your response: \n\n{creative_ideas}" if creative_ideas else ""}
+
+---
+
+CRITICAL FINAL INSTRUCTIONS:
 Output the following tags to set up the starting gameplay state:
 [[WORLD_PROFILE: 
 ### World Setting
@@ -159,6 +165,8 @@ Output the following tags to set up the starting gameplay state:
 **Species:** (Filled value)
 
 **Focus:** (Filled value)
+
+**Description:** (Filled value; this must be at most six paragraphs, but it should include the basics of the world, including as much detail as possible from the user's input, if there was any input. In general, the Description of the World should include at the very least, the World's basic societal structure, main religions/pantheons, basic geography/topography, important locations, important NPCs, important factions or politics, interspecies relations [if any], descriptions of races/species [if any that are non-human], and anything else that you think would be important if you were writing a story based on this world.)
 ]] (You must output this tag. Output the exact Markdown formatting shown inside this tag, replacing the "(Filled value)" text with creative and/or logical values based off of the \"Provided World Information\" section above, remembering to ONLY change the information if it is \"Unknown\".).
 
 [[CHARACTER_PROFILE: 
@@ -185,7 +193,7 @@ Output the following tags to set up the starting gameplay state:
 
 After outputting all tags, summarize the first starting turn, describe the surroundings vividly, and finish by asking "What do you do now?" and suggesting a few possible actions.
 """
-        logging.info("Generating start now...")
+        logging.info(f"Generating start now...\n\nWorld Creation Prompt: {prompt}\n\n")
         self.query_ai(prompt, "System: Generate Start", is_startup=True)
 
     def handle_player_action(self, user_text: str) -> None:
@@ -260,8 +268,6 @@ After outputting all tags, summarize the first starting turn, describe the surro
             history_text = self.app.notebook_widgets["History"].get_text().strip()
         recent_history = history_text[-6000:] if len(history_text) > 6000 else history_text
         full_prompt = f"\nPast Conversation History:\n{recent_history}\nPlease remember to consider the following in your response: {context_data}\n\n===\nYOUR FINAL END GOAL: Using all of the above context and information, here is the user's actual prompt: \"{user_text}\""
-        
-        # logging.info(f"\n\nFULL PROMPT\n\n{full_prompt}\n\n")
         
         # 4. Thread the request
         threading.Thread(target=self.query_ai, args=(full_prompt, user_text), daemon=True).start()
@@ -365,6 +371,48 @@ After outputting all tags, summarize the first starting turn, describe the surro
             "The player already defined these tracked stats. Do NOT redefine them unless explicitly told to later.\n"
             + "\n".join(rows)
         )
+        
+    def _log_token_usage(self, prompt: str | None, user_text: str | None, ai_text: str | None) -> None:
+        """
+        Logs approximate token usage for the prompt, user text, and AI response.
+
+        Token logging is diagnostic only. Failures here must never interrupt
+        gameplay, tag parsing, saving, or UI updates.
+        """
+        if self.client is None:
+            logging.warning("Skipped token counting because Gemini client is unavailable.")
+            return
+
+        try:
+            token_source = "\n".join(
+                part
+                for part in (
+                    str(prompt or ""),
+                    str(user_text or ""),
+                    str(ai_text or ""),
+                )
+                if part
+            )
+
+            if not token_source.strip():
+                logging.warning("Skipped token counting because token source was empty.")
+                return
+
+            token_response = self.client.models.count_tokens(
+                model=MODEL,
+                contents=token_source,
+            )
+
+            total_tokens = getattr(token_response, "total_tokens", None)
+
+            if total_tokens is None:
+                logging.info("Gemini token usage response: %s", token_response)
+                return
+
+            logging.info("Tokens used during the last prompt/response cycle: %s", total_tokens)
+
+        except Exception as error:
+            logging.exception("Failed to count Gemini tokens: %s", error)
     
     def query_ai(self, prompt, user_text, recursion_depth=0, is_startup=False):
         """Sends the prompt to Gemini and processes all resulting tags."""
@@ -388,15 +436,19 @@ After outputting all tags, summarize the first starting turn, describe the surro
                 model=MODEL,
                 config=types.GenerateContentConfig(
                     system_instruction=current_rules,
-                    temperature = 1.0,
+                    temperature = 1.0 if not is_startup else 1.1,
                     thinking_config = types.ThinkingConfig(thinking_budget = -1),
                     tools=[],
                     safety_settings=[types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_NONE)]
                 ),
                 contents=prompt                
             )
+            
             ai_text = self.clean_quotes(response.text or "")
             if not ai_text: raise ValueError("Empty response")
+            
+            self._log_token_usage(prompt, user_text, ai_text)
+            
             # --- Save the completely raw text ---
             # We must store the raw text so we can pass it back to the AI during 
             # recursive recursive drafts (like skill rolls). If we pass the parsed 
@@ -554,8 +606,8 @@ After outputting all tags, summarize the first starting turn, describe the surro
             except Exception as e:
                 logging.error(f"Auto-save failed: {e}")
 
-        except Exception as e:
-            logging.error(f"AI Error: {e}")
+        except Exception as error:
+            logging.exception("AI Error: %s", error)
         finally:
             self.app.after(0, lambda: self.app.story_tab.set_controls_state(True))
             

@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import shutil
+from pathlib import Path
+from typing import Any
+from file_manager import FileManager
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -37,6 +39,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QWizard,
     QWizardPage,
+    QRadioButton,
 )
 
 from config import SAVES_DIR
@@ -506,6 +509,173 @@ class HelpDialog(QDialog):
         <p>• You can type whatever you want into the "World" tab, but do keep in mind that whatever you put into the World tab, the A.I. will take as complete fact, so that can make the game as easy or as difficult as you want it to be.</p>
         """
         self.text_browser.setHtml(help_content)
+        
+class CreationTemplateStore:
+    """
+    Handles loading and saving new-game creation templates.
+
+    A completed wizard is always saved into the active save folder as
+    creation_settings.json. Reusable templates can live in the global templates
+    folder.
+    """
+
+    TEMPLATE_FILE_NAME = "creation_settings.json"
+    TEMPLATE_SCHEMA_VERSION = 1
+
+    @classmethod
+    def templates_directory(cls) -> Path:
+        """Returns the app-level directory where reusable templates are stored."""
+        return Path(SAVES_DIR).parent / "templates"
+
+    @classmethod
+    def save_creation_settings(cls, save_directory: str | Path, wizard_data: dict[str, Any]) -> Path | None:
+        """
+        Saves the completed new-game wizard data into the active save folder.
+
+        Args:
+            save_directory: The current adventure save directory.
+            wizard_data: The fully-collected wizard data.
+
+        Returns:
+            The saved JSON path, or None if saving failed.
+        """
+        if not save_directory:
+            logging.warning("Cannot save creation settings because save_directory was not provided.")
+            return None
+
+        try:
+            save_path = Path(save_directory)
+            data_to_save = cls.normalize_wizard_data(wizard_data)
+            data_to_save["_metadata"] = {
+                "schema_version": cls.TEMPLATE_SCHEMA_VERSION,
+                "template_type": "ai_adventure_creation_settings",
+            }
+
+            output_path = save_path / cls.TEMPLATE_FILE_NAME
+            FileManager.save_json_data(output_path, data_to_save)
+            logging.info("Saved creation settings to %s", output_path)
+            return output_path
+
+        except Exception as error:
+            logging.exception("Failed to save creation settings: %s", error)
+            return None
+
+    @classmethod
+    def load_template(cls, template_path: str | Path | None) -> dict[str, Any] | None:
+        """
+        Loads a template JSON file safely.
+
+        Args:
+            template_path: Path to a template JSON file.
+
+        Returns:
+            Normalized wizard data, or None if loading failed.
+        """
+        if template_path is None:
+            return None
+
+        try:
+            path = Path(template_path)
+            if not path.exists() or not path.is_file():
+                logging.warning("Template path does not exist or is not a file: %s", path)
+                return None
+
+            raw_data = FileManager.load_json_data(path)
+            if not isinstance(raw_data, dict):
+                logging.warning("Template file did not contain a JSON object: %s", path)
+                return None
+
+            return cls.normalize_wizard_data(raw_data)
+
+        except Exception as error:
+            logging.exception("Failed to load template %s: %s", template_path, error)
+            return None
+
+    @classmethod
+    def list_available_templates(cls) -> list[tuple[str, Path]]:
+        """
+        Finds reusable templates and previous save-folder creation settings.
+
+        Returns:
+            A list of display-name/path pairs.
+        """
+        templates: list[tuple[str, Path]] = []
+
+        try:
+            global_template_dir = cls.templates_directory()
+            global_template_dir.mkdir(parents=True, exist_ok=True)
+
+            for template_path in sorted(global_template_dir.glob("*.json"), key=lambda p: p.stem.lower()):
+                templates.append((f"Template: {template_path.stem}", template_path))
+
+        except Exception as error:
+            logging.exception("Failed to list global templates: %s", error)
+
+        try:
+            saves_dir = Path(SAVES_DIR)
+            if saves_dir.exists() and saves_dir.is_dir():
+                for save_dir in sorted(saves_dir.iterdir(), key=lambda p: p.name.lower()):
+                    if not save_dir.is_dir():
+                        continue
+
+                    creation_file = save_dir / cls.TEMPLATE_FILE_NAME
+                    if creation_file.exists() and creation_file.is_file():
+                        templates.append((f"Previous Game: {save_dir.name}", creation_file))
+
+        except Exception as error:
+            logging.exception("Failed to list previous-game templates: %s", error)
+
+        return templates
+
+    @classmethod
+    def normalize_wizard_data(cls, data: dict[str, Any] | None) -> dict[str, Any]:
+        """
+        Ensures wizard data always has every expected key.
+
+        This lets templates be partial without crashing the wizard, while still
+        saving default values for blank or missing fields.
+        """
+        source = data if isinstance(data, dict) else {}
+
+        world = source.get("world") if isinstance(source.get("world"), dict) else {}
+        character = source.get("character") if isinstance(source.get("character"), dict) else {}
+
+        focus = source.get("focus")
+        currencies = source.get("currencies")
+        stats = source.get("stats")
+        skills = source.get("skills")
+        
+        if world is not None and character is not None and source is not None:
+            return {
+                "world": {
+                    "setting": str(world.get("setting", "") or ""),
+                    "genre": str(world.get("genre", "") or ""),
+                    "tech": str(world.get("tech", "") or ""),
+                    "species": str(world.get("species", "") or ""),
+                },
+                "focus": focus if isinstance(focus, list) else [],
+                "currencies": currencies if isinstance(currencies, list) else [],
+                "stats": stats if isinstance(stats, list) else [],
+                "character": {
+                    "name": str(character.get("name", "") or ""),
+                    "age": str(character.get("age", "") or ""),
+                    "gender": str(character.get("gender", "") or ""),
+                    "pronouns": str(character.get("pronouns", "") or ""),
+                    "orientation": str(character.get("orientation", "") or ""),
+                    "background": str(character.get("background", "") or ""),
+                },
+                "skills": skills if isinstance(skills, list) else [],
+                "starting_location": str(source.get("starting_location", "") or ""),
+                "final_comments": str(source.get("final_comments", "") or ""),
+            }
+        else:
+            if world is None:
+                logging.exception("COULD NOT FIND WORLD FOR CUSTOM TEMPLATE!")
+            if character is None:
+                logging.exception("COULD NOT FIND CHARACTER FOR CUSTOM TEMPLATE!")
+            if source is None:
+                logging.exception("COULD NOT FIND SOURCE FOR CUSTOM TEMPLATE!")
+            return {}
 
 # ---- Merged from qt_ui/main_menu_dialog.py ----
 class MainMenuDialog(QDialog):
@@ -674,6 +844,77 @@ class MainMenuDialog(QDialog):
         except Exception:
             logging.exception("Failed to delete adventure")
             QMessageBox.critical(self, "Delete", "Delete failed (see logs).")
+
+class NewGameSourceDialog(QDialog):
+    """
+    Lets the player choose whether a new adventure starts from scratch or from
+    an existing creation template.
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("New Adventure Source")
+        self.setMinimumWidth(500)
+
+        self._templates = CreationTemplateStore.list_available_templates()
+        self._selected_template_path: Path | None = None
+
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel("How would you like to create this adventure?"))
+
+        self.scratch_radio = QRadioButton("Create a brand-new adventure from scratch")
+        self.template_radio = QRadioButton("Start from an existing template or previous adventure setup")
+        self.scratch_radio.setChecked(True)
+
+        layout.addWidget(self.scratch_radio)
+        layout.addWidget(self.template_radio)
+
+        self.template_list = QListWidget()
+        self.template_list.setEnabled(False)
+        layout.addWidget(self.template_list)
+
+        if self._templates:
+            for display_name, _path in self._templates:
+                self.template_list.addItem(display_name)
+            self.template_list.setCurrentRow(0)
+        else:
+            self.template_list.addItem("(No templates or previous setup files found yet)")
+            self.template_radio.setEnabled(False)
+
+        self.template_radio.toggled.connect(self.template_list.setEnabled)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._accept_selection)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    @property
+    def selected_template_path(self) -> Path | None:
+        """Returns the selected template path, or None for scratch mode."""
+        return self._selected_template_path
+
+    def _accept_selection(self) -> None:
+        """Validates and stores the selected source."""
+        try:
+            if not self.template_radio.isChecked():
+                self._selected_template_path = None
+                self.accept()
+                return
+
+            current_row = self.template_list.currentRow()
+            if current_row < 0 or current_row >= len(self._templates):
+                QMessageBox.warning(self, "Template", "Select a template first.")
+                return
+
+            self._selected_template_path = self._templates[current_row][1]
+            self.accept()
+
+        except Exception as error:
+            logging.exception("Failed to accept new-game source selection: %s", error)
+            QMessageBox.critical(self, "Template", "Failed to select the template. Check the log file.")
 
 # ---- Merged from qt_ui/audio_dialog.py ----
 class AudioSettingsDialog(QDialog):
@@ -1005,13 +1246,59 @@ class CurrencyPage(QWizardPage):
         self.rows.append(row)
         row.btn_remove.clicked.connect(lambda: self.remove_row(row))
 
-    def remove_row(self, row):
-        if row.is_baseline: return
-        self.rows_layout.removeWidget(row)
-        self.rows.remove(row)
-        row.deleteLater()
-        
-    # Notice we completely removed the validatePage() function!
+    def remove_row(self, row: CurrencyRow | None) -> None:
+        """
+        Removes a user-removable currency row from the wizard page.
+
+        Baseline rows are intentionally protected because the app requires one
+        smallest currency unit worth exactly 1 base unit.
+        """
+        if row is None:
+            logging.warning("CurrencyPage.remove_row called with None.")
+            return
+
+        if row.is_baseline:
+            return
+
+        self._detach_row(row)
+
+
+    def clear_rows(self) -> None:
+        """
+        Removes every currency row from the page.
+
+        This is used when loading a template. It must fully detach old widgets,
+        not merely remove them from the layout, otherwise Qt may keep orphaned rows
+        visible until a later event-loop cleanup.
+        """
+        for row in list(self.rows):
+            self._detach_row(row)
+
+        self.rows.clear()
+
+
+    def _detach_row(self, row: CurrencyRow | None) -> None:
+        """
+        Safely removes a currency row widget from the layout and widget hierarchy.
+        """
+        if row is None:
+            logging.warning("CurrencyPage._detach_row called with None.")
+            return
+
+        try:
+            self.rows_layout.removeWidget(row)
+
+            if row in self.rows:
+                self.rows.remove(row)
+
+            # removeWidget() only removes layout management. It does not hide or
+            # destroy the widget, so do both explicitly.
+            row.hide()
+            row.setParent(None)
+            row.deleteLater()
+
+        except Exception as error:
+            logging.exception("Failed to detach currency row: %s", error)
 
 
 class StatsPage(QWizardPage):
@@ -1038,8 +1325,24 @@ class StatsPage(QWizardPage):
         
         # Default starting rows
 
-    def add_row(self, name="", value=100, enabled=True, desc=""):
-        row = StatRow(name=name, value=value, enabled=enabled, desc=desc)
+    def add_row(
+    self,
+    name: str = "",
+    value: int = 100,
+    enabled: bool = True,
+    desc: str = "",
+    min_val: int = 0,
+    max_val: int = 100,
+) -> None:
+        """Adds a stat row to the tracked-stats wizard page."""
+        row = StatRow(
+            name=name,
+            value=value,
+            enabled=enabled,
+            desc=desc,
+            min_val=min_val,
+            max_val=max_val,
+        )
         self.rows_layout.addWidget(row)
         self.rows.append(row)
         row.btn_remove.clicked.connect(lambda: self.remove_row(row))
@@ -1050,7 +1353,7 @@ class StatsPage(QWizardPage):
         row.deleteLater()
 
 class CreationWizard(QWizard):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, template_data: dict[str, Any] | None = None):
         super().__init__(parent)
         self.setWizardStyle(QWizard.WizardStyle.ClassicStyle)
         self.setWindowTitle("New Adventure Setup")
@@ -1099,7 +1402,215 @@ class CreationWizard(QWizard):
         self.addPage(self.char_page)
         self.addPage(self.skills_page)
         self.addPage(self.final_page)
+        
+        if template_data is not None:
+            self.apply_template_data(template_data)
 
+    def apply_template_data(self, template_data: dict[str, Any] | None) -> None:
+        """
+        Pre-fills the wizard from saved creation template data.
+
+        Args:
+            template_data: Wizard data loaded from creation_settings.json or a
+                           reusable template JSON file.
+        """
+        if template_data is None:
+            return
+
+        try:
+            data = CreationTemplateStore.normalize_wizard_data(template_data)
+
+            self._apply_world_data(data.get("world", {}))
+            self._apply_focus_data(data.get("focus", []))
+            self._apply_currency_data(data.get("currencies", []))
+            self._apply_stats_data(data.get("stats", []))
+            self._apply_character_data(data.get("character", {}))
+            self._apply_skills_data(data.get("skills", []))
+            self._apply_final_data(data)
+
+        except Exception as error:
+            logging.exception("Failed to apply creation template data: %s", error)
+
+    def _apply_world_data(self, world: dict[str, Any]) -> None:
+        """Applies world-related template data."""
+        if not isinstance(world, dict):
+            return
+
+        self.world_page.setting_input.setPlainText(str(world.get("setting", "") or ""))
+        self.world_page.genre_input.setText(str(world.get("genre", "") or ""))
+        self.world_page.tech_input.setText(str(world.get("tech", "") or ""))
+        self.world_page.species_input.setPlainText(str(world.get("species", "") or ""))
+
+    def _apply_focus_data(self, focus: list[Any]) -> None:
+        """Applies selected gameplay-pillar template data."""
+        normalized_focus = {
+            str(item).strip().lower().replace(" ", "")
+            for item in focus
+            if item is not None
+        }
+
+        self.pillars_page.combat_cb.setChecked("combat" in normalized_focus)
+        self.pillars_page.exploration_cb.setChecked("exploration" in normalized_focus)
+        self.pillars_page.trading_cb.setChecked("trading/economy" in normalized_focus)
+        self.pillars_page.social_cb.setChecked("social/roleplay" in normalized_focus)
+
+    def _clear_currency_rows(self) -> None:
+        """Removes all currency rows from the currency wizard page."""
+        if self.currency_page is None:
+            logging.warning("CreationWizard._clear_currency_rows called before currency_page exists.")
+            return
+
+        self.currency_page.clear_rows()
+
+    def _apply_currency_data(self, currencies: list[Any]) -> None:
+        """
+        Applies currency template data to the wizard.
+
+        Blank currency names are ignored. A baseline value-1 currency is required,
+        so one is added only when the template provides valid currencies but none
+        of them are worth 1 base unit.
+        """
+        self._clear_currency_rows()
+
+        normalized_currencies: list[dict[str, int | str]] = []
+
+        for currency in currencies:
+            if not isinstance(currency, dict):
+                logging.warning("Skipped malformed currency template row: %r", currency)
+                continue
+
+            name = str(currency.get("name", "") or "").strip()
+            if not name:
+                logging.warning("Skipped blank currency template row: %r", currency)
+                continue
+
+            try:
+                value = max(1, int(currency.get("value", 1)))
+            except (TypeError, ValueError):
+                logging.exception("Invalid currency value in template: %r", currency)
+                value = 1
+
+            normalized_currencies.append(
+                {
+                    "name": name,
+                    "value": value,
+                }
+            )
+
+        if not normalized_currencies:
+            self.currency_page.add_row("", 1, is_baseline=True)
+            return
+
+        normalized_currencies.sort(key=lambda item: int(item["value"]))
+
+        has_baseline = any(int(currency["value"]) == 1 for currency in normalized_currencies)
+        if not has_baseline:
+            normalized_currencies.insert(
+                0,
+                {
+                    "name": "Base Unit",
+                    "value": 1,
+                },
+            )
+
+        baseline_assigned = False
+
+        for currency in normalized_currencies:
+            value = int(currency["value"])
+            is_baseline = value == 1 and not baseline_assigned
+
+            if is_baseline:
+                baseline_assigned = True
+
+            self.currency_page.add_row(
+                name=str(currency["name"]),
+                value=value,
+                is_baseline=is_baseline,
+            )
+
+    def _clear_stat_rows(self) -> None:
+        """Removes all stat rows from the stats wizard page."""
+        for row in list(self.stats_page.rows):
+            try:
+                self.stats_page.rows_layout.removeWidget(row)
+
+                if row in self.stats_page.rows:
+                    self.stats_page.rows.remove(row)
+
+                row.hide()
+                row.setParent(None)
+                row.deleteLater()
+
+            except Exception as error:
+                logging.exception("Failed to detach stat row: %s", error)
+
+        self.stats_page.rows.clear()
+
+    def _apply_stats_data(self, stats: list[Any]) -> None:
+        """Applies tracked-stat template data."""
+        self._clear_stat_rows()
+
+        for stat in stats:
+            if not isinstance(stat, dict):
+                logging.warning("Skipped malformed stat template row: %r", stat)
+                continue
+
+            try:
+                minimum = int(stat.get("min", 0))
+                maximum = int(stat.get("max", 100))
+                value = int(stat.get("value", 100))
+            except (TypeError, ValueError):
+                logging.exception("Invalid stat numeric values in template: %r", stat)
+                minimum = 0
+                maximum = 100
+                value = 100
+
+            if maximum < minimum:
+                logging.warning("Template stat max was below min. Swapping values for %r", stat)
+                minimum, maximum = maximum, minimum
+
+            value = max(minimum, min(maximum, value))
+
+            self.stats_page.add_row(
+                name=str(stat.get("name", "") or ""),
+                value=value,
+                enabled=bool(stat.get("enabled", True)),
+                desc=str(stat.get("description", stat.get("desc", "")) or ""),
+                min_val=minimum,
+                max_val=maximum,
+            )
+
+    def _apply_character_data(self, character: dict[str, Any]) -> None:
+        """Applies character-related template data."""
+        if not isinstance(character, dict):
+            return
+
+        self.char_page.name_input.setText(str(character.get("name", "") or ""))
+        self.char_page.age_input.setText(str(character.get("age", "") or ""))
+        self.char_page.gender_input.setText(str(character.get("gender", "") or ""))
+        self.char_page.pronouns_input.setText(str(character.get("pronouns", "") or ""))
+        self.char_page.orientation_input.setText(str(character.get("orientation", "") or ""))
+        self.char_page.background_input.setPlainText(str(character.get("background", "") or ""))
+
+    def _apply_skills_data(self, skills: list[Any]) -> None:
+        """Applies starting-skill template data."""
+        clean_skills = [item for item in skills if isinstance(item, dict)]
+
+        for index, (_level, name_widget, desc_widget) in enumerate(self.skills_page.skill_inputs):
+            if index >= len(clean_skills):
+                name_widget.setText("")
+                desc_widget.setText("")
+                continue
+
+            skill = clean_skills[index]
+            name_widget.setText(str(skill.get("name", "") or ""))
+            desc_widget.setText(str(skill.get("desc", skill.get("description", "")) or ""))
+
+    def _apply_final_data(self, data: dict[str, Any]) -> None:
+        """Applies final-page template data."""
+        self.final_page.location_input.setText(str(data.get("starting_location", "") or ""))
+        self.final_page.comments_input.setPlainText(str(data.get("final_comments", "") or ""))
+    
     def get_wizard_data(self) -> dict:
         """Extracts all data from the wizard pages into a neat dictionary."""
         
@@ -1125,8 +1636,8 @@ class CreationWizard(QWizard):
                 "name": s_name,
                 "desc": desc_w.text().strip() or "Unknown Skill Description"
             })
-
-        return {
+            
+        wizard_data = {
             "world": {
                 "setting": self.world_page.setting_input.toPlainText().strip(),
                 "genre": self.world_page.genre_input.text().strip(),
@@ -1146,6 +1657,7 @@ class CreationWizard(QWizard):
             },
             "skills": skills,
             "starting_location": self.final_page.location_input.text().strip(),
-            "final_comments": self.final_page.comments_input.toPlainText().strip()
+            "final_comments": self.final_page.comments_input.toPlainText().strip(),
         }
 
+        return CreationTemplateStore.normalize_wizard_data(wizard_data)

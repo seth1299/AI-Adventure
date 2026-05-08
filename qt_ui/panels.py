@@ -1317,7 +1317,7 @@ class ProcessingPanel(JsonFilePanel):
         """Marks ready passive processes as complete."""
         data = self.load_data()
         if not data:
-            logging.warning("No data to load for check_active_tasks in ProcessingPanel.")
+            #logging.warning("No data to load for check_active_tasks in ProcessingPanel.")
             return []
 
         completed: list[str] = []

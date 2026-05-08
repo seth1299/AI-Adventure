@@ -28,10 +28,12 @@ from .panels import (
 from .dialogs import (
     AudioSettingsDialog,
     CalendarManagerDialog,
+    CreationTemplateStore,
     CreationWizard,
     CurrencyManagerDialog,
     HelpDialog,
     MainMenuDialog,
+    NewGameSourceDialog,
     StatsManagerDialog,
 )
 
@@ -277,10 +279,18 @@ class MainWindow(QMainWindow):
 
         # --- LAUNCH THE WIZARD POPUP ---
 
-        wizard = CreationWizard(self)
+        source_dialog = NewGameSourceDialog(self)
+        if source_dialog.exec() != QDialog.DialogCode.Accepted:
+            self.story_panel.print_text("System: New game creation cancelled.", sender="System")
+            return
+
+        template_data = CreationTemplateStore.load_template(source_dialog.selected_template_path)
+
+        wizard = CreationWizard(self, template_data=template_data)
         
         if wizard.exec() == QDialog.DialogCode.Accepted:
             wizard_data = wizard.get_wizard_data()
+            CreationTemplateStore.save_creation_settings(save_path_obj, wizard_data)
             
             # Assign Currencies and Stats to Player
             self.app.player.world_currencies = wizard_data["currencies"]

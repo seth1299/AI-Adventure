@@ -171,6 +171,23 @@ class Configuration:
         except Exception as error:
             logging.exception("Failed to read default rules template: %s", error)
             raise RuntimeError("Default rules template could not be loaded.") from error
+        
+    @cached_property
+    def creative_ideas(self) -> str:
+        """Loads the default GM rules prompt from a Markdown template."""
+        template_path = self._resource_path("prompt_templates/creative_ideas.md")
+
+        try:
+            if template_path.exists() and template_path.is_file():
+                creative_ideas = template_path.read_text(encoding="utf-8").strip()
+                if creative_ideas:
+                    return creative_ideas
+
+            raise FileNotFoundError(f"Creative ideas template not found or empty: {template_path}")
+
+        except Exception as error:
+            logging.exception("Failed to read creative ideas template: %s", error)
+            raise RuntimeError("Creative ideas template could not be loaded.") from error
 
     def _resource_path(self, relative_path: str) -> Path:
         """Gets a resource path that works in development and PyInstaller builds."""
@@ -234,4 +251,5 @@ SOUNDS_DIR: Final[Path] = configuration.sounds_directory
 BASE_SOUNDS_DIR: Final[Path] = configuration.base_sounds_directory
 
 DEFAULT_RULES: Final[str] = configuration.default_rules
+CREATIVE_IDEAS: Final[str] = configuration.creative_ideas
 VALID_SOUND_FILE_NAMES: Final[list[str]] = configuration.get_valid_sound_file_names()
