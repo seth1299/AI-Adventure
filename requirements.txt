@@ -1,17 +1,16 @@
-PyQt6==6.11.0
-PyQt6-Qt6==6.11.0
-PyQt6_sip==13.11.1
-PySide6==6.11.0
-PySide6_Addons==6.11.0
-PySide6_Essentials==6.11.0
-RapidFuzz==3.14.5
-shiboken6==6.11.0
-pyinstaller
-dotenv
-pydantic
-edge_tts
-pygame
-pydantic_settings
-google.genai
-tabulate
-markdown
+PyQt6==6.11.0 ; sys_platform == 'win32'
+PyQt6-Qt6==6.11.0 ; sys_platform == 'win32'
+PyQt6_sip==13.11.1 ; sys_platform == 'win32'
+PySide6==6.11.0 ; sys_platform == 'win32'
+PySide6_Addons==6.11.0 ; sys_platform == 'win32'
+PySide6_Essentials==6.11.0 ; sys_platform == 'win32'
+RapidFuzz==3.14.5 ; sys_platform == 'win32'
+shiboken6==6.11.0 ; sys_platform == 'win32'
+pyinstaller ; sys_platform == 'win32'
+dotenv ; sys_platform == 'win32'
+pydantic ; sys_platform == 'win32'
+edge_tts ; sys_platform == 'win32'
+pydantic_settings ; sys_platform == 'win32'
+google.genai ; sys_platform == 'win32'
+tabulate ; sys_platform == 'win32'
+markdown ; sys_platform == 'win32'

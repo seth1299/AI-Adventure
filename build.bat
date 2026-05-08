@@ -1,10 +1,10 @@
 @echo off
 setlocal
 
-call python.exe -m pip install --upgrade pip
-call python.exe -m pip install -r requirements.txt
+py -m pip install --upgrade pip
+py -m pip install --only-final :all: --no-warn-script-location -r requirements.txt
 
-call python.exe -m PyInstaller ^
+py -m PyInstaller ^
   --noconfirm ^
   --noconsole ^
   --onefile ^
