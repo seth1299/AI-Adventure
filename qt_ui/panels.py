@@ -40,6 +40,11 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QCheckBox,
+    QGroupBox,
+    QInputDialog,
+    QScrollArea,
+    QSpinBox,
 )
 from tabulate import tabulate
 
@@ -1195,6 +1200,683 @@ class SkillsPanel(JsonFilePanel):
 
         self.save_data(data)
 
+class SpellcastingPanel(JsonFilePanel):
+    """Manual Vancian spellcasting tracker backed by ``spellcasting.json``.
+
+    This panel intentionally trusts the player to track spell usage. The AI receives
+    spellcasting context, but the panel does not require AI tags to consume spell slots.
+    """
+
+    DATA_FILENAME = "spellcasting.json"
+    EXPECTED_TYPE = dict
+    MAX_SPELL_LEVEL: ClassVar[int] = 9
+    DEFAULT_DATA: ClassVar[dict[str, Any]] = {
+        "enabled": False,
+        "magic_rules": "",
+        "prepared_limit": 0,
+        "slot_levels": {
+            str(level): {"max": 0, "used": 0}
+            for level in range(1, MAX_SPELL_LEVEL + 1)
+        },
+        "spells": {},
+    }
+
+    def __init__(self, parent: QWidget | None = None, app_context: Any = None) -> None:
+        super().__init__(
+            title="Spellcasting",
+            parent=parent,
+            app_context=app_context,
+            show_save_button=True,
+        )
+
+        self._loading = False
+        self._slot_checkboxes: dict[int, list[QCheckBox]] = {}
+
+        self.chk_enabled = QCheckBox("Magic / spellcasting enabled")
+        self.chk_enabled.stateChanged.connect(self._update_enabled)
+        self.root_layout.addWidget(self.chk_enabled)
+
+        prep_row = QHBoxLayout()
+        prep_row.addWidget(QLabel("Prepared spell limit:"))
+
+        self.prepared_limit_input = QSpinBox()
+        self.prepared_limit_input.setRange(0, 500)
+        self.prepared_limit_input.setToolTip("0 means unlimited prepared spells.")
+        self.prepared_limit_input.valueChanged.connect(self._update_prepared_limit)
+        prep_row.addWidget(self.prepared_limit_input)
+
+        self.btn_add_spell = QPushButton("+ Add Spell")
+        self.btn_add_spell.clicked.connect(self._add_spell_dialog)
+        prep_row.addWidget(self.btn_add_spell)
+
+        self.btn_reset_slots = QPushButton("Reset Slots")
+        self.btn_reset_slots.clicked.connect(self.reset_used_slots)
+        prep_row.addWidget(self.btn_reset_slots)
+
+        self.btn_clear_prepared = QPushButton("Clear Prepared")
+        self.btn_clear_prepared.clicked.connect(self.clear_prepared_spells)
+        prep_row.addWidget(self.btn_clear_prepared)
+
+        prep_row.addStretch()
+        self.root_layout.addLayout(prep_row)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+
+        self.scroll_widget = QWidget()
+        self.content_layout = QVBoxLayout(self.scroll_widget)
+        self.content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self.scroll_area.setWidget(self.scroll_widget)
+        self.root_layout.addWidget(self.scroll_area, stretch=1)
+
+    def _coerce_data(self, data: Any) -> dict[str, Any]:
+        """Normalizes spellcasting data loaded from disk."""
+
+        default_data = self._default_data()
+
+        if not isinstance(data, dict):
+            logging.warning("SpellcastingPanel: malformed root data. Using defaults.")
+            return default_data
+
+        coerced: dict[str, Any] = {
+            "enabled": bool(data.get("enabled", default_data["enabled"])),
+            "magic_rules": str(data.get("magic_rules", "") or "").strip(),
+            "prepared_limit": self._safe_int(data.get("prepared_limit"), default=0, minimum=0),
+            "slot_levels": {},
+            "spells": {},
+        }
+
+        raw_slot_levels = data.get("slot_levels", {})
+        if not isinstance(raw_slot_levels, dict):
+            logging.warning("SpellcastingPanel: slot_levels was not a dict.")
+            raw_slot_levels = {}
+
+        for level in range(1, self.MAX_SPELL_LEVEL + 1):
+            raw_level_data = raw_slot_levels.get(str(level), {})
+            if not isinstance(raw_level_data, dict):
+                raw_level_data = {}
+
+            max_slots = self._safe_int(raw_level_data.get("max"), default=0, minimum=0)
+            used_slots = self._safe_int(raw_level_data.get("used"), default=0, minimum=0)
+            coerced["slot_levels"][str(level)] = {
+                "max": max_slots,
+                "used": min(used_slots, max_slots),
+            }
+
+        raw_spells = data.get("spells", {})
+        if isinstance(raw_spells, dict):
+            for raw_name, raw_spell in raw_spells.items():
+                spell_name = str(raw_name or "").strip()
+                if not spell_name:
+                    continue
+
+                if not isinstance(raw_spell, dict):
+                    logging.warning("SpellcastingPanel: skipped malformed spell %r.", raw_name)
+                    continue
+
+                spell_level = self._safe_int(raw_spell.get("level"), default=0, minimum=0)
+                spell_level = min(spell_level, self.MAX_SPELL_LEVEL)
+
+                coerced["spells"][spell_name] = {
+                    "level": spell_level,
+                    "school": str(raw_spell.get("school", "") or "").strip(),
+                    "description": str(raw_spell.get("description", "") or "").strip(),
+                    "prepared": bool(raw_spell.get("prepared", False)),
+                }
+        else:
+            logging.warning("SpellcastingPanel: spells was not a dict.")
+
+        return coerced
+    
+    def force_learn_spell(
+        self,
+        spell_name: str,
+        spell_level: int | str,
+        school: str = "",
+        description: str = "",
+        *,
+        prepared: bool = False,
+    ) -> None:
+        """
+        Adds or updates a known spell from an AI-generated spell tag.
+
+        Args:
+            spell_name: Name of the spell to add or update.
+            spell_level: Spell level from 0 to MAX_SPELL_LEVEL.
+            school: Optional school, tradition, source, or magic type.
+            description: Spell description.
+            prepared: Whether the spell should start prepared. Defaults to False
+                    to avoid the AI accidentally changing daily preparation.
+        """
+        clean_name = str(spell_name or "").strip()
+        if not clean_name:
+            logging.warning("SpellcastingPanel.force_learn_spell called without a spell name.")
+            return
+
+        try:
+            clean_level = int(spell_level)
+        except (TypeError, ValueError) as error:
+            logging.exception("Invalid spell level for %s: %s", clean_name, error)
+            clean_level = 0
+
+        clean_level = max(0, min(clean_level, self.MAX_SPELL_LEVEL))
+        clean_school = str(school or "").strip()
+        clean_description = str(description or "").strip() or "No description."
+
+        data = self.load_data()
+        data["enabled"] = True
+
+        spells = data.setdefault("spells", {})
+        if not isinstance(spells, dict):
+            logging.warning("SpellcastingPanel: spells was malformed while learning spell.")
+            data["spells"] = {}
+            spells = data["spells"]
+
+        existing_spell = spells.get(clean_name)
+        if not isinstance(existing_spell, dict):
+            existing_spell = {}
+
+        existing_spell["level"] = clean_level
+
+        if clean_school:
+            existing_spell["school"] = clean_school
+        else:
+            existing_spell.setdefault("school", "")
+
+        if clean_description:
+            existing_spell["description"] = clean_description
+
+        # Default to preserving the existing prepared state unless explicitly requested.
+        existing_spell["prepared"] = bool(existing_spell.get("prepared", False) or prepared)
+
+        spells[clean_name] = existing_spell
+        self.save_data(data)
+
+    def refresh_display(self) -> None:
+        """Redraws the spellcasting controls from saved JSON data."""
+
+        self._clear_content_layout()
+        self._slot_checkboxes.clear()
+
+        if self.data_path is None:
+            self.content_layout.addWidget(QLabel("(No save loaded)"))
+            self._set_state("No save loaded")
+            return
+
+        data = self.load_data()
+
+        self._loading = True
+        try:
+            self.chk_enabled.setChecked(bool(data.get("enabled", False)))
+            self.prepared_limit_input.setValue(
+                self._safe_int(data.get("prepared_limit"), default=0, minimum=0)
+            )
+        finally:
+            self._loading = False
+
+        if not data.get("enabled", False):
+            disabled_label = QLabel(
+                "Spellcasting is disabled for this save. Enable it above if this world or character uses magic."
+            )
+            disabled_label.setWordWrap(True)
+            self.content_layout.addWidget(disabled_label)
+            self._set_state("")
+            return
+
+        self._build_slot_section(data)
+        self._build_spell_section(data)
+
+        self._set_state("")
+
+    def get_text(self) -> str:
+        """Returns spellcasting context for callers that use get_text()."""
+
+        return self.get_ai_context()
+
+    def get_ai_context(self) -> str:
+        """Returns compact spellcasting context for the AI prompt."""
+
+        lines: list[str] = ["### SPELLCASTING"]
+
+        try:
+            data = self.load_data()
+
+            if not data.get("enabled", False):
+                lines.append("Magic/spellcasting: not enabled for this save.")
+                return "\n".join(lines)
+            
+            magic_rules = str(data.get("magic_rules", "") or "").strip()
+            if magic_rules:
+                lines.append(f"World spellcasting rules: {magic_rules}")
+
+            prepared_limit = self._safe_int(data.get("prepared_limit"), default=0, minimum=0)
+            prepared_limit_text = "Unlimited" if prepared_limit == 0 else str(prepared_limit)
+            lines.append(f"Prepared spell limit: {prepared_limit_text}.")
+            lines.append("Spell slot usage is manually tracked by the player.")
+
+            slot_levels = data.get("slot_levels", {})
+            if isinstance(slot_levels, dict):
+                lines.append("Spell slots:")
+                for level in range(1, self.MAX_SPELL_LEVEL + 1):
+                    slot_data = slot_levels.get(str(level), {})
+                    if not isinstance(slot_data, dict):
+                        continue
+
+                    max_slots = self._safe_int(slot_data.get("max"), default=0, minimum=0)
+                    used_slots = self._safe_int(slot_data.get("used"), default=0, minimum=0)
+
+                    if max_slots > 0:
+                        lines.append(f"- Level {level}: {used_slots}/{max_slots} used.")
+
+            spells = data.get("spells", {})
+            if not isinstance(spells, dict) or not spells:
+                lines.append("Known spells: none.")
+                return "\n".join(lines)
+
+            prepared_spells = [
+                (name, spell)
+                for name, spell in spells.items()
+                if isinstance(spell, dict) and bool(spell.get("prepared", False))
+            ]
+
+            if prepared_spells:
+                lines.append("Prepared spells:")
+                for name, spell in sorted(prepared_spells, key=lambda pair: pair[0].lower()):
+                    lines.append(self._format_spell_context_line(name, spell))
+            else:
+                lines.append("Prepared spells: none.")
+
+            lines.append("Known spellbook:")
+            for name, spell in sorted(spells.items(), key=lambda pair: pair[0].lower()):
+                if not isinstance(spell, dict):
+                    continue
+                lines.append(self._format_spell_context_line(name, spell))
+
+        except Exception as error:
+            logging.exception("SpellcastingPanel.get_ai_context failed: %s", error)
+            lines.append("Spellcasting context unavailable due to an internal error.")
+
+        return "\n".join(lines)
+
+    def save_now(self) -> None:
+        """Saves the current normalized spellcasting data."""
+
+        self.save_data(self.load_data())
+
+    def _save_current(self) -> None:
+        """Toolbar save action."""
+
+        self.save_now()
+
+    def _build_slot_section(self, data: dict[str, Any]) -> None:
+        """Builds checkboxes representing spell slots."""
+
+        group = QGroupBox("Spell Slots")
+        group_layout = QVBoxLayout(group)
+
+        slot_levels = data.get("slot_levels", {})
+        if not isinstance(slot_levels, dict):
+            slot_levels = {}
+
+        for level in range(1, self.MAX_SPELL_LEVEL + 1):
+            slot_data = slot_levels.get(str(level), {})
+            if not isinstance(slot_data, dict):
+                slot_data = {"max": 0, "used": 0}
+
+            max_slots = self._safe_int(slot_data.get("max"), default=0, minimum=0)
+            used_slots = min(
+                self._safe_int(slot_data.get("used"), default=0, minimum=0),
+                max_slots,
+            )
+
+            row = QHBoxLayout()
+            row.addWidget(QLabel(f"Level {level}:"))
+
+            max_input = QSpinBox()
+            max_input.setRange(0, 20)
+            max_input.setValue(max_slots)
+            max_input.setToolTip("Number of available spell slots at this level.")
+            max_input.valueChanged.connect(
+                lambda value, spell_level=level: self._update_max_slots(spell_level, value)
+            )
+            row.addWidget(max_input)
+
+            self._slot_checkboxes[level] = []
+
+            if max_slots == 0:
+                row.addWidget(QLabel("No slots"))
+            else:
+                for index in range(max_slots):
+                    slot_checkbox = QCheckBox(str(index + 1))
+                    slot_checkbox.setToolTip("Checked means this spell slot has been consumed.")
+                    slot_checkbox.setChecked(index < used_slots)
+                    slot_checkbox.stateChanged.connect(
+                        lambda _state, spell_level=level: self._sync_used_slots(spell_level)
+                    )
+                    self._slot_checkboxes[level].append(slot_checkbox)
+                    row.addWidget(slot_checkbox)
+
+            row.addStretch()
+            group_layout.addLayout(row)
+
+        self.content_layout.addWidget(group)
+
+    def _build_spell_section(self, data: dict[str, Any]) -> None:
+        """Builds prepared spell and known spellbook controls."""
+
+        group = QGroupBox("Known Spells")
+        group_layout = QVBoxLayout(group)
+
+        spells = data.get("spells", {})
+        if not isinstance(spells, dict) or not spells:
+            empty_label = QLabel("No spells known yet.")
+            empty_label.setWordWrap(True)
+            group_layout.addWidget(empty_label)
+            self.content_layout.addWidget(group)
+            return
+
+        prepared_count = sum(
+            1
+            for spell in spells.values()
+            if isinstance(spell, dict) and bool(spell.get("prepared", False))
+        )
+        prepared_limit = self._safe_int(data.get("prepared_limit"), default=0, minimum=0)
+
+        if prepared_limit == 0:
+            summary_text = f"Prepared: {prepared_count} / unlimited"
+        else:
+            summary_text = f"Prepared: {prepared_count} / {prepared_limit}"
+
+        summary_label = QLabel(summary_text)
+        group_layout.addWidget(summary_label)
+
+        for spell_name, spell in sorted(spells.items(), key=lambda pair: pair[0].lower()):
+            if not isinstance(spell, dict):
+                continue
+
+            row = QHBoxLayout()
+
+            prepared_checkbox = QCheckBox("Prepared")
+            prepared_checkbox.setChecked(bool(spell.get("prepared", False)))
+            prepared_checkbox.stateChanged.connect(
+                lambda state, name=spell_name: self._toggle_spell_prepared(
+                    name,
+                    state == Qt.CheckState.Checked.value,
+                )
+            )
+            row.addWidget(prepared_checkbox)
+
+            level = self._safe_int(spell.get("level"), default=0, minimum=0)
+            school = str(spell.get("school", "") or "").strip()
+            description = str(spell.get("description", "") or "").strip()
+
+            spell_label_text = f"{spell_name} - Level {level}"
+            if school:
+                spell_label_text += f" - {school}"
+            if description:
+                spell_label_text += f"\n{description}"
+
+            spell_label = QLabel(spell_label_text)
+            spell_label.setWordWrap(True)
+            row.addWidget(spell_label, stretch=1)
+
+            remove_button = QPushButton("Remove")
+            remove_button.clicked.connect(lambda _checked=False, name=spell_name: self._remove_spell(name))
+            row.addWidget(remove_button)
+
+            group_layout.addLayout(row)
+
+        self.content_layout.addWidget(group)
+
+    def _update_enabled(self) -> None:
+        """Saves whether spellcasting is enabled."""
+
+        if self._loading:
+            return
+
+        data = self.load_data()
+        data["enabled"] = self.chk_enabled.isChecked()
+        self.save_data(data)
+
+    def _update_prepared_limit(self, value: int) -> None:
+        """Saves the prepared spell limit."""
+
+        if self._loading:
+            return
+
+        data = self.load_data()
+        data["prepared_limit"] = max(0, int(value))
+        self.save_data(data)
+
+    def _update_max_slots(self, spell_level: int, max_slots: int) -> None:
+        """Changes how many slots exist for a spell level."""
+
+        if self._loading:
+            return
+
+        data = self.load_data()
+        slot_levels = data.setdefault("slot_levels", {})
+        slot_data = slot_levels.setdefault(str(spell_level), {"max": 0, "used": 0})
+
+        clean_max_slots = max(0, int(max_slots))
+        slot_data["max"] = clean_max_slots
+        slot_data["used"] = min(
+            self._safe_int(slot_data.get("used"), default=0, minimum=0),
+            clean_max_slots,
+        )
+
+        self.save_data(data)
+
+    def _sync_used_slots(self, spell_level: int) -> None:
+        """Saves used spell slot count based on checked boxes."""
+
+        if self._loading:
+            return
+
+        data = self.load_data()
+        slot_levels = data.setdefault("slot_levels", {})
+        slot_data = slot_levels.setdefault(str(spell_level), {"max": 0, "used": 0})
+
+        checkboxes = self._slot_checkboxes.get(spell_level, [])
+        used_count = sum(1 for checkbox in checkboxes if checkbox.isChecked())
+
+        slot_data["max"] = len(checkboxes)
+        slot_data["used"] = used_count
+
+        self.save_data(data)
+
+    def _toggle_spell_prepared(self, spell_name: str, prepared: bool) -> None:
+        """Marks a spell as prepared while respecting the prepared spell limit."""
+
+        if self._loading:
+            return
+
+        data = self.load_data()
+        spells = data.get("spells", {})
+
+        if not isinstance(spells, dict):
+            logging.warning("SpellcastingPanel: cannot prepare spell because spells is malformed.")
+            return
+
+        target_spell = spells.get(spell_name)
+        if not isinstance(target_spell, dict):
+            logging.warning("SpellcastingPanel: spell not found for preparation: %s", spell_name)
+            return
+
+        prepared_limit = self._safe_int(data.get("prepared_limit"), default=0, minimum=0)
+
+        if prepared and prepared_limit > 0:
+            prepared_count = sum(
+                1
+                for name, spell in spells.items()
+                if name != spell_name and isinstance(spell, dict) and bool(spell.get("prepared", False))
+            )
+
+            if prepared_count >= prepared_limit:
+                QMessageBox.warning(
+                    self,
+                    "Prepared Spell Limit",
+                    f"You can only prepare {prepared_limit} spells.",
+                )
+                self.refresh_display()
+                return
+
+        target_spell["prepared"] = prepared
+        self.save_data(data)
+
+    def _add_spell_dialog(self) -> None:
+        """Prompts the player for spell information and stores it in the spellbook."""
+
+        if self.data_path is None:
+            QMessageBox.warning(self, "Spellcasting", "Load or create a save before adding spells.")
+            return
+
+        spell_name, ok = QInputDialog.getText(self, "Add Spell", "Spell name:")
+        if not ok:
+            return
+
+        clean_name = str(spell_name or "").strip()
+        if not clean_name:
+            return
+
+        spell_level, ok = QInputDialog.getInt(
+            self,
+            "Add Spell",
+            "Spell level:",
+            0,
+            0,
+            self.MAX_SPELL_LEVEL,
+        )
+        if not ok:
+            return
+
+        spell_school, ok = QInputDialog.getText(
+            self,
+            "Add Spell",
+            "School / tradition / source (optional):",
+        )
+        if not ok:
+            return
+
+        description, ok = QInputDialog.getMultiLineText(
+            self,
+            "Add Spell",
+            "Description:",
+        )
+        if not ok:
+            return
+
+        data = self.load_data()
+        spells = data.setdefault("spells", {})
+
+        if not isinstance(spells, dict):
+            logging.warning("SpellcastingPanel: spells was malformed while adding spell.")
+            data["spells"] = {}
+            spells = data["spells"]
+
+        spells[clean_name] = {
+            "level": int(spell_level),
+            "school": str(spell_school or "").strip(),
+            "description": str(description or "").strip(),
+            "prepared": False,
+        }
+
+        data["enabled"] = True
+        self.save_data(data)
+
+    def _remove_spell(self, spell_name: str) -> None:
+        """Removes a spell from the spellbook after confirmation."""
+
+        response = QMessageBox.question(
+            self,
+            "Remove Spell",
+            f"Remove {spell_name} from the spellbook?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if response != QMessageBox.StandardButton.Yes:
+            return
+
+        data = self.load_data()
+        spells = data.get("spells", {})
+
+        if isinstance(spells, dict):
+            spells.pop(spell_name, None)
+            self.save_data(data)
+        else:
+            logging.warning("SpellcastingPanel: spells was malformed while removing spell.")
+
+    def reset_used_slots(self) -> None:
+        """Marks every spell slot as unused, similar to finishing a long rest."""
+
+        data = self.load_data()
+        slot_levels = data.get("slot_levels", {})
+
+        if not isinstance(slot_levels, dict):
+            logging.warning("SpellcastingPanel: slot_levels malformed during reset.")
+            return
+
+        for slot_data in slot_levels.values():
+            if isinstance(slot_data, dict):
+                slot_data["used"] = 0
+
+        self.save_data(data)
+
+    def clear_prepared_spells(self) -> None:
+        """Clears all prepared spell flags without deleting known spells."""
+
+        data = self.load_data()
+        spells = data.get("spells", {})
+
+        if not isinstance(spells, dict):
+            logging.warning("SpellcastingPanel: spells malformed while clearing prepared spells.")
+            return
+
+        for spell in spells.values():
+            if isinstance(spell, dict):
+                spell["prepared"] = False
+
+        self.save_data(data)
+
+    def _format_spell_context_line(self, spell_name: str, spell: dict[str, Any]) -> str:
+        """Formats one spell as compact AI context."""
+
+        level = self._safe_int(spell.get("level"), default=0, minimum=0)
+        school = str(spell.get("school", "") or "").strip()
+        description = str(spell.get("description", "") or "").strip() or "No description."
+
+        school_text = f"; {school}" if school else ""
+        return f"- {spell_name}: Level {level}{school_text}; Description: {description}"
+
+    def _clear_content_layout(self) -> None:
+        """Removes all dynamic widgets from the scroll area."""
+
+        while self.content_layout.count():
+            item = self.content_layout.takeAt(0)
+            if item != None:
+                widget = item.widget()
+            else:
+                logging.warning(f"{item} is None in clear_content_layout in panels.py!")
+
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+
+    def _safe_int(self, value: Any, *, default: int = 0, minimum: int | None = None) -> int:
+        """Safely converts a value to int, logging invalid data."""
+
+        try:
+            result = int(value)
+        except (TypeError, ValueError) as error:
+            logging.exception("SpellcastingPanel: invalid integer value %r: %s", value, error)
+            result = default
+
+        if minimum is not None:
+            result = max(minimum, result)
+
+        return result
 
 class ProcessingPanel(JsonFilePanel):
     """Processing panel for passive processes and active projects."""
@@ -2051,6 +2733,24 @@ class StoryPanel(QWidget):
             }
             """
         )
+        self.txt_log.document().setDefaultStyleSheet(
+            """
+            p {
+                margin-top: 0px;
+                margin-bottom: 18px;
+                line-height: 125%;
+            }
+
+            ul, ol {
+                margin-top: 4px;
+                margin-bottom: 12px;
+            }
+
+            li {
+                margin-bottom: 6px;
+            }
+            """
+        )
         root.addWidget(self.txt_log, stretch=1)
 
         input_row = QHBoxLayout()
@@ -2391,6 +3091,7 @@ __all__ = [
     "InventoryPanel",
     "HistoryMarkdownPanel",
     "SkillsPanel",
+    "SpellcastingPanel",
     "ProcessingPanel",
     "RecipesPanel",
     "CalendarPanel",

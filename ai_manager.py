@@ -5,6 +5,7 @@ from config import GEMINI_API_KEY, MODEL
 from tabulate import tabulate
 from pathlib import Path
 from typing import Any
+from creative_sampler import CreativeCategory, CreativeSampleRequest
 
 class AIManager:
     def __init__(self, app) -> None:
@@ -81,6 +82,10 @@ class AIManager:
             "settings": resolved_calendar_settings,
             "ai_notes": str(calendar_data.get("ai_notes", "") or ""),
         }
+        
+        spellcasting_data = self._normalize_starting_spellcasting_data(data.get("spellcasting", {}))
+        data["spellcasting"] = spellcasting_data
+        self._save_starting_spellcasting(spellcasting_data)
 
         self._save_resolved_creation_settings(data)
             
@@ -112,7 +117,35 @@ class AIManager:
         stat_prompt_text = self._build_starting_stat_prompt(data.get("stats", []))
         calendar_prompt_text = self._build_starting_calendar_prompt(self.app.player.calendar_settings)
         
-        creative_ideas = self.app.load_creative_ideas()
+        spellcasting_prompt_text = self._build_starting_spellcasting_prompt(data.get("spellcasting", {}))
+        
+        creative_ideas = ""
+
+        creative_bank = getattr(self.app, "creative_idea_bank", None)
+        if creative_bank is not None:
+            creative_ideas = creative_bank.build_prompt_fragment(
+                CreativeSampleRequest(
+                    categories=(
+                        CreativeCategory.MALE_NAMES,
+                        CreativeCategory.FEMALE_NAMES,
+                        CreativeCategory.SETTLEMENT_NAMES,
+                        CreativeCategory.REGION_NAMES,
+                        CreativeCategory.RELIGION_NAMES,
+                        CreativeCategory.SPECIES_NAMES,
+                    ),
+                    samples_per_category=10,
+                    banned_terms=(
+                        "Kaelan",
+                        "Bram",
+                        "Elara",
+                        "Oakhaven",
+                        "Ravenswood",
+                        "Silverbrook",
+                    ),
+                )
+            )
+        else:
+            logging.warning("Creative idea bank is unavailable.")
         
         prompt = f"""
 Initialize a new RPG adventure using the following parameters.
@@ -144,10 +177,13 @@ Provided Tracked Stats:
 Provided Calendar Information:
 {calendar_prompt_text}
 
+Provided Starting Spellcasting:
+{spellcasting_prompt_text}
+
 Starting Location: {data['starting_location'] or 'Unknown Starting Location'}
 Final Comments/Rules: {data['final_comments'] or 'N/A'}
 
-{f"Please use the following data to help you compile all of the information about the world and such. You do NOT need to limit yourself to only using names from this list, but please consider all of the names and use them when creating your response: \n\n{creative_ideas}" if creative_ideas else ""}
+{f"Use these compact creative inspiration samples when inventing missing names, places, factions, species, religions, or world details:\n\n{creative_ideas}" if creative_ideas else ""}
 
 ---
 
@@ -156,31 +192,31 @@ Output the following tags to set up the starting gameplay state:
 [[WORLD_PROFILE: 
 ### World Setting
 
-**Genre:** (Filled value)
+- **Genre:** (Filled value)
 
-**Setting:** (Filled value)
+- **Setting:** (Filled value)
 
-**Technology Level:** (Filled value)
+- **Technology Level:** (Filled value)
 
-**Species:** (Filled value)
+- **Species:** (Filled value)
 
-**Focus:** (Filled value)
+- **Focus:** (Filled value)
 
-**Description:** (Filled value; this must be at most six paragraphs, but it should include the basics of the world, including as much detail as possible from the user's input, if there was any input. In general, the Description of the World should include at the very least, the World's basic societal structure, main religions/pantheons, basic geography/topography, important locations, important NPCs, important factions or politics, interspecies relations [if any], descriptions of races/species [if any that are non-human], and anything else that you think would be important if you were writing a story based on this world.)
+\n **Description:** (Filled value; this must be at most six paragraphs, but it should include the basics of the world, including as much detail as possible from the user's input, if there was any input. In general, the Description of the World should include at the very least, the World's basic societal structure, main religions/pantheons, basic geography/topography, important locations, important NPCs, important factions or politics, interspecies relations [if any], descriptions of races/species [if any that are non-human], and anything else that you think would be important if you were writing a story based on this world.)
 ]] (You must output this tag. Output the exact Markdown formatting shown inside this tag, replacing the "(Filled value)" text with creative and/or logical values based off of the \"Provided World Information\" section above, remembering to ONLY change the information if it is \"Unknown\".).
 
 [[CHARACTER_PROFILE: 
 ### Character Biography
 
-**Name:** (Filled value)
+- **Name:** (Filled value)
 
-**Age:** (Filled value)
+- **Age:** (Filled value)
 
-**Gender:** (Filled value)
+- **Gender:** (Filled value)
 
-**Orientation:** (Filled value)
+- **Orientation:** (Filled value)
 
-**Background:** (Filled value)
+- **Background:** (Filled value)
 ]] (You must output this tag. Output the exact Markdown formatting shown inside this tag, replacing the "(Filled value)" text with creative and/or logical values based off of the \"Provided Character Information\" section above, remembering to ONLY change the information if it is \"Unknown\".).
 
 [[SKILL: Name | Description | Level]] (Output this tag for EACH skill listed in the "Provided Starting Skills" section. If the Name or Description is "Unknown", creatively invent a fitting one based on the character's background. Keep the Level exactly as provided, remembering that the higher the level is for a Skill, the better the Player is at that Skill, so please reserve the higher level Skills for things that the Player Character may be good at, depending on their background.)
@@ -190,6 +226,8 @@ Output the following tags to set up the starting gameplay state:
 [[ADD: Type | Name | Description | Amount]] (Add logical starting equipment. Repeat this tag for each item that the Player will start out with.)
 [[STATUS: {data['starting_location'] or 'Unknown'} | AUTO | AUTO]]
 [[MUSIC: FILENAME_PLACEHOLDER]] (You MUST output this tag to set the starting music. Replace FILENAME_PLACEHOLDER with exactly one of these options: {valid_sounds_str})
+[[SPELL: Name | Level | School | Description]] (You MUST output this tag only if Spellcasting exists in the World, and if the Player specifies that they wish to start with Spells known.)
+
 
 After outputting all tags, summarize the first starting turn, describe the surroundings vividly, and finish by asking "What do you do now?" and suggesting a few possible actions.
 """
@@ -201,8 +239,15 @@ After outputting all tags, summarize the first starting turn, describe the surro
         self.app.story_tab.set_controls_state(False, "GM is thinking...")
         user_text = "> " + user_text
         self.app.story_tab.print_text(user_text)
+        
+        creative_reminder = (
+            "\n[CREATIVE STYLE REMINDER]\n"
+            "When inventing a new NPC, location, faction, item, spell, tavern, or landmark, "
+            "avoid generic fantasy defaults and avoid reusing names from recent history unless it is the same entity.\n"
+        )
 
         # 1. Gather Context from Tabs
+        
         context_data = ""
         for name, widget in self.app.notebook_widgets.items():
             if name in ["Story", "Journal", "History"]:
@@ -261,6 +306,28 @@ After outputting all tags, summarize the first starting turn, describe the surro
             f"{calendar_block}"
         )
         context_data += status_context
+        context_data += creative_reminder
+        
+        if self._needs_creative_samples(user_text):
+            creative_bank = getattr(self.app, "creative_idea_bank", None)
+            if creative_bank is not None:
+                creative_fragment = creative_bank.build_prompt_fragment(
+                    CreativeSampleRequest(
+                        categories=(
+                            CreativeCategory.SETTLEMENT_NAMES,
+                            CreativeCategory.MALE_NAMES,
+                            CreativeCategory.FEMALE_NAMES,
+                            CreativeCategory.TAVERN_DRINK_NAMES,
+                            CreativeCategory.ALCHEMY_INGREDIENTS,
+                            CreativeCategory.MAGIC_TYPES,
+                        ),
+                        samples_per_category=5,
+                        banned_terms=("Kaelan", "Bram", "Elara", "Oakhaven"),
+                    )
+                )
+
+                if creative_fragment:
+                    context_data += f"\n[CREATIVE SAMPLES]\n{creative_fragment}\n"
 
         # 3. Build Prompt
         history_text = ""
@@ -271,6 +338,152 @@ After outputting all tags, summarize the first starting turn, describe the surro
         
         # 4. Thread the request
         threading.Thread(target=self.query_ai, args=(full_prompt, user_text), daemon=True).start()
+        
+    def _build_starting_spellcasting_prompt(self, spellcasting_data: dict[str, Any] | None) -> str:
+        """
+        Builds the startup prompt block for spellcasting.
+
+        Args:
+            spellcasting_data: Normalized spellcasting wizard data.
+
+        Returns:
+            Prompt text describing starting spellcasting setup.
+        """
+        if not isinstance(spellcasting_data, dict) or not spellcasting_data.get("enabled", False):
+            return (
+                "Spellcasting is disabled for this save unless the player explicitly changes it later. "
+                "Do not invent starting spells for the Player Character."
+            )
+
+        lines: list[str] = [
+            "Spellcasting is enabled for this save.",
+            "The Spellcasting panel has already been initialized directly from the player's wizard choices.",
+            "Do not consume, restore, prepare, or unprepare spell slots automatically.",
+        ]
+
+        magic_rules = str(spellcasting_data.get("magic_rules", "") or "").strip()
+        if magic_rules:
+            lines.append(f"World spellcasting rules: {magic_rules}")
+
+        prepared_limit = self._safe_nonnegative_int(spellcasting_data.get("prepared_limit"), default=0)
+        prepared_limit_text = "Unlimited" if prepared_limit == 0 else str(prepared_limit)
+        lines.append(f"Prepared spell limit: {prepared_limit_text}.")
+
+        slot_levels = spellcasting_data.get("slot_levels", {})
+        if isinstance(slot_levels, dict):
+            active_slot_lines: list[str] = []
+
+            for level in range(1, 10):
+                slot_data = slot_levels.get(str(level), {})
+                if not isinstance(slot_data, dict):
+                    continue
+
+                max_slots = self._safe_nonnegative_int(slot_data.get("max"), default=0)
+                if max_slots > 0:
+                    active_slot_lines.append(f"- Level {level}: {max_slots} slots")
+
+            if active_slot_lines:
+                lines.append("Starting spell slots:")
+                lines.extend(active_slot_lines)
+
+        spells = spellcasting_data.get("spells", {})
+        if not isinstance(spells, dict) or not spells:
+            lines.append("Known starting spells: none.")
+            return "\n".join(lines)
+
+        lines.append("Known starting spells:")
+
+        for spell_name, spell in sorted(spells.items(), key=lambda item: str(item[0]).lower()):
+            if not isinstance(spell, dict):
+                continue
+
+            level = self._safe_nonnegative_int(spell.get("level"), default=0)
+            school = str(spell.get("school", "") or "").strip() or "Unknown School"
+            description = str(spell.get("description", "") or "").strip() or "Unknown Spell Description"
+            prepared = "Prepared" if spell.get("prepared", False) else "Not prepared"
+
+            lines.append(
+                f"- Name: {spell_name} | Level: {level} | School: {school} | "
+                f"Description: {description} | {prepared}"
+            )
+
+        lines.append(
+            "If any starting spell has an Unknown description or Unknown school, output "
+            "[[SPELL: Name | Level | School | Description]] for that spell to refine it. "
+            "Otherwise, do not re-output existing starting spells."
+        )
+
+        return "\n".join(lines)
+
+
+    def _safe_nonnegative_int(self, value: Any, *, default: int = 0) -> int:
+        """
+        Safely converts a value to a nonnegative integer.
+
+        Args:
+            value: Raw value to convert.
+            default: Fallback value.
+
+        Returns:
+            Nonnegative integer.
+        """
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            logging.exception("Invalid nonnegative integer value: %r", value)
+            return default
+        
+    def _normalize_starting_spellcasting_data(self, spellcasting_data: Any) -> dict[str, Any]:
+        """
+        Normalizes wizard spellcasting data before writing it to spellcasting.json.
+
+        Args:
+            spellcasting_data: Raw spellcasting data from the creation wizard.
+
+        Returns:
+            Normalized spellcasting dictionary.
+        """
+        try:
+            from qt_ui.dialogs import CreationTemplateStore
+
+            return CreationTemplateStore.normalize_spellcasting_data(spellcasting_data)
+        except Exception as error:
+            logging.exception("Failed to normalize starting spellcasting data: %s", error)
+
+        return {
+            "enabled": False,
+            "magic_rules": "",
+            "prepared_limit": 0,
+            "slot_levels": {
+                str(level): {"max": 0, "used": 0}
+                for level in range(1, 10)
+            },
+            "spells": {},
+        }
+
+
+    def _save_starting_spellcasting(self, spellcasting_data: dict[str, Any]) -> None:
+        """
+        Writes starting spellcasting data directly to the Spellcasting panel.
+
+        Args:
+            spellcasting_data: Normalized spellcasting data.
+        """
+        spellcasting_panel = self.app.notebook_widgets.get("Spellcasting")
+
+        if spellcasting_panel is None:
+            logging.warning("Cannot save starting spellcasting data because the Spellcasting panel is missing.")
+            return
+
+        try:
+            if hasattr(spellcasting_panel, "save_data"):
+                spellcasting_panel.save_data(spellcasting_data)
+                return
+
+            logging.warning("Spellcasting panel does not expose save_data().")
+
+        except Exception as error:
+            logging.exception("Failed to save starting spellcasting data: %s", error)
 
     def _get_default_gregorian_calendar(self) -> dict[str, Any]:
         """Returns the fallback Gregorian calendar."""
@@ -376,6 +589,31 @@ After outputting all tags, summarize the first starting turn, describe the surro
         raw_settings = calendar_data.get("settings", {})
         return self._normalize_calendar_settings(raw_settings)
 
+    def _needs_creative_samples(self, user_text: str) -> bool:
+        """Returns True when the player action likely asks for newly invented world content."""
+        lowered_text = (user_text or "").lower()
+
+        trigger_words = (
+            "new town",
+            "new city",
+            "new npc",
+            "random npc",
+            "tavern",
+            "shop",
+            "merchant",
+            "spell",
+            "alchemy",
+            "ingredient",
+            "religion",
+            "temple",
+            "faction",
+            "guild",
+            "region",
+            "country",
+        )
+
+        return any(word in lowered_text for word in trigger_words)
+    
     def _generate_calendar_settings(self, data: dict[str, Any]) -> dict[str, Any] | None:
         """Uses Gemini to generate a calendar JSON object during new-game creation."""
 
@@ -415,7 +653,7 @@ After outputting all tags, summarize the first starting turn, describe the surro
             response = self.client.models.generate_content(
                 model=MODEL,
                 config=types.GenerateContentConfig(
-                    temperature=0.9,
+                    temperature=1.0,
                     response_mime_type="application/json",
                 ),
                 contents=prompt,
@@ -659,7 +897,7 @@ After outputting all tags, summarize the first starting turn, describe the surro
                 model=MODEL,
                 config=types.GenerateContentConfig(
                     system_instruction=current_rules,
-                    temperature = 1.0 if not is_startup else 1.1,
+                    temperature = 1.0,
                     thinking_config = types.ThinkingConfig(thinking_budget = -1),
                     tools=[],
                     safety_settings=[types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_NONE)]
@@ -814,19 +1052,20 @@ After outputting all tags, summarize the first starting turn, describe the surro
             if "History" in self.app.notebook_widgets:
                 hist_panel = self.app.notebook_widgets["History"]
                 current_hist = hist_panel.get_text()
-
+                
+                logging.info("History is in self.app.notebook_widgets! About to make new exchange!")
+                
+                # Get rid of the "System: Initialization..." message at game creation.
                 if is_startup:
-                    new_exchange = (
-                        f"**System: Start of Game**\n\n"
-                        f"**GM:** {history_body_to_save.strip()}\n\n"
-                        f"// NEW EXCHANGE\n\n"
-                    )
-                else:
-                    new_exchange = (
-                        f"{user_text}\n\n"
-                        f"{history_body_to_save.strip()}\n\n"
-                        f"// NEW EXCHANGE\n\n"
-                    )
+                    user_text = ""
+                    
+                new_exchange = (
+                    f"{user_text}\n\n"
+                    f"{history_body_to_save.strip()}\n\n"
+                    f"// NEW EXCHANGE\n\n"
+                )
+                
+                logging.info(f"NEW EXCHANGE: {new_exchange}")
 
                 self.app.after(0, lambda ch=current_hist, ne=new_exchange: hist_panel.set_text(ch + ne))
                 
@@ -958,6 +1197,34 @@ class TagParser:
             s_desc = match.group(2).strip() if match.group(2).strip() else "No description provided."
             s_lvl = int(match.group(3))
             self.app.notebook_widgets["Skills"].force_learn_skill(s_name, s_desc, s_lvl)
+            
+        for match in re.finditer(r"\[\[SPELL:\s*(.*?)\]\]", ai_text, re.DOTALL):
+            raw_parts = [part.strip() for part in match.group(1).split("|")]
+
+            if len(raw_parts) < 4:
+                logging.warning(
+                    "Invalid SPELL tag. Expected 4 fields, got %s: %s",
+                    len(raw_parts),
+                    match.group(0),
+                )
+                continue
+
+            spell_name, spell_level, school, description = raw_parts[:4]
+
+            spellcasting_panel = self.app.notebook_widgets.get("Spellcasting")
+            if spellcasting_panel is None:
+                logging.warning("SPELL tag ignored because the Spellcasting panel is missing.")
+                continue
+
+            try:
+                spellcasting_panel.force_learn_spell(
+                    spell_name=spell_name,
+                    spell_level=spell_level,
+                    school=school,
+                    description=description,
+                )
+            except Exception as error:
+                logging.exception("Failed to process SPELL tag %s: %s", match.group(0), error)
             
         music_match = re.search(r"\[\[MUSIC:\s*(.*?)\]\]", ai_text, re.DOTALL)
         if music_match:

@@ -1,7 +1,8 @@
 # qt_ui/main_window.py
 from __future__ import annotations
-from PySide6.QtCore import Qt, QSettings, QByteArray
+from PySide6.QtCore import Qt, QSettings, QByteArray, QTimer
 from PySide6.QtWidgets import (
+    QApplication,
     QMainWindow,
     QDockWidget,
     QWidget,
@@ -22,6 +23,7 @@ from .panels import (
     QuestsPanel,
     RecipesPanel,
     SkillsPanel,
+    SpellcastingPanel,
     StoryPanel,
     HistoryMarkdownPanel
 )
@@ -45,6 +47,21 @@ class MainWindow(QMainWindow):
     - Use dock widgets for "tabs" so the user can drag/reorder and float panels.
     - Keep the central widget as Story for now (we can change later).
     """
+    
+    DEFAULT_FLOATING_TAB_ORDER: tuple[str, ...] = (
+        "World",
+        "Inventory",
+        "Calendar",
+        "Skills",
+        "Spellcasting",
+        "Character",
+        "Sales Ledger",
+        "Recipes",
+        "Processing",
+        "Journal",
+        "Quests",
+        "History",
+    )
 
     def __init__(self, app_context=None) -> None:
         super().__init__()
@@ -70,23 +87,14 @@ class MainWindow(QMainWindow):
         self.history_panel = HistoryMarkdownPanel()
         self.inventory_panel = InventoryPanel(app_context=self.app)
         self.skills_panel = SkillsPanel()
+        self.spellcasting_panel = SpellcastingPanel(app_context=self.app)
         self.processing_panel = ProcessingPanel(app_context=self.app)
         self.recipes_panel = RecipesPanel()
         self.character_panel = MarkdownPanel("Character")
         self.calendar_panel = CalendarPanel(app_context=self.app)
         self.quests_panel = QuestsPanel(app_context=self.app)
         self.sales_ledger_panel = MarkdownPanel("Sales Ledger")
-        self._add_dock("Quests", self.quests_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
-        self._add_dock("World", self.world_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
-        self._add_dock("Journal", self.journal_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
-        self._add_dock("Inventory", self.inventory_panel, area=Qt.DockWidgetArea.RightDockWidgetArea)
-        self._add_dock("Skills", self.skills_panel, area=Qt.DockWidgetArea.RightDockWidgetArea)
-        self._add_dock("Processing", self.processing_panel, area=Qt.DockWidgetArea.BottomDockWidgetArea)
-        self._add_dock("Recipes", self.recipes_panel, area=Qt.DockWidgetArea.BottomDockWidgetArea)
-        self._add_dock("Character", self.character_panel, area=Qt.DockWidgetArea.LeftDockWidgetArea)
-        self._add_dock("Calendar", self.calendar_panel, area=Qt.DockWidgetArea.RightDockWidgetArea)
-        self._add_dock("History", self.history_panel, Qt.DockWidgetArea.LeftDockWidgetArea)
-        self._add_dock("Sales Ledger", self.sales_ledger_panel, area=Qt.DockWidgetArea.BottomDockWidgetArea)
+        self._register_panel_docks()
 
         # Allow docks to tab together when dragged into same area
         self.setDockOptions(
@@ -190,17 +198,205 @@ class MainWindow(QMainWindow):
         action_help.triggered.connect(self.open_help_menu)
         # --- 2. View Menu (NEW) ---
         view_menu = menu_bar.addMenu("View")
-        
+        action_reset_layout = view_menu.addAction("Reset Layout")
+        action_reset_layout.triggered.connect(self.reset_layout_to_default)
+        view_menu.addSeparator()
         # Qt's QDockWidget comes with a built-in toggle action that acts as a checkbox!
         for title, dock in self._docks.items():
             view_menu.addAction(dock.toggleViewAction())
 
-    def _add_dock(self, title: str, widget: QWidget, area: Qt.DockWidgetArea) -> None:
+    def apply_initial_new_game_layout(self) -> None:
+        """
+        Applies and saves the default floating tab layout for a newly-created adventure.
+
+        This is deferred by one Qt event-loop tick so dock geometry and tabification
+        behave the same way they do when the user clicks View -> Reset Layout.
+        """
+        def apply_and_save() -> None:
+            try:
+                self._apply_default_floating_tab_layout()
+                self._save_ui_state()
+            except Exception as error:
+                logging.exception("Failed to apply initial new-game UI layout: %s", error)
+
+        QTimer.singleShot(0, apply_and_save)
+    
+    def _center_dialog_on_screen(
+    self,
+    dialog: QDialog,
+    *,
+    preferred_width: int,
+    preferred_height: int,
+) -> None:
+        """
+        Resizes and centers a dialog on the screen used by the main window.
+
+        The requested size is clamped to the available screen area so the dialog
+        does not open partially off-screen on smaller displays.
+        """
+        if dialog is None:
+            logging.warning("Tried to center a missing dialog.")
+            return
+
+        screen = QApplication.screenAt(self.frameGeometry().center())
+        if screen is None:
+            screen = QApplication.primaryScreen()
+
+        if screen is None:
+            logging.warning("Could not find an active screen for dialog centering.")
+            return
+
+        available_geometry = screen.availableGeometry()
+
+        safe_width = min(
+            preferred_width,
+            max(600, available_geometry.width() - 120),
+        )
+        safe_height = min(
+            preferred_height,
+            max(500, available_geometry.height() - 120),
+        )
+
+        dialog.resize(safe_width, safe_height)
+
+        dialog_geometry = dialog.frameGeometry()
+        dialog_geometry.moveCenter(available_geometry.center())
+        dialog.move(dialog_geometry.topLeft())
+
+
+    def _exec_centered_creation_dialog(
+        self,
+        dialog: QDialog,
+        *,
+        preferred_width: int,
+        preferred_height: int,
+    ) -> int:
+        """
+        Executes a creation-flow dialog as an application-modal centered window.
+
+        The dialog is intentionally not parented to the main window, because the
+        main window is hidden while character creation is active.
+        """
+        if dialog is None:
+            logging.warning("Cannot execute a missing creation dialog.")
+            return int(QDialog.DialogCode.Rejected)
+
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dialog.setStyleSheet(self.styleSheet())
+
+        # Center after the dialog enters its modal event loop so frame geometry is valid.
+        QTimer.singleShot(
+            0,
+            lambda: self._center_dialog_on_screen(
+                dialog,
+                preferred_width=preferred_width,
+                preferred_height=preferred_height,
+            ),
+        )
+
+        return int(dialog.exec())
+    
+    def reset_layout_to_default(self) -> None:
+        """
+        Resets the current dock layout to the default floating tab window layout.
+        """
+        try:
+            self._apply_default_floating_tab_layout()
+            self._save_ui_state()
+        except Exception as error:
+            logging.exception("Failed to reset UI layout: %s", error)
+    
+    def _apply_default_floating_tab_layout(self) -> None:
+        """
+        Groups all secondary panels into one floating tabbed dock window.
+
+        The Story panel remains the central widget. This is intended as the default
+        first-launch layout; saved per-adventure layouts can still override it through
+        restoreState().
+        """
+        try:
+            docks: list[QDockWidget] = []
+
+            for dock_title in self.DEFAULT_FLOATING_TAB_ORDER:
+                dock = self._docks.get(dock_title)
+
+                if dock is None:
+                    logging.warning("Default layout skipped missing dock: %s", dock_title)
+                    continue
+
+                dock.show()
+                dock.setFloating(False)
+
+                # Put every dock in one area first so tabification is stable.
+                self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+                docks.append(dock)
+
+            if not docks:
+                logging.warning("Default floating layout could not be applied because no docks were found.")
+                return
+
+            anchor_dock = docks[0]
+
+            for dock in docks[1:]:
+                self.tabifyDockWidget(anchor_dock, dock)
+
+            # Make Inventory the visible tab by default.
+            anchor_dock.raise_()
+
+            # Float the whole tabified dock group.
+            anchor_dock.setFloating(True)
+
+            screen = self.screen()
+            if screen is not None:
+                available_geometry = screen.availableGeometry()
+
+                target_width = min(
+                    max(900, self.width()),
+                    max(500, available_geometry.width() - 80),
+                )
+                target_height = min(
+                    max(650, self.height()),
+                    max(450, available_geometry.height() - 120),
+                )
+
+                main_geometry = self.frameGeometry()
+
+                target_x = min(
+                    main_geometry.x() + 80,
+                    available_geometry.right() - target_width,
+                )
+                target_y = min(
+                    main_geometry.y() + 80,
+                    available_geometry.bottom() - target_height,
+                )
+
+                target_x = max(available_geometry.x(), target_x)
+                target_y = max(available_geometry.y(), target_y)
+
+                anchor_dock.resize(target_width, target_height)
+                anchor_dock.move(target_x, target_y)
+            else:
+                anchor_dock.resize(1000, 700)
+
+        except Exception as error:
+            logging.exception("Failed to apply default floating tab layout: %s", error)
+    
+    def _add_dock(
+        self,
+        title: str,
+        widget: QWidget,
+        area: Qt.DockWidgetArea = Qt.DockWidgetArea.RightDockWidgetArea,
+    ) -> QDockWidget:
+        """
+        Creates a dock widget, registers it with the main window, and stores it.
+
+        The area argument is only the initial staging area. Final placement is handled
+        by layout methods or by restoreState().
+        """
         dock = QDockWidget(title, self)
         dock.setWidget(widget)
         dock.setObjectName(f"Dock_{title.replace(' ', '_')}")
 
-        # Float / move / close supported.
         dock.setFeatures(
             QDockWidget.DockWidgetFeature.DockWidgetMovable
             | QDockWidget.DockWidgetFeature.DockWidgetFloatable
@@ -209,6 +405,40 @@ class MainWindow(QMainWindow):
 
         self.addDockWidget(area, dock)
         self._docks[title] = dock
+
+        return dock
+        
+    def _register_panel_docks(self) -> None:
+        """
+        Creates and registers all dock widgets with Qt.
+
+        Docks are initially added to one neutral staging area. The real layout is
+        applied later by _apply_default_floating_tab_layout() or restored from
+        ui_layout.ini when loading an existing save.
+        """
+        dock_widgets: dict[str, QWidget] = {
+            "World": self.world_panel,
+            "Inventory": self.inventory_panel,
+            "Calendar": self.calendar_panel,
+            "Skills": self.skills_panel,
+            "Spellcasting": self.spellcasting_panel,
+            "Character": self.character_panel,
+            "Sales Ledger": self.sales_ledger_panel,
+            "Recipes": self.recipes_panel,
+            "Processing": self.processing_panel,
+            "Journal": self.journal_panel,
+            "Quests": self.quests_panel,
+            "History": self.history_panel,
+        }
+
+        for dock_title in self.DEFAULT_FLOATING_TAB_ORDER:
+            widget = dock_widgets.get(dock_title)
+
+            if widget is None:
+                logging.warning("Skipped missing dock widget during registration: %s", dock_title)
+                continue
+
+            self._add_dock(dock_title, widget)
 
     def get_dock(self, title: str) -> QDockWidget | None:
         return self._docks.get(title)
@@ -270,19 +500,43 @@ class MainWindow(QMainWindow):
         # New game flow: do not create the real save folder yet.
         self.app.conversation_history = []
 
-        source_dialog = NewGameSourceDialog(self)
-        if source_dialog.exec() != QDialog.DialogCode.Accepted:
-            self.story_panel.print_text("System: New game creation cancelled.", sender="System")
-            return
+        game_window_was_visible = self.isVisible()
 
-        template_data = CreationTemplateStore.load_template(source_dialog.selected_template_path)
-        wizard = CreationWizard(self, template_data=template_data)
+        try:
+            if game_window_was_visible:
+                self.hide()
 
-        if wizard.exec() != QDialog.DialogCode.Accepted:
-            self.story_panel.print_text("System: New game creation cancelled.", sender="System")
-            return
+            source_dialog = NewGameSourceDialog(None)
+            source_result = self._exec_centered_creation_dialog(
+                source_dialog,
+                preferred_width=700,
+                preferred_height=500,
+            )
 
-        wizard_data = wizard.get_wizard_data()
+            if source_result != int(QDialog.DialogCode.Accepted):
+                self.story_panel.print_text("System: New game creation cancelled.", sender="System")
+                return
+
+            template_data = CreationTemplateStore.load_template(source_dialog.selected_template_path)
+
+            wizard = CreationWizard(None, template_data=template_data)
+            wizard_result = self._exec_centered_creation_dialog(
+                wizard,
+                preferred_width=1120,
+                preferred_height=820,
+            )
+
+            if wizard_result != int(QDialog.DialogCode.Accepted):
+                self.story_panel.print_text("System: New game creation cancelled.", sender="System")
+                return
+
+            wizard_data = wizard.get_wizard_data()
+
+        finally:
+            if game_window_was_visible:
+                self.show()
+                self.raise_()
+                self.activateWindow()
 
         try:
             staging_path = Path(
@@ -293,6 +547,8 @@ class MainWindow(QMainWindow):
                 final_save_path=save_path_obj,
                 staging_save_path=staging_path,
             )
+            
+            self.apply_initial_new_game_layout()
 
         except Exception as error:
             logging.exception("Failed to prepare pending adventure: %s", error)

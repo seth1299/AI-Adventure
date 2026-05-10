@@ -653,6 +653,128 @@ class CreationTemplateStore:
         except Exception as error:
             logging.exception("Failed to save creation settings: %s", error)
             return None
+        
+    @classmethod
+    def normalize_spellcasting_data(cls, spellcasting_data: Any) -> dict[str, Any]:
+        """
+        Normalizes spellcasting creation data to match SpellcastingPanel's JSON schema.
+
+        Args:
+            spellcasting_data: Raw spellcasting data from the wizard, a template, or
+                            an older list-based spell template.
+
+        Returns:
+            Normalized spellcasting dictionary.
+        """
+        default_slot_levels = {
+            str(level): {"max": 0, "used": 0}
+            for level in range(1, 10)
+        }
+
+        default_data: dict[str, Any] = {
+            "enabled": False,
+            "magic_rules": "",
+            "prepared_limit": 0,
+            "slot_levels": default_slot_levels,
+            "spells": {},
+        }
+
+        if isinstance(spellcasting_data, list):
+            source: dict[str, Any] = {
+                "enabled": bool(spellcasting_data),
+                "magic_rules": "",
+                "prepared_limit": 0,
+                "slot_levels": {},
+                "spells": spellcasting_data,
+            }
+        elif isinstance(spellcasting_data, dict):
+            source = spellcasting_data
+        else:
+            return default_data
+
+        normalized: dict[str, Any] = {
+            "enabled": bool(source.get("enabled", False)),
+            "magic_rules": str(source.get("magic_rules", "") or "").strip(),
+            "prepared_limit": cls._safe_nonnegative_int(source.get("prepared_limit"), default=0),
+            "slot_levels": {},
+            "spells": {},
+        }
+
+        raw_slot_levels = source.get("slot_levels", {})
+        if not isinstance(raw_slot_levels, dict):
+            logging.warning("Spellcasting template slot_levels was not a dict.")
+            raw_slot_levels = {}
+
+        for level in range(1, 10):
+            raw_level_data = raw_slot_levels.get(str(level), {})
+            if not isinstance(raw_level_data, dict):
+                raw_level_data = {}
+
+            max_slots = cls._safe_nonnegative_int(raw_level_data.get("max"), default=0)
+            used_slots = cls._safe_nonnegative_int(raw_level_data.get("used"), default=0)
+
+            normalized["slot_levels"][str(level)] = {
+                "max": max_slots,
+                "used": min(used_slots, max_slots),
+            }
+
+        raw_spells = source.get("spells", {})
+
+        if isinstance(raw_spells, dict):
+            spell_items = raw_spells.items()
+        elif isinstance(raw_spells, list):
+            spell_items = [
+                (spell.get("name", ""), spell)
+                for spell in raw_spells
+                if isinstance(spell, dict)
+            ]
+        else:
+            logging.warning("Spellcasting template spells was neither dict nor list.")
+            spell_items = []
+
+        for raw_name, raw_spell in spell_items:
+            if not isinstance(raw_spell, dict):
+                continue
+
+            spell_name = str(raw_name or raw_spell.get("name", "") or "").strip()
+            if not spell_name:
+                continue
+
+            level = cls._safe_nonnegative_int(raw_spell.get("level"), default=0)
+            level = min(level, 9)
+
+            normalized["spells"][spell_name] = {
+                "level": level,
+                "school": str(raw_spell.get("school", "") or "").strip(),
+                "description": str(
+                    raw_spell.get("description", "Unknown Spell Description") or "Unknown Spell Description"
+                ).strip(),
+                "prepared": bool(raw_spell.get("prepared", False)),
+            }
+
+        if normalized["spells"] and not normalized["enabled"]:
+            normalized["enabled"] = True
+
+        return normalized
+
+
+    @staticmethod
+    def _safe_nonnegative_int(value: Any, *, default: int = 0) -> int:
+        """
+        Safely converts a value to a nonnegative integer.
+
+        Args:
+            value: Raw value to convert.
+            default: Fallback value if conversion fails.
+
+        Returns:
+            Nonnegative integer.
+        """
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            logging.exception("Invalid nonnegative integer value: %r", value)
+            return default
 
     @classmethod
     def load_template(cls, template_path: str | Path | None) -> dict[str, Any] | None:
@@ -738,6 +860,7 @@ class CreationTemplateStore:
         currencies = source.get("currencies")
         stats = source.get("stats")
         skills = source.get("skills")
+        spellcasting = source.get("spellcasting")
         
         calendar = source.get("calendar") if isinstance(source.get("calendar"), dict) else {}
 
@@ -770,6 +893,7 @@ class CreationTemplateStore:
                     "background": str(character.get("background", "") or ""),
                 },
                 "skills": skills if isinstance(skills, list) else [],
+                "spellcasting": cls.normalize_spellcasting_data(spellcasting),
                 "starting_location": str(source.get("starting_location", "") or ""),
                 "final_comments": str(source.get("final_comments", "") or ""),
             }
@@ -1368,11 +1492,393 @@ class SkillsPage(QWizardPage):
         
         scroll.setWidget(content)
         main_layout.addWidget(scroll)
+        
+class SpellRow(QFrame):
+    """A single editable starting-spell row for the new-game wizard."""
+
+    MAX_SPELL_LEVEL = 9
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        name: str = "",
+        level: int = 0,
+        school: str = "",
+        description: str = "",
+        prepared: bool = False,
+    ) -> None:
+        super().__init__(parent)
+
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setFrameShadow(QFrame.Shadow.Raised)
+
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(6, 6, 6, 6)
+
+        top_row = QHBoxLayout()
+
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("Spell Name")
+        self.name_input.setText(str(name or "").strip())
+
+        self.level_input = QSpinBox()
+        self.level_input.setRange(0, self.MAX_SPELL_LEVEL)
+        self.level_input.setValue(self._safe_spell_level(level))
+        self.level_input.setToolTip("Use 0 for cantrips or minor at-will magic.")
+
+        self.school_input = QLineEdit()
+        self.school_input.setPlaceholderText("School / tradition / source")
+        self.school_input.setText(str(school or "").strip())
+
+        self.prepared_checkbox = QCheckBox("Prepared")
+        self.prepared_checkbox.setChecked(bool(prepared))
+
+        self.btn_remove = QPushButton("X")
+        self.btn_remove.setFixedWidth(30)
+
+        top_row.addWidget(QLabel("Name:"))
+        top_row.addWidget(self.name_input, stretch=2)
+        top_row.addWidget(QLabel("Level:"))
+        top_row.addWidget(self.level_input)
+        top_row.addWidget(QLabel("School:"))
+        top_row.addWidget(self.school_input, stretch=2)
+        top_row.addWidget(self.prepared_checkbox)
+        top_row.addWidget(self.btn_remove)
+
+        root_layout.addLayout(top_row)
+
+        root_layout.addWidget(QLabel("Description:"))
+
+        self.description_input = QTextEdit()
+        self.description_input.setTabChangesFocus(True)
+        self.description_input.setFixedHeight(70)
+        self.description_input.setPlaceholderText(
+            "Optional. Leave blank for the AI to invent or refine the spell description."
+        )
+        self.description_input.setPlainText(str(description or "").strip())
+
+        root_layout.addWidget(self.description_input)
+
+    def get_data(self) -> dict[str, Any]:
+        """
+        Returns this spell row as normalized wizard data.
+
+        Returns:
+            Dictionary containing name, level, school, description, and prepared state.
+        """
+        return {
+            "name": self.name_input.text().strip(),
+            "level": self.level_input.value(),
+            "school": self.school_input.text().strip(),
+            "description": self.description_input.toPlainText().strip(),
+            "prepared": self.prepared_checkbox.isChecked(),
+        }
+
+    def _safe_spell_level(self, value: Any) -> int:
+        """
+        Safely coerces a spell level into the valid 0-9 range.
+
+        Args:
+            value: Raw spell level from a template or UI caller.
+
+        Returns:
+            Integer spell level from 0 to MAX_SPELL_LEVEL.
+        """
+        try:
+            return max(0, min(self.MAX_SPELL_LEVEL, int(value)))
+        except (TypeError, ValueError):
+            logging.exception("Invalid spell level in SpellRow: %r", value)
+            return 0
+        
+class SpellcastingPage(QWizardPage):
+    """Wizard page for defining starting magic rules and starting spells."""
+
+    MAX_SPELL_LEVEL = 9
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setTitle("Step 8: Spellcasting")
+        self.setSubTitle(
+            "Define whether magic exists, how it works, and any spells the player starts with."
+        )
+
+        self.rows: list[SpellRow] = []
+        self.slot_inputs: dict[int, QSpinBox] = {}
+
+        main_layout = QVBoxLayout(self)
+
+        self.enabled_checkbox = QCheckBox("This world / character uses spellcasting")
+        self.enabled_checkbox.toggled.connect(self._update_enabled_state)
+        main_layout.addWidget(self.enabled_checkbox)
+
+        main_layout.addWidget(QLabel("World Spellcasting Rules:"))
+
+        self.magic_rules_input = QTextEdit()
+        self.magic_rules_input.setTabChangesFocus(True)
+        self.magic_rules_input.setPlaceholderText(
+            "Example: Magic uses Vancian spell slots. Arcane casters prepare spells from books. "
+            "Divine casters receive spells through prayer. Spell slots are tracked manually by the player."
+        )
+        main_layout.addWidget(self.magic_rules_input)
+
+        prep_row = QHBoxLayout()
+        prep_row.addWidget(QLabel("Prepared spell limit:"))
+
+        self.prepared_limit_input = QSpinBox()
+        self.prepared_limit_input.setRange(0, 500)
+        self.prepared_limit_input.setToolTip("0 means unlimited prepared spells.")
+        prep_row.addWidget(self.prepared_limit_input)
+
+        prep_row.addStretch()
+        main_layout.addLayout(prep_row)
+
+        slots_group = QGroupBox("Starting Spell Slots")
+        slots_layout = QVBoxLayout(slots_group)
+
+        for level in range(1, self.MAX_SPELL_LEVEL + 1):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(f"Level {level}:"))
+
+            slot_input = QSpinBox()
+            slot_input.setRange(0, 20)
+            slot_input.setValue(0)
+            slot_input.setToolTip("Number of available spell slots at this level.")
+
+            self.slot_inputs[level] = slot_input
+            row.addWidget(slot_input)
+            row.addStretch()
+
+            slots_layout.addLayout(row)
+
+        main_layout.addWidget(slots_group)
+
+        button_row = QHBoxLayout()
+
+        self.btn_add_spell = QPushButton("+ Add Starting Spell")
+        self.btn_add_spell.clicked.connect(lambda: self.add_spell_row())
+
+        self.btn_clear_spells = QPushButton("Clear Starting Spells")
+        self.btn_clear_spells.clicked.connect(self.clear_spell_rows)
+
+        button_row.addWidget(self.btn_add_spell)
+        button_row.addWidget(self.btn_clear_spells)
+        button_row.addStretch()
+
+        main_layout.addLayout(button_row)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+
+        content = QWidget()
+        self.rows_layout = QVBoxLayout(content)
+        self.rows_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        scroll.setWidget(content)
+        main_layout.addWidget(scroll, stretch=1)
+
+        self._update_enabled_state()
+
+    def add_spell_row(
+        self,
+        *,
+        name: str = "",
+        level: int = 0,
+        school: str = "",
+        description: str = "",
+        prepared: bool = False,
+    ) -> None:
+        """
+        Adds one starting-spell row.
+
+        Args:
+            name: Starting spell name.
+            level: Spell level from 0 to 9.
+            school: Optional school, tradition, domain, or source.
+            description: Optional spell description.
+            prepared: Whether this spell starts prepared.
+        """
+        row = SpellRow(
+            name=name,
+            level=level,
+            school=school,
+            description=description,
+            prepared=prepared,
+        )
+
+        self.rows_layout.addWidget(row)
+        self.rows.append(row)
+
+        row.btn_remove.clicked.connect(lambda: self.remove_spell_row(row))
+        self.enabled_checkbox.setChecked(True)
+
+    def remove_spell_row(self, row: SpellRow | None) -> None:
+        """Safely removes one starting-spell row."""
+        if row is None:
+            logging.warning("SpellcastingPage.remove_spell_row called with None.")
+            return
+
+        try:
+            self.rows_layout.removeWidget(row)
+
+            if row in self.rows:
+                self.rows.remove(row)
+
+            row.hide()
+            row.setParent(None)
+            row.deleteLater()
+
+        except Exception as error:
+            logging.exception("Failed to remove spell row: %s", error)
+
+    def clear_spell_rows(self) -> None:
+        """Removes every starting-spell row."""
+        for row in list(self.rows):
+            self.remove_spell_row(row)
+
+        self.rows.clear()
+
+    def get_data(self) -> dict[str, Any]:
+        """
+        Returns spellcasting wizard data using the same schema as SpellcastingPanel.
+
+        Returns:
+            Dictionary suitable for spellcasting.json.
+        """
+        spells: dict[str, dict[str, Any]] = {}
+
+        for row in self.rows:
+            spell_data = row.get_data()
+            spell_name = spell_data["name"].strip()
+
+            if not spell_name:
+                continue
+
+            spells[spell_name] = {
+                "level": int(spell_data["level"]),
+                "school": spell_data["school"],
+                "description": spell_data["description"] or "Unknown Spell Description",
+                "prepared": bool(spell_data["prepared"]),
+            }
+
+        slot_levels = {
+            str(level): {
+                "max": spin_box.value(),
+                "used": 0,
+            }
+            for level, spin_box in self.slot_inputs.items()
+        }
+
+        return {
+            "enabled": self.enabled_checkbox.isChecked(),
+            "magic_rules": self.magic_rules_input.toPlainText().strip(),
+            "prepared_limit": self.prepared_limit_input.value(),
+            "slot_levels": slot_levels,
+            "spells": spells,
+        }
+
+    def apply_data(self, spellcasting_data: dict[str, Any] | list[Any] | None) -> None:
+        """
+        Pre-fills the page from template spellcasting data.
+
+        Args:
+            spellcasting_data: Spellcasting data from a creation template.
+                               Legacy list-based spell data is accepted.
+        """
+        self.clear_spell_rows()
+
+        if isinstance(spellcasting_data, list):
+            normalized_data = {
+                "enabled": bool(spellcasting_data),
+                "magic_rules": "",
+                "prepared_limit": 0,
+                "slot_levels": {},
+                "spells": spellcasting_data,
+            }
+        elif isinstance(spellcasting_data, dict):
+            normalized_data = spellcasting_data
+        else:
+            normalized_data = {}
+
+        self.enabled_checkbox.setChecked(bool(normalized_data.get("enabled", False)))
+        self.magic_rules_input.setPlainText(str(normalized_data.get("magic_rules", "") or ""))
+
+        try:
+            prepared_limit = max(0, int(normalized_data.get("prepared_limit", 0)))
+        except (TypeError, ValueError):
+            logging.exception("Invalid prepared_limit in spellcasting template: %r", normalized_data)
+            prepared_limit = 0
+
+        self.prepared_limit_input.setValue(prepared_limit)
+
+        raw_slot_levels = normalized_data.get("slot_levels", {})
+        if not isinstance(raw_slot_levels, dict):
+            raw_slot_levels = {}
+
+        for level, spin_box in self.slot_inputs.items():
+            raw_level_data = raw_slot_levels.get(str(level), {})
+            if not isinstance(raw_level_data, dict):
+                raw_level_data = {}
+
+            try:
+                max_slots = max(0, int(raw_level_data.get("max", 0)))
+            except (TypeError, ValueError):
+                logging.exception("Invalid spell slot count for level %s: %r", level, raw_level_data)
+                max_slots = 0
+
+            spin_box.setValue(max_slots)
+
+        raw_spells = normalized_data.get("spells", {})
+
+        if isinstance(raw_spells, dict):
+            spell_iterable = [
+                {"name": name, **spell}
+                for name, spell in raw_spells.items()
+                if isinstance(spell, dict)
+            ]
+        elif isinstance(raw_spells, list):
+            spell_iterable = [spell for spell in raw_spells if isinstance(spell, dict)]
+        else:
+            spell_iterable = []
+
+        for spell in spell_iterable:
+            self.add_spell_row(
+                name=str(spell.get("name", "") or ""),
+                level=self._safe_int(spell.get("level"), default=0),
+                school=str(spell.get("school", "") or ""),
+                description=str(spell.get("description", "") or ""),
+                prepared=bool(spell.get("prepared", False)),
+            )
+
+        self._update_enabled_state()
+
+    def _update_enabled_state(self, *_args: object) -> None:
+        """Enables or disables spellcasting controls based on the main checkbox."""
+        enabled = self.enabled_checkbox.isChecked()
+
+        self.magic_rules_input.setEnabled(enabled)
+        self.prepared_limit_input.setEnabled(enabled)
+        self.btn_add_spell.setEnabled(enabled)
+        self.btn_clear_spells.setEnabled(enabled)
+
+        for spin_box in self.slot_inputs.values():
+            spin_box.setEnabled(enabled)
+
+        for row in self.rows:
+            row.setEnabled(enabled)
+
+    def _safe_int(self, value: Any, *, default: int = 0) -> int:
+        """Safely converts template values to integers."""
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            logging.exception("Invalid integer in SpellcastingPage: %r", value)
+            return default
 
 class FinalPage(QWizardPage):
     def __init__(self):
         super().__init__()
-        self.setTitle("Step 8: Final Details")
+        self.setTitle("Step 9: Final Details")
         self.setSubTitle("Where do you begin, and do you have any final rules?")
         
         layout = QVBoxLayout(self)
@@ -1474,6 +1980,7 @@ class CurrencyPage(QWizardPage):
 
         except Exception as error:
             logging.exception("Failed to detach currency row: %s", error)
+
 
 
 class StatsPage(QWizardPage):
@@ -1791,6 +2298,7 @@ class CreationWizard(QWizard):
         self.calendar_page = CalendarPage()
         self.char_page = CharacterPage()
         self.skills_page = SkillsPage()
+        self.spellcasting_page = SpellcastingPage()
         self.final_page = FinalPage()
         
         self.addPage(self.world_page)
@@ -1800,6 +2308,7 @@ class CreationWizard(QWizard):
         self.addPage(self.calendar_page)
         self.addPage(self.char_page)
         self.addPage(self.skills_page)
+        self.addPage(self.spellcasting_page)
         self.addPage(self.final_page)
         
         if template_data is not None:
@@ -1825,6 +2334,7 @@ class CreationWizard(QWizard):
             self._apply_stats_data(data.get("stats", []))
             self._apply_character_data(data.get("character", {}))
             self._apply_skills_data(data.get("skills", []))
+            self._apply_spellcasting_data(data.get("spellcasting", {}))
             self._apply_calendar_data(data.get("calendar", {}))
             self._apply_final_data(data)
 
@@ -2014,6 +2524,15 @@ class CreationWizard(QWizard):
             skill = clean_skills[index]
             name_widget.setText(str(skill.get("name", "") or ""))
             desc_widget.setText(str(skill.get("desc", skill.get("description", "")) or ""))
+            
+    def _apply_spellcasting_data(self, spellcasting: dict[str, Any] | list[Any]) -> None:
+        """
+        Applies spellcasting template data to the spellcasting wizard page.
+
+        Args:
+            spellcasting: Spellcasting data from the template store.
+        """
+        self.spellcasting_page.apply_data(spellcasting)
 
     def _apply_final_data(self, data: dict[str, Any]) -> None:
         """Applies final-page template data."""
@@ -2066,6 +2585,7 @@ class CreationWizard(QWizard):
                 "background": self.char_page.background_input.toPlainText().strip(),
             },
             "skills": skills,
+            "spellcasting": self.spellcasting_page.get_data(),
             "starting_location": self.final_page.location_input.text().strip(),
             "final_comments": self.final_page.comments_input.toPlainText().strip(),
         }

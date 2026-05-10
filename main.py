@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QDialog
 from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt, QThread
 from queue import Queue
 from pathlib import Path
+from creative_sampler import MarkdownCreativeIdeaBank
 
 class _UiDispatcher(QObject):
     run_now = Signal(object)          # callable
@@ -165,6 +166,7 @@ class QtAppContext:
     def __init__(self, win, configuration: Configuration | None = None):
         self.win = win
         self.configuration = configuration or get_configuration()
+        self.creative_idea_bank = MarkdownCreativeIdeaBank(self.configuration.creative_ideas)
         self.ui = _UiDispatcher(win)
 
         self.current_adventure_path: str | None = None
@@ -194,6 +196,7 @@ class QtAppContext:
         self.notebook_widgets = {
                 "Inventory": QtPanelAdapter(win.inventory_panel, self.ui),
                 "Skills": QtPanelAdapter(win.skills_panel, self.ui),
+                "Spellcasting": QtPanelAdapter(win.spellcasting_panel, self.ui),
                 "Processing": QtPanelAdapter(win.processing_panel, self.ui),
                 "Recipes": QtPanelAdapter(win.recipes_panel, self.ui),
                 "Character": QtPanelAdapter(win.character_panel, self.ui),
@@ -626,6 +629,7 @@ class QtAppContext:
                 # Replace \r to prevent Qt from applying weird spacing/fallback fonts
                 if self.first_loaded_game_history != "":
                     history_text = self.notebook_widgets["History"].get_text().replace('\r', '').strip()
+                    history_text = history_text.replace("# History", "")
                 else:
                     history_text = self.first_loaded_game_history
                 
@@ -760,6 +764,7 @@ def main() -> int:
     for panel in (
     win.inventory_panel,
     win.skills_panel,
+    win.spellcasting_panel,
     win.processing_panel,
     win.recipes_panel,
     win.character_panel,
@@ -853,7 +858,7 @@ def main() -> int:
                 app_ctx.player.calendar_settings = calendar_settings
 
             app_ctx._sync_player_state_to_ui()
-            win.story_panel.print_text("System: Compiling universe parameters...", sender="System")
+            #win.story_panel.print_text("System: Compiling universe parameters...", sender="System")
 
             if win.ai_manager is None:
                 app_ctx.discard_pending_adventure()
