@@ -4,7 +4,7 @@ import threading, re, os, logging, csv, json
 from config import GEMINI_API_KEY, MODEL
 from tabulate import tabulate
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from creative_sampler import CreativeCategory, CreativeSampleRequest
 
 class AIManager:
@@ -274,7 +274,13 @@ After outputting all tags, summarize the first starting turn, describe the surro
                 # Use Path's built-in read_text method for cleaner file I/O
                 secret_content = secret_file_path.read_text(encoding="utf-8").strip()
                 if secret_content:
-                    context_data += f"\n[SECRET]:\n{secret_content}\n"
+                    context_data += (
+                        "\n[GM-ONLY SECRET CONTEXT]\n"
+                        "The following facts are available only to the Game Master for continuity, causality, and future setup.\n"
+                        "They are NOT known by the player character and are NOT known by NPCs unless a specific visible reason exists.\n"
+                        "Do not reveal these facts in narration, dialogue, UPDATE_WORLD, QUEST, or visible summaries unless the player discovers them in the current scene.\n\n"
+                        f"{secret_content}\n"
+                    )
         except Exception as secret_read_error:
             logging.error(f"Error: Could not open secret.txt. Details: {secret_read_error}")
         
@@ -308,13 +314,26 @@ After outputting all tags, summarize the first starting turn, describe the surro
         context_data += status_context
         context_data += creative_reminder
         
-        if self._needs_creative_samples(user_text):
+        # 3. Build history context early so creative sampling can inspect the latest scene.
+        history_text = ""
+        if "History" in self.app.notebook_widgets:
+            history_text = self.app.notebook_widgets["History"].get_text().strip()
+
+        recent_history = history_text[-6000:] if len(history_text) > 6000 else history_text
+
+        # Always include these. They are small and protect against name reuse and
+        # player-facing hidden-knowledge leakage.
+        context_data += self._build_creative_guardrails()
+        context_data += self._build_npc_knowledge_firewall()
+
+        if self._needs_creative_samples(user_text, recent_history=recent_history):
             creative_bank = getattr(self.app, "creative_idea_bank", None)
             if creative_bank is not None:
                 creative_fragment = creative_bank.build_prompt_fragment(
                     CreativeSampleRequest(
                         categories=(
                             CreativeCategory.SETTLEMENT_NAMES,
+                            CreativeCategory.REGION_NAMES,
                             CreativeCategory.MALE_NAMES,
                             CreativeCategory.FEMALE_NAMES,
                             CreativeCategory.TAVERN_DRINK_NAMES,
@@ -322,23 +341,45 @@ After outputting all tags, summarize the first starting turn, describe the surro
                             CreativeCategory.MAGIC_TYPES,
                         ),
                         samples_per_category=5,
-                        banned_terms=("Kaelan", "Bram", "Elara", "Oakhaven"),
+                        banned_terms=self.BANNED_CREATIVE_TERMS,
                     )
                 )
 
                 if creative_fragment:
                     context_data += f"\n[CREATIVE SAMPLES]\n{creative_fragment}\n"
+            else:
+                logging.warning("Creative idea bank is unavailable.")
 
-        # 3. Build Prompt
-        history_text = ""
-        if "History" in self.app.notebook_widgets:
-            history_text = self.app.notebook_widgets["History"].get_text().strip()
-        recent_history = history_text[-6000:] if len(history_text) > 6000 else history_text
-        full_prompt = f"\nPast Conversation History:\n{recent_history}\nPlease remember to consider the following in your response: {context_data}\n\n===\nYOUR FINAL END GOAL: Using all of the above context and information, here is the user's actual prompt: \"{user_text}\""
+        full_prompt = (
+            f"\nPast Conversation History:\n{recent_history}\n"
+            f"Please remember to consider the following in your response: {context_data}\n\n"
+            f"===\n"
+            f"YOUR FINAL END GOAL: Using all of the above context and information, "
+            f"here is the user's actual prompt: \"{user_text}\""
+        )
         
         # 4. Thread the request
         threading.Thread(target=self.query_ai, args=(full_prompt, user_text), daemon=True).start()
         
+    def _build_npc_knowledge_firewall(self) -> str:
+        """
+        Builds prompt rules that separate Game Master knowledge from NPC knowledge.
+
+        Returns:
+            A compact prompt fragment that prevents NPCs from speaking with
+            information they have no visible reason to know.
+        """
+        return (
+            "\n[NPC KNOWLEDGE FIREWALL]\n"
+            "- The Game Master may know all context, including GM-only secrets, but NPCs do not.\n"
+            "- Before writing any NPC dialogue, silently check what that NPC could know from visible evidence, prior conversation, public reputation, their job, location, faction, or direct observation.\n"
+            "- NPCs must not mention the player character's name, destination, employer, party, deadline, recent private conversations, purchases, class, profession, abilities, secrets, or plans unless the player told them, they directly witnessed it, or the provided context explicitly says they know it.\n"
+            "- If an NPC is guessing, phrase it as a guess, rumor, sales tactic, or inference, not certainty.\n"
+            "- If an NPC lacks a reason to know a fact, replace the line with a question, a cautious assumption, or an observable comment.\n"
+            "- Shopkeepers may infer likely needs from requested goods, but they may not know private expedition details unless told.\n"
+            "- Never let NPC dialogue expose GM-only secrets.\n"
+        )
+    
     def _build_starting_spellcasting_prompt(self, spellcasting_data: dict[str, Any] | None) -> str:
         """
         Builds the startup prompt block for spellcasting.
@@ -589,30 +630,182 @@ After outputting all tags, summarize the first starting turn, describe the surro
         raw_settings = calendar_data.get("settings", {})
         return self._normalize_calendar_settings(raw_settings)
 
-    def _needs_creative_samples(self, user_text: str) -> bool:
-        """Returns True when the player action likely asks for newly invented world content."""
-        lowered_text = (user_text or "").lower()
+    BANNED_CREATIVE_TERMS: ClassVar[tuple[str, ...]] = (
+        "Kaelan",
+        "Bram",
+        "Elara",
+        "Oakhaven",
+        "Ravenswood",
+        "Silverbrook",
+    )
 
-        trigger_words = (
-            "new town",
-            "new city",
-            "new npc",
-            "random npc",
-            "tavern",
-            "shop",
-            "merchant",
-            "spell",
-            "alchemy",
-            "ingredient",
-            "religion",
-            "temple",
-            "faction",
-            "guild",
-            "region",
-            "country",
+    _CREATIVE_DIRECT_TRIGGERS: ClassVar[tuple[str, ...]] = (
+        "new town",
+        "new city",
+        "new npc",
+        "random npc",
+        "name",
+        "named",
+        "introduce",
+        "invent",
+        "create",
+        "tavern",
+        "shop",
+        "merchant",
+        "spell",
+        "alchemy",
+        "ingredient",
+        "religion",
+        "temple",
+        "faction",
+        "guild",
+        "region",
+        "country",
+    )
+
+    _CREATIVE_ACTION_TRIGGERS: ClassVar[tuple[str, ...]] = (
+        "approach",
+        "ask",
+        "talk",
+        "speak",
+        "introduce",
+        "meet",
+        "head to",
+        "head towards",
+        "head over to",
+        "head over towards",
+        "go",
+        "enter",
+        "leave",
+        "travel",
+        "follow",
+        "inspect",
+        "check",
+        "look",
+        "observe",
+        "search",
+        "explore",
+        "read",
+        "listen",
+        "join",
+        "hire",
+        "negotiate",
+        "investigate",
+    )
+
+    _UNNAMED_ENTITY_HINTS: ClassVar[tuple[str, ...]] = (
+        " a dwarf",
+        " the dwarf",
+        " a woman",
+        " the woman",
+        " a man",
+        " the man",
+        " a clerk",
+        " the clerk",
+        " a guard",
+        " the guard",
+        " a group",
+        " the group",
+        " adventuring group",
+        " coterie",
+        " mercenaries",
+        " scouts",
+        " mages",
+        " crowd",
+        " corkboard",
+        " notice",
+        " contract",
+        " map",
+        " guild members",
+    )
+    
+    def _contains_any(self, text: str | None, terms: tuple[str, ...]) -> bool:
+        """
+        Checks whether any configured term appears in text.
+
+        Args:
+            text: Text to inspect.
+            terms: Lowercase trigger terms.
+
+        Returns:
+            True if any term is present.
+        """
+        if text is None:
+            logging.warning("AIManager._contains_any called with None text.")
+            return False
+
+        lowered_text = str(text).lower()
+        return any(term in lowered_text for term in terms)
+
+
+    def _build_creative_guardrails(self) -> str:
+        """
+        Builds always-on naming and player-knowledge rules.
+
+        These rules are intentionally small enough to include every turn. They are not
+        the same thing as creative samples; they protect against stale names and
+        hidden-knowledge leakage even when samples are not needed.
+
+        Returns:
+            Prompt text for creative naming and player-facing lore safety.
+        """
+        banned_terms = ", ".join(self.BANNED_CREATIVE_TERMS)
+
+        return (
+            "\n[CREATIVE AND KNOWLEDGE SAFETY RULES]\n"
+            f"- Do not invent or reuse these names unless they already refer to the same existing entity: {banned_terms}.\n"
+            "- When inventing new names, avoid common generic fantasy defaults.\n"
+            "- World.md is player-facing knowledge. Only use [[UPDATE_WORLD: ...]] for facts the player has actually learned in visible narration.\n"
+            "- If an NPC's true name, motive, allegiance, secret, or identity has not been revealed to the player, do not put that hidden information in [[UPDATE_WORLD: ...]].\n"
+            "- You may use [[UPDATE_WORLD: ...]] if it is reasonable for the Player to believe the information that they just learned. "
+            "For example, if an NPC says that their name is Gregor, and the Player has not learned any information to the contrary, "
+            "you may use the [[UPDATE_WORLD: ...]] tag for that. If you do, also output a [[SECRET: ...]] tag if that NPC has a different true name.\n"
+            "- For unrevealed NPCs, use visible public descriptors such as 'the scarred dwarf clerk', 'the armored woman at the map table', or 'the hooded courier'.\n"
+            "- Use [[SECRET: ...]] for GM-only facts that the player has not learned yet.\n"
+        )
+    
+    def _needs_creative_samples(
+        self,
+        user_text: str,
+        *,
+        recent_history: str = "",
+    ) -> bool:
+        """
+        Returns True when the next GM response is likely to invent or name content.
+
+        This intentionally favors false positives over false negatives. A few sampled
+        names cost far fewer tokens than sending the full creative_ideas.md file, and
+        missing the sample can cause stale-name reuse.
+
+        Args:
+            user_text: The player's current action.
+            recent_history: Recent visible/hidden history used to detect nearby
+                unnamed entities.
+
+        Returns:
+            True if creative samples should be added to the prompt.
+        """
+        clean_user_text = str(user_text or "").strip()
+        if not clean_user_text:
+            logging.warning("AIManager._needs_creative_samples called with blank user_text.")
+            return False
+
+        if self._contains_any(clean_user_text, self._CREATIVE_DIRECT_TRIGGERS):
+            return True
+
+        # Player actions like "approach the dwarf" or "ask the clerk" often cause
+        # the model to name an NPC even if the user did not explicitly request a name.
+        action_likely_advances_scene = self._contains_any(
+            clean_user_text,
+            self._CREATIVE_ACTION_TRIGGERS,
         )
 
-        return any(word in lowered_text for word in trigger_words)
+        if not action_likely_advances_scene:
+            return False
+
+        nearby_context = f"{clean_user_text}\n{str(recent_history or '')[-3000:]}"
+
+        return self._contains_any(nearby_context, self._UNNAMED_ENTITY_HINTS)
     
     def _generate_calendar_settings(self, data: dict[str, Any]) -> dict[str, Any] | None:
         """Uses Gemini to generate a calendar JSON object during new-game creation."""
@@ -991,14 +1184,23 @@ After outputting all tags, summarize the first starting turn, describe the surro
                 return
 
             # 2. PROCESS STANDARD TAGS
-            tag_parser.process_standard_tags(ai_text, is_startup=is_startup)
+            standard_tag_pattern = re.compile(r"\[\[[A-Z_]+:.*?\]\]", re.DOTALL)
+            visible_narrative_for_tag_safety = standard_tag_pattern.sub("", display_ai_text)
+
+            tag_parser.process_standard_tags(
+                ai_text,
+                is_startup=is_startup,
+                visible_narrative_text=visible_narrative_for_tag_safety,
+            )
 
             # 3. FINALIZE AND PRINT
-            logging.info(f"AI text: {ai_text}")
-            clean_pattern = re.compile(r"\[\[[A-Z_]+:.*?\]\]", re.DOTALL)
+            log_ai_text = self._build_ai_log_text(history_ai_text, ai_text)
+            logging.info("AI text: %s", log_ai_text)
+
+            clean_pattern = standard_tag_pattern
             
             final_display_text = clean_pattern.sub("", display_ai_text)
-            final_display_text = re.sub(r'\n{3,}', '\n\n', final_display_text).strip()
+            final_display_text = re.sub(r'\n{2,}', '\n\n', final_display_text).strip()
             
             if "Processing" in self.app.notebook_widgets:
                 processing_tab = self.app.notebook_widgets["Processing"]
@@ -1053,8 +1255,6 @@ After outputting all tags, summarize the first starting turn, describe the surro
                 hist_panel = self.app.notebook_widgets["History"]
                 current_hist = hist_panel.get_text()
                 
-                logging.info("History is in self.app.notebook_widgets! About to make new exchange!")
-                
                 # Get rid of the "System: Initialization..." message at game creation.
                 if is_startup:
                     user_text = ""
@@ -1064,8 +1264,6 @@ After outputting all tags, summarize the first starting turn, describe the surro
                     f"{history_body_to_save.strip()}\n\n"
                     f"// NEW EXCHANGE\n\n"
                 )
-                
-                logging.info(f"NEW EXCHANGE: {new_exchange}")
 
                 self.app.after(0, lambda ch=current_hist, ne=new_exchange: hist_panel.set_text(ch + ne))
                 
@@ -1103,9 +1301,196 @@ After outputting all tags, summarize the first starting turn, describe the surro
         finally:
             self.app.after(0, lambda: self.app.story_tab.set_controls_state(True))
             
+    def _build_ai_log_text(self, history_ai_text: str | None, fallback_ai_text: str | None) -> str:
+        """
+        Builds a compact AI response string for the log file.
+
+        Args:
+            history_ai_text: AI text after history-safe inline tag processing.
+            fallback_ai_text: Fallback AI text if history-safe text is unavailable.
+
+        Returns:
+            AI text suitable for logging without large UI-only tables.
+        """
+        clean_history_text = str(history_ai_text or "").strip()
+        if clean_history_text:
+            return clean_history_text
+
+        logging.warning("History-safe AI text was empty. Falling back to display AI text for logging.")
+        return str(fallback_ai_text or "").strip()
+            
 class TagParser:
     def __init__(self, app):
         self.app = app
+        
+    _POSSIBLE_PROPER_NOUN_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"\b[A-Z][a-z]+(?:[-'][A-Z][a-z]+)?(?:\s+[A-Z][a-z]+(?:[-'][A-Z][a-z]+)?)*\b"
+    )
+    
+    _STATIC_IGNORED_UPDATE_WORLD_NAMES: ClassVar[frozenset[str]] = frozenset(
+        {
+            "A",
+            "An",
+            "The",
+            "You",
+            "He",
+            "She",
+            "They",
+            "It",
+            "What",
+            "World",
+            "Character",
+            "Status",
+            "System",
+            "GM",
+            "AUTO",
+            "Day",
+            "Year",
+            "Season",
+            "Location",
+            "Weather",
+        }
+    )
+    
+    def _get_calendar_ignored_update_world_names(self) -> set[str]:
+        """
+        Returns calendar-specific proper nouns that should not be treated as hidden NPC names.
+
+        The active calendar can be Gregorian, custom, or AI-generated, so weekday,
+        month, and season names should come from the current Player state instead of
+        being hard-coded.
+
+        Returns:
+            A set of calendar terms safe to ignore during UPDATE_WORLD proper-noun checks.
+        """
+        ignored_names: set[str] = set()
+
+        if self.app is None:
+            logging.warning("TagParser has no app context while reading calendar ignored names.")
+            return ignored_names
+
+        player = getattr(self.app, "player", None)
+
+        if player is None:
+            logging.warning("TagParser could not find player while reading calendar ignored names.")
+            return ignored_names
+
+        calendar_settings = getattr(player, "calendar_settings", None)
+
+        if not isinstance(calendar_settings, dict):
+            logging.warning(
+                "Player calendar_settings was not a dictionary: %r",
+                calendar_settings,
+            )
+            return ignored_names
+
+        weekdays = calendar_settings.get("weekdays", [])
+        if isinstance(weekdays, list):
+            for weekday in weekdays:
+                weekday_name = str(weekday or "").strip()
+                if weekday_name:
+                    ignored_names.add(weekday_name)
+
+        months = calendar_settings.get("months", [])
+        if isinstance(months, list):
+            for month in months:
+                if not isinstance(month, dict):
+                    logging.warning("Skipped malformed calendar month while building ignored names: %r", month)
+                    continue
+
+                month_name = str(month.get("name", "") or "").strip()
+                season_name = str(month.get("season", "") or "").strip()
+
+                if month_name:
+                    ignored_names.add(month_name)
+
+                if season_name:
+                    ignored_names.add(season_name)
+
+        return ignored_names
+    
+    def _find_unrevealed_proper_nouns(
+    self,
+    lore_text: str,
+    *,
+    visible_narrative_text: str,
+    existing_world_text: str,
+) -> list[str]:
+        """
+        Finds capitalized names in UPDATE_WORLD that were not visible to the player.
+
+        Args:
+            lore_text: Proposed UPDATE_WORLD lore.
+            visible_narrative_text: The player-facing narration after tag cleanup.
+            existing_world_text: Existing World panel text.
+
+        Returns:
+            Suspicious proper nouns that should not be written to World.md yet.
+        """
+        if lore_text is None:
+            logging.warning("TagParser._find_unrevealed_proper_nouns called with None lore_text.")
+            return []
+
+        known_player_text = f"{visible_narrative_text or ''}\n{existing_world_text or ''}".lower()
+        unrevealed_names: list[str] = []
+
+        for match in self._POSSIBLE_PROPER_NOUN_PATTERN.finditer(str(lore_text)):
+            candidate = match.group(0).strip()
+
+            ignored_names = (
+                set(self._STATIC_IGNORED_UPDATE_WORLD_NAMES)
+                | self._get_calendar_ignored_update_world_names()
+            )
+
+            # Then inside the loop:
+            if not candidate or candidate in ignored_names:
+                continue
+
+            # Single title-case sentence starters are the riskiest false positives,
+            # but true leaked names are usually also single title-case words.
+            # So we allow them only if the player has already seen them.
+            if candidate.lower() not in known_player_text:
+                unrevealed_names.append(candidate)
+
+        return unrevealed_names
+    
+    def _sanitize_update_world_lore(
+        self,
+        lore_text: str,
+        *,
+        visible_narrative_text: str,
+        existing_world_text: str,
+    ) -> str:
+        """
+        Validates UPDATE_WORLD lore before writing it to the player-facing World panel.
+
+        Args:
+            lore_text: Proposed lore from the AI tag.
+            visible_narrative_text: Player-facing narration for this response.
+            existing_world_text: Current World panel contents.
+
+        Returns:
+            Safe lore text, or an empty string if the update should be skipped.
+        """
+        clean_lore = str(lore_text or "").strip()
+        if not clean_lore:
+            return ""
+
+        unrevealed_names = self._find_unrevealed_proper_nouns(
+            clean_lore,
+            visible_narrative_text=visible_narrative_text,
+            existing_world_text=existing_world_text,
+        )
+
+        if unrevealed_names:
+            logging.warning(
+                "Skipped UPDATE_WORLD because it appears to contain unrevealed proper noun(s): %s. Lore: %r",
+                ", ".join(unrevealed_names),
+                clean_lore,
+            )
+            return ""
+
+        return clean_lore
         
     def _strip_currency_transaction_tags(self, ai_text: str) -> str:
         """
@@ -1152,8 +1537,13 @@ class TagParser:
         for match in re.finditer(r"\[\[MODIFY_ITEM:\s*(.*?)\]\]", ai_text, re.DOTALL):
             inventory_panel.modify_item(match.group(1))
 
-    def process_standard_tags(self, ai_text, is_startup: bool = False) -> None:
-        """Processes typical gameplay tags and returns the cleaned text."""
+    def process_standard_tags(
+        self,
+        ai_text: str,
+        is_startup: bool = False,
+        visible_narrative_text: str = "",
+    ) -> None:
+        """Processes typical gameplay tags and applies safe state mutations."""
         
         if not ai_text:
             logging.warning("TagParser.process_standard_tags called with empty text.")
@@ -1353,6 +1743,9 @@ class TagParser:
                     # Check if the file physically exists on the disk
                     mode = "a" if secret_file_path.exists() else "w"
                     
+                    if mode == "w":
+                        secret_file.write("SECRET INFORMATION BELOW (e.g. INFORMATION THAT THE GAME MASTER KNOWS, BUT THE PLAYER DOES NOT NECESSARILY KNOW, UNLESS THAT INFORMATION IS GIVEN ELSEWHERE.)")
+                    
                     with secret_file_path.open(mode, encoding="utf-8") as secret_file:
                         secret_file.write(f"\n{new_secret}\n")
                         
@@ -1378,13 +1771,26 @@ class TagParser:
                     continue
 
                 current_world_text = world_panel.get_text().rstrip()
-                updated_world_text = f"{current_world_text}\n\n{new_world_lore}\n"
+
+                safe_world_lore = self._sanitize_update_world_lore(
+                    new_world_lore,
+                    visible_narrative_text=visible_narrative_text,
+                    existing_world_text=current_world_text,
+                )
+
+                if not safe_world_lore:
+                    continue
+
+                updated_world_text = f"{current_world_text}\n\n{safe_world_lore}\n"
 
                 world_panel.set_text(updated_world_text)
                 world_panel.save_now()
 
             except Exception as world_update_error:
-                logging.exception("Could not update World panel from UPDATE_WORLD tag: %s", world_update_error)
+                logging.exception(
+                    "Could not update World panel from UPDATE_WORLD tag: %s",
+                    world_update_error,
+                )
                 
         for match in re.finditer(r"\[\[DEFINE_CURRENCY:\s*(.*?)\s*\|\s*(\d+)\]\]", ai_text, re.DOTALL):
             c_name = match.group(1).strip()

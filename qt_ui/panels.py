@@ -3031,6 +3031,7 @@ class StoryPanel(QWidget):
             clean_text = clean_text.replace("--", ", ").replace("-", " ")
             clean_text = clean_text.replace("\n", " ").replace("\r", "")
             clean_text = self._apply_phonetic_fixes(clean_text)
+            #logging.info(f"Text sent to TTS to play audio of: {clean_text}")
             self._generate_and_play_tts(clean_text, original_text=text)
         else:
             if text.startswith("> "):

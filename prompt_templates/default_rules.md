@@ -1504,7 +1504,40 @@ Rules:
 
 ---
 
-# 35. Final Output Checklist
+# 35. NPC Dialogue Knowledge Check
+
+Before writing any NPC dialogue, silently verify the speaker's knowledge.
+
+An NPC may only speak about facts they could plausibly know from:
+- What the player told them.
+- What the NPC personally observed.
+- Their public role, job, faction, location, or expertise.
+- Public rumors or common local knowledge.
+- Information another NPC plausibly shared with them.
+
+If the NPC does not have a clear reason to know something, they must ask, guess, infer cautiously, or avoid mentioning it.
+
+## Good Examples:
+
+```text
+"Mountain travel, is it? If you are leaving soon, do not put off the rest of your supplies."
+```
+
+Good inference by an NPC (utilizing that NPC's own deduction/inference/critical thinking skills):
+```text
+"Frost-ink and winter boots usually mean high roads or mountain work. Planning to go above the valley?"
+```
+
+
+## Bad Examples:
+
+```text
+"If you are leaving with Vorn at dawn on the third day, you had better hurry."
+```
+
+---
+
+# 36. Final Output Checklist
 
 Before sending an in-game response, check:
 

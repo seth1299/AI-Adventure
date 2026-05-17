@@ -457,9 +457,9 @@ def create_tts_manager(configuration: TTSConfigurationProtocol) -> TTSManager:
         except Exception as error:
             disabled_reason = (
                 "Failed to initialize Kokoro-ONNX TTS. "
-                f"Model path: {configuration.kokoro_model_path}. "
-                f"Voices path: {configuration.kokoro_voices_path}. "
-                f"Error: {error}"
+                f"This can be caused by missing model files, missing voices files, "
+                f"or missing PyInstaller package data for kokoro_onnx/phonemizer dependencies. "
+                f"Model path: {configuration.kokoro_model_path}. Voices path: {configuration.kokoro_voices_path}. Error: {error}"
             )
 
             logging.exception(disabled_reason)

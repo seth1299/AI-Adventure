@@ -1,4 +1,4 @@
-import os
+import os, re
 import sys
 import json
 import logging
@@ -28,6 +28,32 @@ class FileManager:
         )
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
+        logging.getLogger("phonemizer").setLevel(logging.ERROR)
+        
+    @staticmethod
+    def _build_log_file_name(save_name: str | None = None) -> str:
+        """
+        Builds a safe log filename.
+
+        Args:
+            save_name: Optional save-folder name. When provided, this becomes
+                the base log filename.
+
+        Returns:
+            A safe .log filename.
+        """
+        raw_name = str(save_name or "").strip()
+
+        if not raw_name:
+            return FileManager.LOG_FILE_NAME
+
+        safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", raw_name).strip("_")
+
+        if not safe_name:
+            logging.warning("Save name %r produced an empty log filename. Using app log name.", save_name)
+            return FileManager.LOG_FILE_NAME
+
+        return f"{safe_name}.log"
 
     @staticmethod
     def resource_path(relative_path):
@@ -82,19 +108,27 @@ class FileManager:
     def update_logger_path(save_name: str = "") -> None:
         """
         Switches the logging output to a specific save folder.
-        
+
         Args:
-            save_name (str, optional): The name of the specific save folder. Defaults to None.
+            save_name: The name of the specific save folder. If blank, the
+                app-level log file is used in the saves directory.
         """
         try:
-            save_directory = SAVES_DIR / save_name if save_name else SAVES_DIR
+            clean_save_name = str(save_name or "").strip()
+            save_directory = SAVES_DIR / clean_save_name if clean_save_name else SAVES_DIR
             save_directory.mkdir(parents=True, exist_ok=True)
-            new_log_path = save_directory / FileManager.LOG_FILE_NAME
+
+            log_file_name = FileManager._build_log_file_name(clean_save_name)
+            new_log_path = save_directory / log_file_name
+
             FileManager._configure_single_log_file(new_log_path)
             logging.info("Logging redirected to %s", new_log_path)
 
         except Exception as logger_switch_error:
-            logging.exception(f"Failed to switch logger path. Exception details: {logger_switch_error}")
+            logging.exception(
+                "Failed to switch logger path. Exception details: %s",
+                logger_switch_error,
+            )
 
     # --- RAW I/O METHODS ---
 
