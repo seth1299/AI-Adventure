@@ -6,6 +6,7 @@ from tabulate import tabulate
 from pathlib import Path
 from typing import Any, ClassVar
 from creative_sampler import CreativeCategory, CreativeSampleRequest
+from dataclasses import dataclass
 
 class AIManager:
     def __init__(self, app) -> None:
@@ -1322,6 +1323,7 @@ After outputting all tags, summarize the first starting turn, describe the surro
 class TagParser:
     def __init__(self, app):
         self.app = app
+        self.world_lore_updater = WorldLoreUpdater()
         
     _POSSIBLE_PROPER_NOUN_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"\b[A-Z][a-z]+(?:[-'][A-Z][a-z]+)?(?:\s+[A-Z][a-z]+(?:[-'][A-Z][a-z]+)?)*\b"
@@ -1357,6 +1359,71 @@ class TagParser:
         r"\s*,?\s+whose name is\s+{name}\b",
         r"\s*,?\s+who introduces (?:himself|herself|themself|themselves) as\s+{name}\b",
     )
+    
+    def _process_upsert_world_tags(
+        self,
+        ai_text: str,
+        *,
+        visible_narrative_text: str,
+    ) -> None:
+        """
+        Processes [[UPSERT_WORLD: Anchor | Replacement Lore]] tags.
+
+        Args:
+            ai_text: Raw AI response text containing functional tags.
+            visible_narrative_text: Player-facing narration after tag cleanup.
+        """
+        if not ai_text:
+            logging.warning("TagParser._process_upsert_world_tags called with empty text.")
+            return
+
+        for match in re.finditer(r"\[\[UPSERT_WORLD:\s*(.*?)\]\]", ai_text, re.DOTALL):
+            raw_args = str(match.group(1) or "").strip()
+
+            if "|" not in raw_args:
+                logging.warning("Malformed UPSERT_WORLD tag ignored: %r", match.group(0))
+                continue
+
+            anchor, replacement_lore = [part.strip() for part in raw_args.split("|", 1)]
+
+            if not anchor or not replacement_lore:
+                logging.warning("Malformed UPSERT_WORLD tag ignored: %r", match.group(0))
+                continue
+
+            try:
+                world_panel = self.app.notebook_widgets.get("World")
+                if world_panel is None:
+                    logging.error("UPSERT_WORLD ignored because the World panel is missing.")
+                    continue
+
+                current_world_text = world_panel.get_text().rstrip()
+
+                safe_replacement_lore = self._sanitize_update_world_lore(
+                    replacement_lore,
+                    visible_narrative_text=visible_narrative_text,
+                    existing_world_text=current_world_text,
+                )
+
+                if not safe_replacement_lore:
+                    logging.warning("UPSERT_WORLD rejected by world-lore sanitizer for anchor %r.", anchor)
+                    continue
+
+                updated_world_text = self.world_lore_updater.upsert(
+                    current_world_text,
+                    WorldUpsertRequest(
+                        anchor=anchor,
+                        replacement_lore=safe_replacement_lore,
+                    ),
+                )
+
+                if updated_world_text is None:
+                    continue
+
+                world_panel.set_text(updated_world_text)
+                world_panel.save_now()
+
+            except Exception as error:
+                logging.exception("Could not process UPSERT_WORLD tag: %s", error)
     
     def _replace_internal_base_unit_language(self, text: str) -> str:
         """
@@ -1915,6 +1982,12 @@ class TagParser:
             except Exception as secret_write_error:
                     logging.error(f"Error writing secret: {secret_write_error}")
                     
+        # Process replacement-style world updates before append-only updates.
+        self._process_upsert_world_tags(
+            ai_text,
+            visible_narrative_text=visible_narrative_text,
+        )
+                    
         for match in re.finditer(r"\[\[UPDATE_WORLD:\s*(.*?)\]\]", ai_text, re.DOTALL):
             new_world_lore = match.group(1).strip()
 
@@ -2160,3 +2233,237 @@ class TagParser:
         modified_text = self._replace_internal_base_unit_language(modified_text)
         
         return modified_text
+
+@dataclass(frozen=True)
+class WorldUpsertRequest:
+    """
+    Represents a restricted World.md upsert request.
+
+    Args:
+        anchor: Human-readable entity key to find, such as "Bob" or "Dockside Library".
+        replacement_lore: Full replacement lore line or paragraph.
+    """
+
+    anchor: str
+    replacement_lore: str
+
+
+class WorldLoreUpdater:
+    """
+    Applies safe, deterministic World.md lore upserts.
+
+    This class never accepts file paths, regex patterns, or raw write instructions
+    from the AI. It only searches existing Markdown text for an entity-style key
+    and replaces that one entry, or appends the replacement if no entry exists.
+    """
+
+    MAX_ANCHOR_LENGTH: ClassVar[int] = 80
+    MAX_REPLACEMENT_LENGTH: ClassVar[int] = 900
+
+    _NESTED_TAG_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"\[\[.*?\]\]",
+        re.DOTALL,
+    )
+
+    _BULLET_PREFIX_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"^(?P<prefix>\s*(?:[-*+]\s+|\d+\.\s+)?)"
+    )
+
+    _MARKDOWN_DECORATION_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"[*_`#>\[\]()]"
+    )
+
+    def upsert(self, world_text: str | None, request: WorldUpsertRequest | None) -> str | None:
+        """
+        Applies a validated lore upsert to World.md text.
+
+        Args:
+            world_text: Current World.md text.
+            request: Restricted upsert request from the tag parser.
+
+        Returns:
+            Updated World.md text, or None if the request was invalid or made no change.
+        """
+        if request is None:
+            logging.warning("WorldLoreUpdater.upsert called without a request.")
+            return None
+
+        anchor = self._clean_anchor(request.anchor)
+        replacement_lore = self._clean_replacement_lore(request.replacement_lore)
+
+        if not anchor or not replacement_lore:
+            logging.warning(
+                "Rejected UPSERT_WORLD because anchor or replacement was blank. Anchor=%r Replacement=%r",
+                request.anchor,
+                request.replacement_lore,
+            )
+            return None
+
+        anchor_key = self._normalize_key(anchor)
+        if not anchor_key:
+            logging.warning("Rejected UPSERT_WORLD because anchor normalized to blank: %r", anchor)
+            return None
+
+        current_text = str(world_text or "").rstrip()
+        lines = current_text.splitlines()
+
+        match_index = self._find_matching_line_index(lines, anchor_key)
+
+        if match_index is None:
+            return self._append_lore(current_text, replacement_lore)
+
+        old_line = lines[match_index]
+        replacement_line = self._preserve_list_prefix(old_line, replacement_lore)
+
+        if old_line.strip() == replacement_line.strip():
+            logging.info("UPSERT_WORLD made no change for anchor %r.", anchor)
+            return None
+
+        lines[match_index] = replacement_line
+        logging.info("UPSERT_WORLD replaced entry for anchor %r.", anchor)
+
+        return "\n".join(lines).rstrip() + "\n"
+
+    def _clean_anchor(self, anchor: str | None) -> str:
+        """
+        Cleans and validates the AI-provided anchor.
+
+        Args:
+            anchor: Raw anchor text.
+
+        Returns:
+            Safe anchor text, or an empty string if invalid.
+        """
+        clean_anchor = str(anchor or "").strip()
+
+        if not clean_anchor:
+            return ""
+
+        if "\n" in clean_anchor or "\r" in clean_anchor:
+            logging.warning("Rejected UPSERT_WORLD anchor containing a newline: %r", anchor)
+            return ""
+
+        if len(clean_anchor) > self.MAX_ANCHOR_LENGTH:
+            logging.warning("Rejected UPSERT_WORLD anchor that was too long: %r", anchor)
+            return ""
+
+        if self._NESTED_TAG_PATTERN.search(clean_anchor):
+            logging.warning("Rejected UPSERT_WORLD anchor containing a nested tag: %r", anchor)
+            return ""
+
+        return clean_anchor
+
+    def _clean_replacement_lore(self, replacement_lore: str | None) -> str:
+        """
+        Cleans and validates replacement lore.
+
+        Args:
+            replacement_lore: Raw replacement lore from the tag.
+
+        Returns:
+            Safe replacement lore, or an empty string if invalid.
+        """
+        clean_lore = str(replacement_lore or "").strip()
+
+        if not clean_lore:
+            return ""
+
+        if len(clean_lore) > self.MAX_REPLACEMENT_LENGTH:
+            logging.warning("Rejected UPSERT_WORLD replacement that was too long.")
+            return ""
+
+        if self._NESTED_TAG_PATTERN.search(clean_lore):
+            logging.warning("Rejected UPSERT_WORLD replacement containing a nested tag: %r", clean_lore)
+            return ""
+
+        return clean_lore
+
+    def _find_matching_line_index(self, lines: list[str], anchor_key: str) -> int | None:
+        """
+        Finds the first World.md line whose entity key matches the anchor.
+
+        Args:
+            lines: World.md split into lines.
+            anchor_key: Normalized anchor key.
+
+        Returns:
+            Matching line index, or None.
+        """
+        for index, line in enumerate(lines):
+            line_key = self._extract_line_key(line)
+            if line_key == anchor_key:
+                return index
+
+        return None
+
+    def _extract_line_key(self, line: str | None) -> str:
+        """
+        Extracts an entity key from a World.md line.
+
+        Examples:
+            "Bob: Trusted officer." -> "bob"
+            "- Bob: Trusted officer." -> "bob"
+            "**Bob:** Trusted officer." -> "bob"
+
+        Args:
+            line: Markdown line.
+
+        Returns:
+            Normalized entity key, or an empty string if no key exists.
+        """
+        clean_line = str(line or "").strip()
+
+        if not clean_line or ":" not in clean_line:
+            return ""
+
+        clean_line = re.sub(r"^\s*(?:[-*+]\s+|\d+\.\s+)", "", clean_line)
+        raw_key = clean_line.split(":", 1)[0]
+
+        return self._normalize_key(raw_key)
+
+    def _normalize_key(self, value: str | None) -> str:
+        """
+        Normalizes entity keys for safe comparison.
+
+        Args:
+            value: Raw key text.
+
+        Returns:
+            Case-insensitive normalized key.
+        """
+        clean_value = str(value or "").strip()
+        clean_value = self._MARKDOWN_DECORATION_PATTERN.sub("", clean_value)
+        clean_value = re.sub(r"\s+", " ", clean_value)
+        return clean_value.casefold().strip()
+
+    def _preserve_list_prefix(self, old_line: str, replacement_lore: str) -> str:
+        """
+        Preserves a Markdown list prefix from the old line when replacing it.
+
+        Args:
+            old_line: Existing World.md line.
+            replacement_lore: New lore text.
+
+        Returns:
+            Replacement line with the old bullet or numbered-list prefix retained.
+        """
+        match = self._BULLET_PREFIX_PATTERN.match(old_line or "")
+        prefix = match.group("prefix") if match else ""
+        return f"{prefix}{replacement_lore}".rstrip()
+
+    def _append_lore(self, current_text: str, replacement_lore: str) -> str:
+        """
+        Appends lore when no existing entry matches the anchor.
+
+        Args:
+            current_text: Current World.md text.
+            replacement_lore: Lore to append.
+
+        Returns:
+            Updated World.md text.
+        """
+        if not current_text.strip():
+            return f"# World\n\n{replacement_lore}\n"
+
+        logging.info("UPSERT_WORLD found no existing entry; appended lore instead.")
+        return f"{current_text.rstrip()}\n\n{replacement_lore}\n"
