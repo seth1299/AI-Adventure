@@ -1296,7 +1296,7 @@ class AudioSettingsDialog(QDialog):
 
         voice_row = QHBoxLayout()
         self.combo_voices = QComboBox()
-        for display_name, voice_id in self.story_panel.AVAILABLE_VOICES.items():
+        for display_name, voice_id in self.story_panel.get_available_tts_voices().items():
             # Add the item: Display Name is shown to user, Voice ID is stored in background data
             self.combo_voices.addItem(display_name, voice_id) 
             if voice_id == self.orig_voice:

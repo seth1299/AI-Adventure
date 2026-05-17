@@ -7,7 +7,6 @@ formatting behavior through inheritance.
 
 from __future__ import annotations
 
-import asyncio
 import copy
 import csv
 import logging
@@ -16,11 +15,9 @@ import re
 import tempfile
 import textwrap
 import threading
-import uuid
 from pathlib import Path
 from typing import Any, ClassVar
-
-import edge_tts
+from tts_manager import TTSManager, TTSRequest
 import markdown
 import pygame
 import time_utils
@@ -2663,14 +2660,14 @@ class StoryPanel(QWidget):
     text_ready_signal = Signal(str)
 
     AVAILABLE_VOICES: ClassVar[dict[str, str]] = {
-        "Aria (Female, US)": "en-US-AriaNeural",
-        "Guy (Male, US)": "en-US-GuyNeural",
-        "Jenny (Female, US)": "en-US-JennyNeural",
-        "Christopher (Male, US)": "en-US-ChristopherNeural",
-        "Sonia (Female, UK)": "en-GB-SoniaNeural",
-        "Ryan (Male, UK)": "en-GB-RyanNeural",
-        "Natasha (Female, AU)": "en-AU-NatashaNeural",
-        "William (Male, AU)": "en-AU-WilliamNeural",
+        "Sarah (Female, US)": "af_sarah",
+        "Heart (Female, US)": "af_heart",
+        "Bella (Female, US)": "af_bella",
+        "Nicole (Female, US)": "af_nicole",
+        "Adam (Male, US)": "am_adam",
+        "Michael (Male, US)": "am_michael",
+        "Emma (Female, UK)": "bf_emma",
+        "George (Male, UK)": "bm_george",
     }
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -2690,7 +2687,8 @@ class StoryPanel(QWidget):
         self.music_volume = 100
         self.tts_volume = 100
         self.tts_rate = 0
-        self.tts_voice = "en-US-AriaNeural"
+        self.tts_voice = "af_sarah"
+        self.tts_manager: TTSManager | None = None
         self.temp_dir = tempfile.gettempdir()
         self._unlock_queued = False
         self.text_ready_signal.connect(self.append_text)
@@ -2772,6 +2770,63 @@ class StoryPanel(QWidget):
     def _emit_volume(self, val: int) -> None:
         """Emits music volume as pygame's expected 0.0-1.0 value."""
         self.volume_changed.emit(val / 100.0)
+        
+    def set_tts_manager(self, tts_manager: TTSManager | None) -> None:
+        """
+        Binds the StoryPanel to the application's TTS manager.
+
+        Args:
+            tts_manager: Configured TTSManager instance, or None to disable TTS.
+        """
+
+        self.tts_manager = tts_manager
+        
+    def get_available_tts_voices(self) -> dict[str, str]:
+        """
+        Returns voice choices for the currently active TTS engine.
+
+        Returns:
+            Display-name-to-voice-ID mapping.
+        """
+
+        if self.tts_manager is None:
+            return dict(self.AVAILABLE_VOICES)
+
+        available_voices = self.tts_manager.get_available_voices()
+        return available_voices or dict(self.AVAILABLE_VOICES)
+
+    def _get_default_tts_voice(self) -> str:
+        """
+        Returns the active engine's default voice.
+
+        Returns:
+            Voice ID.
+        """
+
+        if self.tts_manager is None:
+            return "af_sarah"
+
+        default_voice = self.tts_manager.get_default_voice()
+        return default_voice or "af_sarah"
+
+    def _ensure_tts_voice_is_valid(self) -> None:
+        """
+        Replaces a stale saved voice ID if it is invalid for the active engine.
+        """
+
+        available_voice_ids = set(self.get_available_tts_voices().values())
+
+        if not available_voice_ids:
+            return
+
+        if self.tts_voice not in available_voice_ids:
+            replacement_voice = self._get_default_tts_voice()
+            logging.warning(
+                "Saved narrator voice %r is invalid for the active TTS engine. Using %r.",
+                self.tts_voice,
+                replacement_voice,
+            )
+            self.tts_voice = replacement_voice
 
     def _check_tts_finished(self) -> None:
         """Unlocks controls after queued narrator audio has finished."""
@@ -2993,31 +3048,52 @@ class StoryPanel(QWidget):
         self.send_requested.emit(text)
 
     def _generate_and_play_tts(self, text: str, original_text: str | None = None) -> None:
-        """Generates Edge TTS audio without blocking the UI thread."""
+        """Generates TTS audio without blocking the UI thread."""
 
-        def run_async() -> None:
-            unique_filename = f"ai_adventure_tts_{uuid.uuid4().hex}.mp3"
-            dynamic_tts_file = os.path.join(self.temp_dir, unique_filename)
-            rate_str = f"{self.tts_rate * 5}%"
-            if self.tts_rate >= 0:
-                rate_str = f"+{rate_str}"
-
+        def run_tts() -> None:
             try:
-                communicate = edge_tts.Communicate(text, self.tts_voice, rate=rate_str)
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(communicate.save(dynamic_tts_file))
-                loop.close()
+                if self.tts_manager is None:
+                    logging.warning("Narrator enabled, but no TTS manager is bound to StoryPanel.")
+                    if original_text is not None:
+                        self.text_ready_signal.emit(original_text)
+                    return
 
-                self._play_generated_tts(dynamic_tts_file)
+                request = TTSRequest(
+                    text=text,
+                    voice=self.tts_voice,
+                    speed=self._tts_rate_to_speed_multiplier(),
+                    language="en-us",
+                )
+
+                generated_audio_path = self.tts_manager.synthesize_to_file(request)
+                if generated_audio_path is not None:
+                    self._play_generated_tts(str(generated_audio_path))
+
                 if original_text is not None:
                     self.text_ready_signal.emit(original_text)
+
             except Exception as error:
-                logging.exception("Edge TTS generation failed: %s", error)
+                logging.exception("TTS generation failed: %s", error)
                 if original_text is not None:
                     self.text_ready_signal.emit(original_text)
 
-        threading.Thread(target=run_async, daemon=True).start()
+        threading.Thread(target=run_tts, daemon=True).start()
+        
+    def _tts_rate_to_speed_multiplier(self) -> float:
+        """
+        Converts the narrator rate slider into a generic speed multiplier.
+
+        Returns:
+            Speed multiplier where 1.0 is normal speed.
+        """
+
+        try:
+            # Existing slider behavior was 5 percent per step.
+            speed = 1.0 + (float(self.tts_rate) * 0.05)
+            return max(0.25, min(2.0, speed))
+        except (TypeError, ValueError) as error:
+            logging.exception("Invalid TTS rate value %r: %s", self.tts_rate, error)
+            return 1.0
 
     def _play_generated_tts(self, filepath: str) -> None:
         """Plays a generated TTS audio file on the reserved narrator channel."""
@@ -3050,8 +3126,27 @@ class StoryPanel(QWidget):
         self.narrator_enabled = original_state
 
     def set_voice_by_name(self, voice_id: str) -> None:
-        """Sets the Edge TTS voice identifier."""
-        self.tts_voice = voice_id
+        """
+        Sets the narrator voice identifier.
+
+        Args:
+            voice_id: Engine-specific voice identifier.
+        """
+
+        requested_voice = str(voice_id or "").strip()
+        available_voice_ids = set(self.get_available_tts_voices().values())
+
+        if available_voice_ids and requested_voice not in available_voice_ids:
+            replacement_voice = self._get_default_tts_voice()
+            logging.warning(
+                "Ignored invalid narrator voice %r for active TTS engine. Using %r.",
+                requested_voice,
+                replacement_voice,
+            )
+            self.tts_voice = replacement_voice
+            return
+
+        self.tts_voice = requested_voice or self._get_default_tts_voice()
 
     def set_music_volume(self, val: int) -> None:
         """Updates music volume and notifies listeners."""

@@ -54,16 +54,29 @@ class AppSettings(BaseSettings):
         default=None,
         validation_alias="AI_ADVENTURE_DATA_DIR",
     )
+    
+    tts_engine: str = Field(
+        default="kokoro_onnx",
+        validation_alias="AI_ADVENTURE_TTS_ENGINE",
+        min_length=1,
+    )
 
-    @field_validator("sounds_source_directory", "app_data_directory", mode="before")
+    tts_model_directory: Path | None = Field(
+        default=None,
+        validation_alias="AI_ADVENTURE_TTS_MODEL_DIR",
+    )
+
+    @field_validator("sounds_source_directory", "app_data_directory", "tts_model_directory", mode="before")
     @classmethod
     def _normalize_optional_path(cls, value: object) -> Path | None:
         """
         Converts blank optional path values to None and expands user paths.
 
-        This lets the .env file contain:
-            AI_ADVENTURE_DATA_DIR=
-        without accidentally treating it as the current directory.
+        Args:
+            value: Raw path-like setting value.
+
+        Returns:
+            A normalized Path, or None when the setting is blank.
         """
         if value is None:
             return None
@@ -129,6 +142,89 @@ class Configuration:
                 return Path(app_data_path)
 
         return Path.home() / ".local" / "share"
+    
+    @cached_property
+    def tts_models_directory(self) -> Path:
+        """
+        Returns the directory containing local TTS model folders.
+
+        The expected final Kokoro layout is:
+            <tts_models_directory>/kokoro/kokoro-v1.0.onnx
+            <tts_models_directory>/kokoro/voices-v1.0.bin
+
+        Returns:
+            Path to the active TTS models directory.
+        """
+
+        configured_directory = self.settings.tts_model_directory
+
+        if configured_directory is not None:
+            return self._normalize_tts_models_directory(configured_directory)
+
+        bundled_tts_directory = self._resource_path("models/tts")
+        if bundled_tts_directory.exists() and bundled_tts_directory.is_dir():
+            return bundled_tts_directory
+
+        return self.base_directory / self.settings.app_name / "models" / "tts"
+
+
+    def _normalize_tts_models_directory(self, raw_path: str | Path) -> Path:
+        """
+        Normalizes AI_ADVENTURE_TTS_MODEL_DIR into the expected parent directory.
+
+        Args:
+            raw_path: User-configured path from the environment.
+
+        Returns:
+            The parent directory that should contain the 'kokoro' folder.
+        """
+
+        candidate = Path(raw_path).expanduser()
+
+        if candidate.is_file():
+            logging.warning(
+                "AI_ADVENTURE_TTS_MODEL_DIR points to a file, not the models directory: %s",
+                candidate,
+            )
+
+            if candidate.parent.name.lower() == "kokoro":
+                return candidate.parent.parent
+
+            return candidate.parent
+
+        if candidate.name.lower() == "kokoro":
+            logging.warning(
+                "AI_ADVENTURE_TTS_MODEL_DIR points to the kokoro folder. "
+                "Using its parent directory instead: %s",
+                candidate.parent,
+            )
+            return candidate.parent
+
+        return candidate
+
+
+    @cached_property
+    def kokoro_model_path(self) -> Path:
+        """
+        Returns the expected Kokoro ONNX model file path.
+
+        Returns:
+            Path to kokoro-v1.0.onnx.
+        """
+
+        return self.tts_models_directory / "kokoro" / "kokoro-v1.0.onnx"
+
+
+    @cached_property
+    def kokoro_voices_path(self) -> Path:
+        """
+        Returns the expected Kokoro voices file path.
+
+        Returns:
+            Path to voices-v1.0.bin.
+        """
+
+        return self.tts_models_directory / "kokoro" / "voices-v1.0.bin"
 
     @cached_property
     def saves_directory(self) -> Path:
@@ -198,7 +294,7 @@ class Configuration:
     def _initialize_directories(self) -> None:
         """Creates required app directories if they do not already exist."""
 
-        for directory in (self.saves_directory, self.sounds_directory):
+        for directory in (self.saves_directory, self.sounds_directory, self.tts_models_directory):
             try:
                 directory.mkdir(parents=True, exist_ok=True)
             except Exception as error:
@@ -253,3 +349,8 @@ BASE_SOUNDS_DIR: Final[Path] = configuration.base_sounds_directory
 DEFAULT_RULES: Final[str] = configuration.default_rules
 CREATIVE_IDEAS: Final[str] = configuration.creative_ideas
 VALID_SOUND_FILE_NAMES: Final[list[str]] = configuration.get_valid_sound_file_names()
+
+TTS_ENGINE: Final[str] = configuration.settings.tts_engine
+TTS_MODELS_DIR: Final[Path] = configuration.tts_models_directory
+KOKORO_MODEL_PATH: Final[Path] = configuration.kokoro_model_path
+KOKORO_VOICES_PATH: Final[Path] = configuration.kokoro_voices_path

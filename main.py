@@ -16,6 +16,7 @@ from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt, QThread
 from queue import Queue
 from pathlib import Path
 from creative_sampler import MarkdownCreativeIdeaBank
+from tts_manager import create_tts_manager
 
 class _UiDispatcher(QObject):
     run_now = Signal(object)          # callable
@@ -177,6 +178,7 @@ class QtAppContext:
 
         self.player = Player()
         self.sound_manager = SoundManager(str(self.configuration.base_sounds_directory))
+        self.tts_manager = create_tts_manager(self.configuration) # type: ignore
         
         self.pending_adventure_final_path: Path | None = None
         self.pending_adventure_staging_path: Path | None = None
@@ -192,6 +194,11 @@ class QtAppContext:
             else: logging.exception("NO QUESTS PANEL UI.")
         except Exception as e:
             logging.exception(f"CRITICAL ERROR WHILE LOADING: {e}")
+            
+        try:
+            self.win.story_panel.set_tts_manager(self.tts_manager)
+        except Exception as error:
+            logging.exception("Failed to bind TTS manager to StoryPanel: %s", error)
 
         self.notebook_widgets = {
                 "Inventory": QtPanelAdapter(win.inventory_panel, self.ui),

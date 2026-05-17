@@ -1500,7 +1500,7 @@ Rules:
 - If the player says they cast a spell, narrate the result normally, and trust the player to mark the slot as used in the Spellcasting panel.
 - If the Player asks to cast a spell that is not listed in your context data, you may ask for clarification out-of-game.
 - If the Player asks to cast a spell, but spellcasting is disabled for the World, you may tell the Player that out-of-game and explain to them how to fix it.
-- When giving the Player a spell that they can learn, be sure to tell the Player the spell's Name, Level, School, and Description.
+- When giving the Player a spell that they can learn, be sure to use the [[SPELL:]] tag properly, following the rules outlined earlier.
 
 ---
 
