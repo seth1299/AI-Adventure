@@ -1352,6 +1352,147 @@ class TagParser:
         }
     )
     
+    _UNREVEALED_NAME_PHRASE_PATTERNS: ClassVar[tuple[str, ...]] = (
+        r"\s*,?\s+(?:named|called|known as|going by)\s+{name}\b",
+        r"\s*,?\s+whose name is\s+{name}\b",
+        r"\s*,?\s+who introduces (?:himself|herself|themself|themselves) as\s+{name}\b",
+    )
+    
+    def _replace_internal_base_unit_language(self, text: str) -> str:
+        """
+        Replaces leaked internal 'base unit' wording with the world's actual base currency name.
+
+        Args:
+            text: AI response text.
+
+        Returns:
+            Text with player-facing currency wording.
+        """
+        if not text:
+            return ""
+
+        player = getattr(self.app, "player", None)
+        if player is None or not hasattr(player, "get_base_currency_name"):
+            logging.warning("Could not replace base-unit wording because Player currency helper is unavailable.")
+            return text
+
+        singular_name = player.get_base_currency_name(1)
+        plural_name = player.get_base_currency_name(2)
+
+        cleaned_text = re.sub(
+            r"\b1\s+base unit\b",
+            f"1 {singular_name}",
+            text,
+            flags=re.IGNORECASE,
+        )
+        cleaned_text = re.sub(
+            r"\bone\s+base unit\b",
+            f"one {singular_name}",
+            cleaned_text,
+            flags=re.IGNORECASE,
+        )
+        cleaned_text = re.sub(
+            r"\bbase units\b",
+            plural_name,
+            cleaned_text,
+            flags=re.IGNORECASE,
+        )
+        cleaned_text = re.sub(
+            r"\bbase unit\b",
+            singular_name,
+            cleaned_text,
+            flags=re.IGNORECASE,
+        )
+
+        return cleaned_text
+    
+    def _cleanup_repaired_lore_text(self, lore_text: str) -> str:
+        """
+        Cleans punctuation and spacing after removing unsafe hidden-name clauses.
+
+        Args:
+            lore_text: Lore text after redaction.
+
+        Returns:
+            Cleaned lore text.
+        """
+        repaired_text = str(lore_text or "").strip()
+
+        repaired_text = re.sub(r"\s+([.,;:])", r"\1", repaired_text)
+        repaired_text = re.sub(r"\s{2,}", " ", repaired_text)
+        repaired_text = re.sub(r"\s+\.", ".", repaired_text)
+        repaired_text = re.sub(r",\s*\.", ".", repaired_text)
+
+        return repaired_text.strip()
+
+
+    def _repair_update_world_lore(
+        self,
+        lore_text: str,
+        unrevealed_names: list[str],
+        *,
+        visible_narrative_text: str,
+        existing_world_text: str,
+    ) -> str:
+        """
+        Attempts to salvage an UPDATE_WORLD tag by removing only unsafe hidden-name clauses.
+
+        Example:
+            "The library is managed by a librarian named Orrin."
+            becomes:
+            "The library is managed by a librarian."
+
+        Args:
+            lore_text: Original UPDATE_WORLD text.
+            unrevealed_names: Proper nouns that were not visible to the player.
+            visible_narrative_text: Player-facing narration for this response.
+            existing_world_text: Current World panel contents.
+
+        Returns:
+            Repaired lore text, or an empty string if the update is still unsafe.
+        """
+        repaired_lore = str(lore_text or "").strip()
+
+        if not repaired_lore or not unrevealed_names:
+            return ""
+
+        for name in sorted(unrevealed_names, key=len, reverse=True):
+            escaped_name = re.escape(name)
+
+            for pattern_template in self._UNREVEALED_NAME_PHRASE_PATTERNS:
+                repaired_lore = re.sub(
+                    pattern_template.format(name=escaped_name),
+                    "",
+                    repaired_lore,
+                    flags=re.IGNORECASE,
+                )
+
+        repaired_lore = self._cleanup_repaired_lore_text(repaired_lore)
+
+        if not repaired_lore or repaired_lore == lore_text.strip():
+            return ""
+
+        # Re-run the same safety check. If anything suspicious remains, reject it.
+        remaining_unrevealed_names = self._find_unrevealed_proper_nouns(
+            repaired_lore,
+            visible_narrative_text=visible_narrative_text,
+            existing_world_text=existing_world_text,
+        )
+
+        if remaining_unrevealed_names:
+            logging.warning(
+                "Repaired UPDATE_WORLD still contains unrevealed proper noun(s): %s. Lore: %r",
+                ", ".join(remaining_unrevealed_names),
+                repaired_lore,
+            )
+            return ""
+
+        if len(repaired_lore) < 20:
+            logging.warning("Repaired UPDATE_WORLD became too short to be useful: %r", repaired_lore)
+            return ""
+
+        return repaired_lore
+    
     def _get_calendar_ignored_update_world_names(self) -> set[str]:
         """
         Returns calendar-specific proper nouns that should not be treated as hidden NPC names.
@@ -1483,6 +1624,22 @@ class TagParser:
         )
 
         if unrevealed_names:
+            repaired_lore = self._repair_update_world_lore(
+                clean_lore,
+                unrevealed_names,
+                visible_narrative_text=visible_narrative_text,
+                existing_world_text=existing_world_text,
+            )
+
+            if repaired_lore:
+                logging.warning(
+                    "Repaired UPDATE_WORLD by removing unrevealed proper noun(s): %s. Original: %r Repaired: %r",
+                    ", ".join(unrevealed_names),
+                    clean_lore,
+                    repaired_lore,
+                )
+                return repaired_lore
+
             logging.warning(
                 "Skipped UPDATE_WORLD because it appears to contain unrevealed proper noun(s): %s. Lore: %r",
                 ", ".join(unrevealed_names),
@@ -2000,5 +2157,6 @@ class TagParser:
         # Find all instances of [[DISPLAY_CURRENCY: X]] and swap them
         modified_text = re.sub(r"\[\[DISPLAY_CURRENCY:\s*(-?\d+)\]\]", replace_currency, ai_text)
         modified_text = re.sub(r"\[\[MERCHANT:\s*(.*?)\]\]", replace_merchant, modified_text, flags=re.DOTALL)
+        modified_text = self._replace_internal_base_unit_language(modified_text)
         
         return modified_text

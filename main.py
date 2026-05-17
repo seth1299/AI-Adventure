@@ -459,7 +459,12 @@ class QtAppContext:
         else:
             sounds_names = "No sounds defined yet."
 
+        base_currency_name = self.player.get_base_currency_name(1)
+        base_currency_plural_name = self.player.get_base_currency_name(2)
+
         formatted_rules = formatted_rules.replace("{DYNAMIC_CURRENCIES}", currency_names)
+        formatted_rules = formatted_rules.replace("{BASE_CURRENCY_NAME}", base_currency_name)
+        formatted_rules = formatted_rules.replace("{BASE_CURRENCY_PLURAL_NAME}", base_currency_plural_name)
         formatted_rules = formatted_rules.replace("{DYNAMIC_STATS}", stats_names)
         formatted_rules = formatted_rules.replace("{VALID_SOUND_FILE_NAMES}", sounds_names)
 

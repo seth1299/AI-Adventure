@@ -22,6 +22,46 @@ class Player:
         self.temperature = 76
         self.quests = []
         # Dictionary to track equipped items by slot
+        
+    def get_base_currency_name(self, amount: int = 1) -> str:
+        """
+        Returns the world's base currency name, pluralized for the provided amount.
+
+        Args:
+            amount: Amount used to decide singular vs plural.
+
+        Returns:
+            The formatted base currency name.
+        """
+        base_currency = None
+
+        for currency in self.world_currencies:
+            if not isinstance(currency, dict):
+                continue
+
+            try:
+                value = int(currency.get("value", 1))
+            except (TypeError, ValueError):
+                logging.exception("Invalid currency value while resolving base currency: %r", currency)
+                continue
+
+            if value == 1:
+                base_currency = currency
+                break
+
+        if base_currency is None:
+            logging.warning("No value-1 base currency found. Falling back to Base Unit.")
+            base_name = "Base Unit"
+        else:
+            base_name = str(base_currency.get("name", "Base Unit") or "Base Unit").strip()
+
+        try:
+            clean_amount = abs(int(amount))
+        except (TypeError, ValueError):
+            logging.exception("Invalid amount while formatting base currency name: %r", amount)
+            clean_amount = 1
+
+        return self._pluralize_currency(base_name, clean_amount)
 
     def load_from_dict(self, data):
         """Loads state from the Status dictionary in savegame.json."""

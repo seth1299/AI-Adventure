@@ -428,17 +428,11 @@ Changes the player's wealth by adding or subtracting a single integer amount of 
 
 ## Rules
 
-- Use this tag for all money, coin, currency, wealth, payments, rewards, purchases, fees, bribes, wages, and treasure.
-- `BaseUnitAmount` must be one integer.
-- Positive numbers add wealth.
-- Negative numbers remove wealth.
-- The number is always measured in the world's smallest/base currency unit.
-- Do not include coin names inside this tag.
-- Do not split one transaction into multiple currency tags.
-- Only use a negative amount if the player has clearly agreed to the purchase, payment, bribe, fee, or trade.
-- Do not charge the player for a purchase that was only offered, discussed, inspected, or negotiated.
-- Do not retroactively output this tag for money gained or spent in a previous turn.
-- Valid currencies for this world are: `{DYNAMIC_CURRENCIES}`.
+- `BaseUnitAmount` is an internal integer measured in the world's smallest currency unit.
+- The current smallest/base currency is `{BASE_CURRENCY_NAME}`.
+- In narration, dialogue, options, merchant offers, quest rewards, fees, and summaries, never say "base unit" or "base units."
+- For player-facing money amounts, either use the actual currency name or use `[[DISPLAY_CURRENCY: Amount]]`.
+- Example: if the fee is 10 base currency units, write `[[DISPLAY_CURRENCY: 10]]`, not "10 base units."
 
 ## Examples
 
@@ -1074,6 +1068,7 @@ Adds factual world knowledge to the World panel.
 - Do not include hidden secrets the player has not learned. Use `[[SECRET: ...]]` for GM-only information.
 - Avoid time-relative wording such as `tonight`, `tomorrow`, `yesterday`, or `earlier today`.
 - Write durable facts that still make sense later.
+- If a useful `[[UPDATE_WORLD: ...]]` fact contains both player-known information and unrevealed hidden information, split it. Put only the player-known part in `[[UPDATE_WORLD: ...]]`, and put hidden details in `[[SECRET: ...]]`. Do not abandon the visible part of the update just because one detail is hidden.
 
 ## Examples
 
