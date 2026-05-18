@@ -190,21 +190,37 @@ Final Comments/Rules: {data['final_comments'] or 'N/A'}
 
 CRITICAL FINAL INSTRUCTIONS:
 Output the following tags to set up the starting gameplay state:
-[[WORLD_PROFILE: 
-### World Setting
+[[WORLD_PROFILE:
+# World
+
+## World Overview
 
 - **Genre:** (Filled value)
-
 - **Setting:** (Filled value)
-
 - **Technology Level:** (Filled value)
-
 - **Species:** (Filled value)
-
 - **Focus:** (Filled value)
 
-\n **Description:** (Filled value; this must be at most six paragraphs, but it should include the basics of the world, including as much detail as possible from the user's input, if there was any input. In general, the Description of the World should include at the very least, the World's basic societal structure, main religions/pantheons, basic geography/topography, important locations, important NPCs, important factions or politics, interspecies relations [if any], descriptions of races/species [if any that are non-human], and anything else that you think would be important if you were writing a story based on this world.)
-]] (You must output this tag. Output the exact Markdown formatting shown inside this tag, replacing the "(Filled value)" text with creative and/or logical values based off of the \"Provided World Information\" section above, remembering to ONLY change the information if it is \"Unknown\".).
+(Filled description, at most six paragraphs.)
+
+## NPCs
+
+## Locations
+
+## Factions and Organizations
+
+## History
+
+## Culture, Customs, and Laws
+
+## Economy
+
+## Magic and Religion
+
+## Rumors and Unconfirmed Information
+
+## Uncategorized
+]]
 
 [[CHARACTER_PROFILE: 
 ### Character Biography
@@ -1367,7 +1383,11 @@ class TagParser:
         visible_narrative_text: str,
     ) -> None:
         """
-        Processes [[UPSERT_WORLD: Anchor | Replacement Lore]] tags.
+        Processes [[UPSERT_WORLD: Section | Anchor | Replacement Lore]] tags.
+
+        Backward compatibility:
+            [[UPSERT_WORLD: Anchor | Replacement Lore]]
+            falls back to the Uncategorized section.
 
         Args:
             ai_text: Raw AI response text containing functional tags.
@@ -1379,12 +1399,19 @@ class TagParser:
 
         for match in re.finditer(r"\[\[UPSERT_WORLD:\s*(.*?)\]\]", ai_text, re.DOTALL):
             raw_args = str(match.group(1) or "").strip()
+            parts = [part.strip() for part in raw_args.split("|")]
 
-            if "|" not in raw_args:
+            if len(parts) >= 3:
+                section_name = parts[0]
+                anchor = parts[1]
+                replacement_lore = "|".join(parts[2:]).strip()
+            elif len(parts) == 2:
+                section_name = "Uncategorized"
+                anchor = parts[0]
+                replacement_lore = parts[1]
+            else:
                 logging.warning("Malformed UPSERT_WORLD tag ignored: %r", match.group(0))
                 continue
-
-            anchor, replacement_lore = [part.strip() for part in raw_args.split("|", 1)]
 
             if not anchor or not replacement_lore:
                 logging.warning("Malformed UPSERT_WORLD tag ignored: %r", match.group(0))
@@ -1411,6 +1438,7 @@ class TagParser:
                 updated_world_text = self.world_lore_updater.upsert(
                     current_world_text,
                     WorldUpsertRequest(
+                        section_name=section_name,
                         anchor=anchor,
                         replacement_lore=safe_replacement_lore,
                     ),
@@ -1787,10 +1815,13 @@ class TagParser:
         # --- Initial World and Character Profile Generation ---
         for match in re.finditer(r"\[\[WORLD_PROFILE:\s*(.*?)\]\]", ai_text, re.DOTALL):
             new_world_md = match.group(1).strip()
+
             if "World" in self.app.notebook_widgets:
                 world_panel = self.app.notebook_widgets["World"]
-                world_panel.set_text(new_world_md)
-                # Instantly write the properly formatted Markdown file to disk
+
+                normalized_world_md = self.world_lore_updater.ensure_world_sections(new_world_md)
+
+                world_panel.set_text(normalized_world_md)
                 self.app.after(0, lambda p=world_panel: p.save_now())
 
         for match in re.finditer(r"\[\[CHARACTER_PROFILE:\s*(.*?)\]\]", ai_text, re.DOTALL):
@@ -1989,7 +2020,18 @@ class TagParser:
         )
                     
         for match in re.finditer(r"\[\[UPDATE_WORLD:\s*(.*?)\]\]", ai_text, re.DOTALL):
-            new_world_lore = match.group(1).strip()
+            raw_args = str(match.group(1) or "").strip()
+
+            if not raw_args:
+                continue
+
+            parts = [part.strip() for part in raw_args.split("|", 1)]
+
+            if len(parts) == 2:
+                section_name, new_world_lore = parts
+            else:
+                section_name = "Uncategorized"
+                new_world_lore = parts[0]
 
             if not new_world_lore:
                 continue
@@ -2011,7 +2053,14 @@ class TagParser:
                 if not safe_world_lore:
                     continue
 
-                updated_world_text = f"{current_world_text}\n\n{safe_world_lore}\n"
+                updated_world_text = self.world_lore_updater.append_to_section(
+                    current_world_text,
+                    section_name,
+                    safe_world_lore,
+                )
+
+                if updated_world_text is None:
+                    continue
 
                 world_panel.set_text(updated_world_text)
                 world_panel.save_now()
@@ -2244,6 +2293,7 @@ class WorldUpsertRequest:
         replacement_lore: Full replacement lore line or paragraph.
     """
 
+    section_name: str
     anchor: str
     replacement_lore: str
 
@@ -2259,6 +2309,58 @@ class WorldLoreUpdater:
 
     MAX_ANCHOR_LENGTH: ClassVar[int] = 80
     MAX_REPLACEMENT_LENGTH: ClassVar[int] = 900
+    
+    WORLD_SECTIONS: ClassVar[tuple[str, ...]] = (
+        "World Overview",
+        "NPCs",
+        "Locations",
+        "Factions and Organizations",
+        "History",
+        "Culture, Customs, and Laws",
+        "Economy",
+        "Magic and Religion",
+        "Rumors and Unconfirmed Information",
+        "Uncategorized",
+    )
+
+    SECTION_ALIASES: ClassVar[dict[str, str]] = {
+        "overview": "World Overview",
+        "world": "World Overview",
+        "world overview": "World Overview",
+        "npc": "NPCs",
+        "npcs": "NPCs",
+        "people": "NPCs",
+        "person": "NPCs",
+        "character": "NPCs",
+        "characters": "NPCs",
+        "location": "Locations",
+        "locations": "Locations",
+        "place": "Locations",
+        "places": "Locations",
+        "shop": "Locations",
+        "shops": "Locations",
+        "faction": "Factions and Organizations",
+        "factions": "Factions and Organizations",
+        "organization": "Factions and Organizations",
+        "organizations": "Factions and Organizations",
+        "guild": "Factions and Organizations",
+        "guilds": "Factions and Organizations",
+        "history": "History",
+        "historical lore": "History",
+        "culture": "Culture, Customs, and Laws",
+        "customs": "Culture, Customs, and Laws",
+        "laws": "Culture, Customs, and Laws",
+        "economy": "Economy",
+        "currency": "Economy",
+        "trade": "Economy",
+        "magic": "Magic and Religion",
+        "religion": "Magic and Religion",
+        "pantheon": "Magic and Religion",
+        "rumor": "Rumors and Unconfirmed Information",
+        "rumors": "Rumors and Unconfirmed Information",
+        "unconfirmed": "Rumors and Unconfirmed Information",
+        "uncategorized": "Uncategorized",
+    }
 
     _NESTED_TAG_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"\[\[.*?\]\]",
@@ -2273,6 +2375,176 @@ class WorldLoreUpdater:
         r"[*_`#>\[\]()]"
     )
 
+    def normalize_section_name(self, section_name: str | None) -> str:
+        """
+        Resolves an AI-provided section name to a canonical World.md section.
+
+        Args:
+            section_name: Raw section name from a world tag.
+
+        Returns:
+            Canonical section name, falling back to 'Uncategorized'.
+        """
+        clean_section = str(section_name or "").strip()
+        if not clean_section:
+            logging.warning("Blank World section received. Falling back to Uncategorized.")
+            return "Uncategorized"
+
+        normalized_key = re.sub(r"\s+", " ", clean_section).casefold().strip()
+        canonical_section = self.SECTION_ALIASES.get(normalized_key)
+
+        if canonical_section:
+            return canonical_section
+
+        for section in self.WORLD_SECTIONS:
+            if section.casefold() == normalized_key:
+                return section
+
+        logging.warning("Unknown World section %r. Falling back to Uncategorized.", section_name)
+        return "Uncategorized"
+    
+    def migrate_legacy_world_text(self, world_text: str | None) -> str:
+        """
+        Wraps old unsectioned World.md text into World Overview, then ensures sections.
+
+        Args:
+            world_text: Existing World.md text.
+
+        Returns:
+            Sectioned World.md text.
+        """
+        text = str(world_text or "").strip()
+
+        if not text:
+            return self.ensure_world_sections("# World")
+
+        has_level_two_section = re.search(r"(?m)^##\s+", text) is not None
+        if has_level_two_section:
+            return self.ensure_world_sections(text)
+
+        text = re.sub(r"(?im)^#\s+World\s*$", "", text).strip()
+
+        migrated_text = (
+            "# World\n\n"
+            "## World Overview\n\n"
+            f"{text}\n"
+        )
+
+        return self.ensure_world_sections(migrated_text)
+
+    def ensure_world_sections(self, world_text: str | None) -> str:
+        """
+        Ensures World.md has a top-level title and every expected section.
+
+        Args:
+            world_text: Current World.md text.
+
+        Returns:
+            Markdown text containing all expected sections.
+        """
+        text = str(world_text or "").strip()
+
+        if not text:
+            text = "# World"
+
+        if not re.search(r"(?im)^#\s+World\s*$", text):
+            text = f"# World\n\n{text}"
+
+        for section in self.WORLD_SECTIONS:
+            section_pattern = re.compile(
+                rf"(?im)^##\s+{re.escape(section)}\s*$"
+            )
+
+            if section_pattern.search(text) is None:
+                text = f"{text.rstrip()}\n\n## {section}\n"
+
+        return text.rstrip() + "\n"
+
+
+    def append_to_section(
+        self,
+        world_text: str | None,
+        section_name: str | None,
+        lore_text: str | None,
+    ) -> str | None:
+        """
+        Appends lore under a canonical World.md section.
+
+        Args:
+            world_text: Current World.md text.
+            section_name: Target section from the tag.
+            lore_text: Player-known lore to append.
+
+        Returns:
+            Updated World.md text, or None if lore is blank.
+        """
+        clean_lore = self._clean_replacement_lore(lore_text)
+        if not clean_lore:
+            logging.warning("Rejected UPDATE_WORLD because lore was blank or invalid.")
+            return None
+
+        canonical_section = self.normalize_section_name(section_name)
+        text = self.migrate_legacy_world_text(world_text)
+
+        entry = clean_lore
+        if not re.match(r"^\s*(?:[-*+]\s+|\d+\.\s+)", entry):
+            entry = f"- {entry}"
+
+        return self._insert_entry_under_section(text, canonical_section, entry)
+
+
+    def _insert_entry_under_section(
+        self,
+        world_text: str,
+        section_name: str,
+        entry_text: str,
+    ) -> str:
+        """
+        Inserts a single entry beneath a level-2 Markdown heading.
+
+        Args:
+            world_text: Normalized World.md text.
+            section_name: Canonical section name.
+            entry_text: Lore entry to insert.
+
+        Returns:
+            Updated World.md text.
+        """
+        section_pattern = re.compile(
+            rf"(?im)^##\s+{re.escape(section_name)}\s*$"
+        )
+
+        section_match = section_pattern.search(world_text)
+        if section_match is None:
+            logging.warning(
+                "Section %r missing after section normalization. Appending to Uncategorized.",
+                section_name,
+            )
+            return self._insert_entry_under_section(
+                self.ensure_world_sections(world_text),
+                "Uncategorized",
+                entry_text,
+            )
+
+        next_section_match = re.search(
+            r"(?m)^##\s+",
+            world_text[section_match.end():],
+        )
+
+        insert_index = (
+            section_match.end() + next_section_match.start()
+            if next_section_match is not None
+            else len(world_text)
+        )
+
+        before = world_text[:insert_index].rstrip()
+        after = world_text[insert_index:].lstrip()
+
+        if after:
+            return f"{before}\n\n{entry_text.rstrip()}\n\n{after}".rstrip() + "\n"
+
+        return f"{before}\n\n{entry_text.rstrip()}\n"
+    
     def upsert(self, world_text: str | None, request: WorldUpsertRequest | None) -> str | None:
         """
         Applies a validated lore upsert to World.md text.
@@ -2290,6 +2562,7 @@ class WorldLoreUpdater:
 
         anchor = self._clean_anchor(request.anchor)
         replacement_lore = self._clean_replacement_lore(request.replacement_lore)
+        canonical_section = self.normalize_section_name(request.section_name)
 
         if not anchor or not replacement_lore:
             logging.warning(
@@ -2304,13 +2577,14 @@ class WorldLoreUpdater:
             logging.warning("Rejected UPSERT_WORLD because anchor normalized to blank: %r", anchor)
             return None
 
-        current_text = str(world_text or "").rstrip()
+        current_text = self.ensure_world_sections(world_text)
         lines = current_text.splitlines()
 
         match_index = self._find_matching_line_index(lines, anchor_key)
 
         if match_index is None:
-            return self._append_lore(current_text, replacement_lore)
+            logging.info("UPSERT_WORLD found no existing entry; appending lore under %s.", canonical_section)
+            return self.append_to_section(current_text, canonical_section, replacement_lore)
 
         old_line = lines[match_index]
         replacement_line = self._preserve_list_prefix(old_line, replacement_lore)

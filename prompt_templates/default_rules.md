@@ -1049,89 +1049,83 @@ Successful experiment:
 
 ---
 
-# 25. Tag: `[[UPDATE_WORLD: Text To Add]]`
+# 25. Tag: `[[UPDATE_WORLD: Section | Text To Add]]`
 
 ## Purpose
 
-Adds factual world knowledge to the World panel.
+Adds factual player-known world knowledge to the World panel under the correct section.
 
 ## Format
 
 ```text
-[[UPDATE_WORLD: Text To Add]]
+[[UPDATE_WORLD: Section | Text To Add]]
 ```
+
+### Allowed Sections
+
+- World Overview
+- NPCs
+- Locations
+- Factions and Organizations
+- History
+- Culture, Customs, and Laws
+- Economy
+- Magic and Religion
+- Rumors and Unconfirmed Information
+- Uncategorized
 
 ## Rules
 
-- Use this when the player discovers a new named NPC, location, faction, shop, landmark, custom, piece of lore, historical fact, or other significant world information.
+- Use this tag when the player discovers a new named NPC, location, faction, shop, landmark, custom, piece of lore, historical fact, or other significant world information.
 - The text should be concise, factual, and encyclopedia-like.
-- Do not include hidden secrets the player has not learned. Use `[[SECRET: ...]]` for GM-only information.
-- Avoid time-relative wording such as `tonight`, `tomorrow`, `yesterday`, or `earlier today`.
+- Prefer this entry style: Entity Name: Durable fact.
+- Do not include hidden secrets the player has not learned. Use [[SECRET: ...]] for GM-only information.
+- Avoid time-relative wording such as tonight, tomorrow, yesterday, earlier today, or currently.
 - Write durable facts that still make sense later.
-- If a useful `[[UPDATE_WORLD: ...]]` fact contains both player-known information and unrevealed hidden information, split it. Put only the player-known part in `[[UPDATE_WORLD: ...]]`, and put hidden details in `[[SECRET: ...]]`. Do not abandon the visible part of the update just because one detail is hidden.
+- If the section is unclear, use Uncategorized.
 
 ## Examples
 
-New shop discovered:
-
 ```text
-[[UPDATE_WORLD: The Cleft and Mallet: A carpentry shop in the Kaltos market run by a woodworker named Soran.]]
+[[UPDATE_WORLD: NPCs | Soran: A woodworker who runs The Cleft and Mallet in the Kaltos market.]]
 ```
 
-New faction discovered:
-
 ```text
-[[UPDATE_WORLD: The Ember Compact: A merchant league that controls much of the river traffic through Veyr's eastern canal district.]]
+[[UPDATE_WORLD: Factions and Organizations | The Ember Compact: A merchant league that controls much of the river traffic through Veyr's eastern canal district.]]
 ```
-
-## Do Not Use
-
-```text
-[[UPDATE_WORLD: Tomorrow, Soran will betray the player.]]
-```
-
-Use `[[SECRET: ...]]` for hidden future plans.
 
 ---
 
-# 25.5 Tag: `[[UPSERT_WORLD: Anchor | Replacement Lore]]`
+# 25.5 Tag: `[[UPSERT_WORLD: Section | Anchor | Replacement Lore]]`
 
 ## Purpose
 
-Updates one existing World panel entry when newly discovered information changes or clarifies what the player reasonably believes about that entity. If no matching entry exists, the engine may append the replacement as a new World entry.
+Updates one existing World panel entry under the correct section.
 
 ## Format
 
 ```text
-[[UPSERT_WORLD: Anchor | Replacement Lore]]
+[[UPSERT_WORLD: Section | Anchor | Replacement Lore]]
 ```
 
 ## Rules
 
-- Use this when a known NPC, location, faction, shop, landmark, custom, or world fact needs to be corrected, clarified, or updated based on what the player learned in the current turn.
+- Use this tag when a known NPC, location, faction, shop, landmark, custom, or world fact needs to be corrected, clarified, or updated based on what the player learned in the current turn.
+- Section must be one of the allowed World sections.
 - Anchor must be the plain entity key to find, usually the name before the colon in the existing World entry.
 - Replacement Lore must be the full updated encyclopedia-style entry.
-- Do not include hidden secrets the player has not learned. Use [[SECRET: ...]] for GM-only information.
-- Do not use this for minor temporary changes, guesses, rumors, or facts that may become outdated immediately.
-- Avoid time-relative wording such as tonight, tomorrow, yesterday, earlier today, or currently.
 - Do not pair [[UPSERT_WORLD: ...]] with [[UPDATE_WORLD: ...]] for the same fact in the same response.
-- Use [[SECRET: ...]] unless the player has actually discovered that fact.
+- Do not include hidden secrets the player has not learned. Use [[SECRET: ...]] for GM-only information.
 
 ## Examples
 
-### Good Examples
+```text
+[[UPSERT_WORLD: NPCs | Bob | Bob: Previously regarded as a trusted senior member of the police force, but now under suspicion for the dockside ledger theft.]]
+```
 
-* A trusted officer becomes a suspect:
-
-[[UPSERT_WORLD: Bob | Bob: Previously regarded as a trusted senior member of the police force, but now under suspicion for the dockside ledger theft.]]
-
-* A shop is renamed after the player learns its proper name:
-
-[[UPSERT_WORLD: Market apothecary | The Glass Mortar: A market apothecary known for fever tonics, tinctures, and discreet back-room consultations.]]
-
-### Bad Example
-
-[[UPSERT_WORLD: Bob | Bob is secretly the murderer.]]
+```text
+[[UPSERT_WORLD: Locations | Market apothecary | The Glass Mortar: A market apothecary known for fever tonics, tinctures, and discreet back-room consultations.]]
+```
 
 ---
 
