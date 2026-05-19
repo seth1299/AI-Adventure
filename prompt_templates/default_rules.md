@@ -1073,6 +1073,8 @@ Adds factual player-known world knowledge to the World panel under the correct s
 - Magic and Religion
 - Rumors and Unconfirmed Information
 - Uncategorized
+- Flora, Fauna, and Climate
+- Out-Of-Game Reminders
 
 == Rules ==
 
@@ -1088,6 +1090,9 @@ Adds factual player-known world knowledge to the World panel under the correct s
 - Avoid time-relative wording such as tonight, tomorrow, yesterday, earlier today, or currently.
 - Write durable facts that still make sense later.
 - If the section is unclear, use Uncategorized.
+- Before using `[[UPDATE_WORLD: ...]]`, check whether the fact belongs to an existing World entry. If the entity, creature, hazard, location, faction, NPC, spell, custom, or concept already exists in World.md, use `[[UPSERT_WORLD: ...]]` instead.
+- Do not create parenthetical sub-entries such as `Glass-Gales (Survival Tactics)`, `Mirror-Wards (Dismantling)`, or `Stone-Strider Goat (Behavior)`. Use [[UPSERT_WORLD:]] for that, adding on that information to the already-existing information for that topic (while following the rules for the [[UPSERT_WORLD:]] tag as well.) 
+- Research topics, survival tactics, warning signs, uses, weaknesses, behaviors, and other subtopics must be folded into the existing entry's lore text.
 
 == Examples ==
 
@@ -1139,8 +1144,12 @@ Updates one existing World panel entry under the correct section.
 - Replacement Lore must be the full updated encyclopedia-style entry.
 - Do not pair [[UPSERT_WORLD: ...]] with [[UPDATE_WORLD: ...]] for the same fact in the same response.
 - Do not include hidden secrets the player has not learned. Use [[SECRET: ...]] for GM-only information.
+- Anchor must exactly match the existing World.md entry key before the colon whenever possible.
+- Do not add labels, categories, parentheticals, or research subtopics to the anchor.
+- If the existing entry is `Glass-Gales: ...`, the anchor must be `Glass-Gales`, not `Glass-Gales (Survival Tactics)`.
+- Replacement Lore must keep the same entity key and incorporate the new facts into the full updated entry.
 
-== Examples ==
+== Good Examples ==
 
 ```text
 [[UPSERT_WORLD: NPCs | Bob | **Bob**: Previously regarded as a trusted senior member of the police force, but now under suspicion for the dockside ledger theft.]]
@@ -1148,6 +1157,16 @@ Updates one existing World panel entry under the correct section.
 
 ```text
 [[UPSERT_WORLD: Locations | Market apothecary | **The Glass Mortar**: A market apothecary known for fever tonics, tinctures, and discreet back-room consultations.]]
+```
+
+```text
+[[UPSERT_WORLD: Flora, Fauna, and Climate | Glass-Gales | **Glass-Gales**: Violent high-altitude storms that carry razor-sharp rime ice and can trap travelers in deep crevices. Warning signs include a sharp barometric pressure drop, sudden temperature falls, and a high-pitched 'Glass-Whistle' sound through rock formations. If caught, find deep shelter immediately, crouch low, and shield all skin with thick layers; never climb during a gale.]]
+```
+
+== Bad Examples ==
+
+```text
+[[UPDATE_WORLD: Flora, Fauna, and Climate | **Glass-Gales (Survival Tactics)**: Warning signs include...]]
 ```
 
 ---

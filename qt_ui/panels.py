@@ -7,20 +7,10 @@ formatting behavior through inheritance.
 
 from __future__ import annotations
 
-import copy
-import csv
-import logging
-import os
-import re
-import tempfile
-import textwrap
-import threading
+import copy, queue, time, csv, logging, re, tempfile, textwrap, threading, markdown, pygame, time_utils
 from pathlib import Path
 from typing import Any, ClassVar
 from tts_manager import TTSManager, TTSRequest
-import markdown
-import pygame
-import time_utils
 from file_manager import FileManager
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QFont, QTextBlockFormat, QTextCharFormat, QTextCursor
@@ -2691,6 +2681,17 @@ class StoryPanel(QWidget):
         self.tts_manager: TTSManager | None = None
         self.temp_dir = tempfile.gettempdir()
         self._unlock_queued = False
+
+        # Chunked TTS state.
+        self._tts_session_id = 0
+        self._tts_queue_active = False
+        self._tts_generation_lock = threading.Lock()
+        self._tts_file_lock = threading.Lock()
+        self._tts_state_lock = threading.Lock()
+        self._tts_generated_files: set[Path] = set()
+        self._tts_active_chunks: list[str] = []
+        self._tts_next_chunk_index_to_display = 0
+
         self.text_ready_signal.connect(self.append_text)
 
         self._tts_check_timer = QTimer(self)
@@ -2770,6 +2771,16 @@ class StoryPanel(QWidget):
     def _emit_volume(self, val: int) -> None:
         """Emits music volume as pygame's expected 0.0-1.0 value."""
         self.volume_changed.emit(val / 100.0)
+        
+    def _emit_send(self) -> None:
+        """Emits the player's submitted command."""
+        text = (self.txt_input.text() or "").strip()
+        if not text:
+            return
+        if self.narrator_enabled:
+            self.stop_tts(flush_remaining_text=True)
+        self.txt_input.clear()
+        self.send_requested.emit(text)
         
     def set_tts_manager(self, tts_manager: TTSManager | None) -> None:
         """
@@ -2979,11 +2990,11 @@ class StoryPanel(QWidget):
         """Enables/disables text controls, respecting queued TTS playback."""
         if is_enabled and not force_unlock:
             try:
-                if pygame.mixer.get_init() and pygame.mixer.Channel(1).get_busy():
+                if self._is_tts_active():
                     self._unlock_queued = True
                     return
             except Exception as error:
-                logging.error(f"Error checking TTS channel status: {error}")
+                logging.error(f"Error checking TTS status: {error}")
 
         self._unlock_queued = False
         self.txt_input.setEnabled(is_enabled)
@@ -3002,12 +3013,16 @@ class StoryPanel(QWidget):
             r"\btear off\b": "tare off",
             r"\btears off\b": "tares off",
             r"\btearing\b": "tare-ing",
+            r"\btear through\b": "tare through",
             r"\bbow and arrow\b": "boe and arrow",
             r"\btake a bow\b": "take a bough",
             r"\bwind blows\b": "winned blows",
             r"\bwind up\b": "wined up",
             r"\blead pipe\b": "led pipe",
             r"\blead the way\b": "leed the way",
+            r"\blead ingot\b": "leed ingot",
+            r"\bdense lead\b": "dense leed",
+            r"\solid lead\b": "solid leed",
         }
 
         fixed_text = text
@@ -3018,35 +3033,135 @@ class StoryPanel(QWidget):
             logging.error(f"Error applying phonetic fixes to TTS: {error}")
 
         return fixed_text
+    
+    def _prepare_tts_text(self, text: str | None) -> str:
+        """
+        Converts player-facing Markdown/HTML story text into narration-safe plain text.
 
-    def print_text(self, text: str, *, sender: str = "GM") -> None:
-        """Prints text to the story window and optionally reads it with TTS."""
-        text = (text or "").strip()
-        if not text:
-            return
+        Args:
+            text: Player-facing story text.
 
-        if self.narrator_enabled and not text.startswith("> "):
-            clean_text = re.sub(r"<pre.*?>.*?</pre>", "", text, flags=re.DOTALL)
-            clean_text = re.sub(r"[*_~`#]", "", clean_text, re.DOTALL)
+        Returns:
+            Cleaned text suitable for TTS synthesis.
+        """
+        clean_text = str(text or "").strip()
+        if not clean_text:
+            logging.warning("StoryPanel._prepare_tts_text received empty text.")
+            return ""
+
+        try:
+            clean_text = re.sub(r"<pre.*?>.*?</pre>", "", clean_text, flags=re.DOTALL)
+            clean_text = re.sub(r"[*_~`#]", "", clean_text, flags=re.DOTALL)
             clean_text = clean_text.replace("--", ", ").replace("-", " ")
             clean_text = clean_text.replace("\n", " ").replace("\r", "")
-            clean_text = self._apply_phonetic_fixes(clean_text)
-            #logging.info(f"Text sent to TTS to play audio of: {clean_text}")
-            self._generate_and_play_tts(clean_text, original_text=text)
-        else:
-            if text.startswith("> "):
-                text = "\\" + text
-            self.append_text("\n" + text)
+            clean_text = re.sub(r"\s{2,}", " ", clean_text).strip()
+            return self._apply_phonetic_fixes(clean_text)
 
-    def _emit_send(self) -> None:
-        """Emits the player's submitted command."""
-        text = (self.txt_input.text() or "").strip()
-        if not text:
+        except Exception as error:
+            logging.exception("Failed to prepare TTS text: %s", error)
+            return ""
+
+
+    def _split_story_text_for_chunked_tts(
+        self,
+        text: str | None,
+        *,
+        max_sentences: int = 3,
+        max_chars: int = 650,
+    ) -> list[str]:
+        """
+        Splits story text into display/TTS chunks.
+
+        Paragraphs are preserved where practical. Bullet lists are kept together so
+        suggested actions do not get split into awkward one-line TTS chunks.
+
+        Args:
+            text: Player-facing Markdown story text.
+            max_sentences: Target maximum sentence count per prose chunk.
+            max_chars: Target maximum character count per chunk.
+
+        Returns:
+            Ordered chunks to display and narrate.
+        """
+        clean_text = str(text or "").strip()
+        if not clean_text:
+            logging.warning("StoryPanel._split_story_text_for_chunked_tts received empty text.")
+            return []
+
+        paragraphs = [
+            paragraph.strip()
+            for paragraph in re.split(r"\n\s*\n+", clean_text)
+            if paragraph.strip()
+        ]
+
+        chunks: list[str] = []
+
+        for paragraph in paragraphs:
+            # Keep suggested action lists and other bullet blocks intact.
+            if re.search(r"(?m)^\s*[-*]\s+", paragraph):
+                chunks.append(paragraph)
+                continue
+
+            sentences = [
+                sentence.strip()
+                for sentence in re.split(r"(?<=[.!?])\s+", paragraph)
+                if sentence.strip()
+            ]
+
+            if not sentences:
+                chunks.append(paragraph)
+                continue
+
+            current_sentences: list[str] = []
+            current_length = 0
+
+            for sentence in sentences:
+                would_exceed_sentence_limit = len(current_sentences) >= max_sentences
+                would_exceed_char_limit = current_length + len(sentence) > max_chars
+
+                if current_sentences and (would_exceed_sentence_limit or would_exceed_char_limit):
+                    chunks.append(" ".join(current_sentences).strip())
+                    current_sentences = []
+                    current_length = 0
+
+                current_sentences.append(sentence)
+                current_length += len(sentence) + 1
+
+            if current_sentences:
+                chunks.append(" ".join(current_sentences).strip())
+
+        return chunks
+
+    def print_text(self, text: str, *, sender: str = "GM") -> None:
+        """
+        Prints text to the story window and optionally reads it with chunked TTS.
+
+        Args:
+            text: Player-facing Markdown text to display.
+            sender: Optional sender label reserved for future formatting.
+        """
+        clean_input = str(text or "").strip()
+        if not clean_input:
             return
+
+        if clean_input.startswith("> "):
+            self.append_text("\n" + "\\" + clean_input)
+            return
+
+        if not self.narrator_enabled:
+            self.append_text("\n" + clean_input)
+            return
+
+        chunks = self._split_story_text_for_chunked_tts(clean_input)
+        if not chunks:
+            logging.warning("Narrator was enabled, but no TTS chunks were produced.")
+            self.append_text("\n" + clean_input)
+            return
+
+        self._start_chunked_tts(chunks, fallback_text=clean_input)
+
         if self.narrator_enabled:
-            self.stop_tts()
-        self.txt_input.clear()
-        self.send_requested.emit(text)
+            self.stop_tts(flush_remaining_text=True)
 
     def _generate_and_play_tts(self, text: str, original_text: str | None = None) -> None:
         """Generates TTS audio without blocking the UI thread."""
@@ -3080,6 +3195,347 @@ class StoryPanel(QWidget):
 
         threading.Thread(target=run_tts, daemon=True).start()
         
+    def _start_chunked_tts(self, chunks: list[str], *, fallback_text: str) -> None:
+        """
+        Starts a chunked TTS session.
+
+        A producer thread generates audio files. A player thread displays each chunk
+        when its audio begins and then plays chunks in order.
+
+        Args:
+            chunks: Ordered player-facing chunks.
+            fallback_text: Full text to display if chunked TTS cannot start.
+        """
+        if self.tts_manager is None:
+            logging.warning("Narrator enabled, but no TTS manager is bound to StoryPanel.")
+            self.append_text("\n" + fallback_text)
+            return
+
+        self.stop_tts(flush_remaining_text=False)
+
+        with self._tts_state_lock:
+            self._tts_session_id += 1
+            session_id = self._tts_session_id
+            self._tts_queue_active = True
+            self._tts_active_chunks = list(chunks)
+            self._tts_next_chunk_index_to_display = 0
+
+        audio_queue: queue.Queue[tuple[str, Path | None] | None] = queue.Queue(maxsize=3)
+
+        producer_thread = threading.Thread(
+            target=self._produce_tts_chunks,
+            args=(session_id, chunks, audio_queue),
+            daemon=True,
+        )
+
+        player_thread = threading.Thread(
+            target=self._play_tts_chunks,
+            args=(session_id, audio_queue),
+            daemon=True,
+        )
+
+        producer_thread.start()
+        player_thread.start()
+
+
+    def _claim_next_tts_chunk_for_display(
+        self,
+        session_id: int,
+        visible_text: str | None,
+    ) -> str:
+        """
+        Claims one chunk as displayed for the active chunked TTS session.
+
+        Args:
+            session_id: Active TTS session ID captured by the playback worker.
+            visible_text: Chunk text received from the audio queue.
+
+        Returns:
+            The chunk text that should be displayed, or an empty string if the
+            session has already been cancelled.
+        """
+        clean_visible_text = str(visible_text or "").strip()
+
+        if not clean_visible_text:
+            logging.warning("TTS playback worker received an empty visible chunk.")
+            return ""
+
+        with self._tts_state_lock:
+            if not self._is_active_tts_session(session_id):
+                return ""
+
+            self._tts_next_chunk_index_to_display = min(
+                self._tts_next_chunk_index_to_display + 1,
+                len(self._tts_active_chunks),
+            )
+
+            return clean_visible_text
+
+    def _collect_remaining_tts_text_for_display(self) -> str:
+        """
+        Collects all chunked narration text that has not yet been displayed.
+
+        Returns:
+            Remaining story text joined as normal Markdown paragraphs.
+        """
+        with self._tts_state_lock:
+            if not self._tts_active_chunks:
+                return ""
+
+            start_index = max(
+                0,
+                min(
+                    self._tts_next_chunk_index_to_display,
+                    len(self._tts_active_chunks),
+                ),
+            )
+
+            remaining_chunks = [
+                chunk.strip()
+                for chunk in self._tts_active_chunks[start_index:]
+                if str(chunk or "").strip()
+            ]
+
+            self._tts_next_chunk_index_to_display = len(self._tts_active_chunks)
+
+        return "\n\n".join(remaining_chunks).strip()
+
+    def _clear_tts_chunk_state(self) -> None:
+        """
+        Clears stored chunked narration state after playback, cancellation, or flush.
+        """
+        with self._tts_state_lock:
+            self._tts_active_chunks = []
+            self._tts_next_chunk_index_to_display = 0
+    
+    def _produce_tts_chunks(
+        self,
+        session_id: int,
+        chunks: list[str],
+        audio_queue: queue.Queue[tuple[str, Path | None] | None],
+    ) -> None:
+        """
+        Generates TTS files for chunks and places them into the playback queue.
+
+        Args:
+            session_id: Active TTS session ID used for cancellation.
+            chunks: Ordered player-facing chunks.
+            audio_queue: Queue consumed by the playback thread.
+        """
+        try:
+            for chunk in chunks:
+                if not self._is_active_tts_session(session_id):
+                    break
+
+                speech_text = self._prepare_tts_text(chunk)
+                generated_audio_path: Path | None = None
+
+                if speech_text:
+                    request = TTSRequest(
+                        text=speech_text,
+                        voice=self.tts_voice,
+                        speed=self._tts_rate_to_speed_multiplier(),
+                        language="en-us",
+                    )
+
+                    try:
+                        # Kokoro model access should stay serialized. This avoids
+                        # two overlapping responses trying to synthesize at once.
+                        with self._tts_generation_lock:
+                            if not self._is_active_tts_session(session_id):
+                                break
+                            
+                            if self.tts_manager != None:
+                                generated_audio_path = self.tts_manager.synthesize_to_file(request)
+                            else:
+                                generated_audio_path = None
+
+                        if generated_audio_path is not None:
+                            generated_audio_path = Path(generated_audio_path)
+                            self._track_tts_file(generated_audio_path)
+
+                    except Exception as error:
+                        logging.exception("Failed to synthesize TTS chunk: %s", error)
+                        generated_audio_path = None
+
+                if not self._is_active_tts_session(session_id):
+                    self._delete_tts_file(generated_audio_path)
+                    break
+
+                if not self._put_tts_queue_item(
+                    session_id,
+                    audio_queue,
+                    (chunk, generated_audio_path),
+                ):
+                    self._delete_tts_file(generated_audio_path)
+                    break
+
+        finally:
+            self._put_tts_queue_item(session_id, audio_queue, None)
+
+
+    def _play_tts_chunks(
+        self,
+        session_id: int,
+        audio_queue: queue.Queue[tuple[str, Path | None] | None],
+    ) -> None:
+        """
+        Displays and plays queued TTS chunks in order.
+
+        Args:
+            session_id: Active TTS session ID used for cancellation.
+            audio_queue: Queue populated by the producer thread.
+        """
+        try:
+            while self._is_active_tts_session(session_id):
+                try:
+                    item = audio_queue.get(timeout=0.25)
+                except queue.Empty:
+                    continue
+
+                if item is None:
+                    break
+
+                visible_text, audio_path = item
+
+                display_text = self._claim_next_tts_chunk_for_display(
+                    session_id,
+                    visible_text,
+                )
+
+                if display_text:
+                    self.text_ready_signal.emit("\n" + display_text)
+
+                if audio_path is not None:
+                    self._play_generated_tts_blocking(audio_path, session_id)
+                    self._delete_tts_file(audio_path)
+
+        except Exception as error:
+            logging.exception("Chunked TTS playback failed: %s", error)
+
+        finally:
+            if session_id == self._tts_session_id:
+                self._tts_queue_active = False
+                self._clear_tts_chunk_state()
+                
+    def _is_active_tts_session(self, session_id: int) -> bool:
+        """
+        Checks whether a TTS worker still belongs to the active narration session.
+
+        Args:
+            session_id: Session ID captured by a worker thread.
+
+        Returns:
+            True if the worker should keep running.
+        """
+        return session_id == self._tts_session_id and self.narrator_enabled
+
+
+    def _put_tts_queue_item(
+        self,
+        session_id: int,
+        audio_queue: queue.Queue[tuple[str, Path | None] | None],
+        item: tuple[str, Path | None] | None,
+    ) -> bool:
+        """
+        Puts an item into the TTS queue without deadlocking cancelled sessions.
+
+        Args:
+            session_id: Active TTS session ID used for cancellation.
+            audio_queue: Queue to receive the item.
+            item: Queue item, or None as the end-of-stream sentinel.
+
+        Returns:
+            True if the item was queued, otherwise False.
+        """
+        while self._is_active_tts_session(session_id):
+            try:
+                audio_queue.put(item, timeout=0.25)
+                return True
+            except queue.Full:
+                continue
+
+        return False
+
+
+    def _track_tts_file(self, file_path: Path | None) -> None:
+        """
+        Tracks a generated TTS file so it can be cleaned up later.
+
+        Args:
+            file_path: Generated file path.
+        """
+        if file_path is None:
+            return
+
+        try:
+            with self._tts_file_lock:
+                self._tts_generated_files.add(Path(file_path))
+        except Exception as error:
+            logging.exception("Failed to track TTS file %s: %s", file_path, error)
+
+
+    def _delete_tts_file(self, file_path: str | Path | None) -> None:
+        """
+        Deletes a generated temporary TTS file.
+
+        Args:
+            file_path: File path to delete.
+        """
+        if file_path is None:
+            return
+
+        path = Path(file_path)
+
+        try:
+            with self._tts_file_lock:
+                self._tts_generated_files.discard(path)
+
+            if path.exists():
+                path.unlink()
+
+        except PermissionError:
+            logging.warning("Could not delete TTS temp file because it is still in use: %s", path)
+        except Exception as error:
+            logging.exception("Failed to delete TTS temp file %s: %s", path, error)
+
+
+    def _cleanup_tts_files(self) -> None:
+        """Deletes all tracked generated TTS temp files when narration is cancelled."""
+        try:
+            with self._tts_file_lock:
+                files_to_delete = list(self._tts_generated_files)
+                self._tts_generated_files.clear()
+
+            for file_path in files_to_delete:
+                try:
+                    if file_path.exists():
+                        file_path.unlink()
+                except PermissionError:
+                    logging.warning("Could not delete active TTS temp file yet: %s", file_path)
+                except Exception as error:
+                    logging.exception("Failed to clean up TTS file %s: %s", file_path, error)
+
+        except Exception as error:
+            logging.exception("Failed during TTS temp-file cleanup: %s", error)
+
+
+    def _is_tts_active(self) -> bool:
+        """
+        Returns whether chunked narration or pygame narrator playback is active.
+
+        Returns:
+            True if TTS should still keep the input controls locked.
+        """
+        if self._tts_queue_active:
+            return True
+
+        try:
+            return bool(pygame.mixer.get_init() and pygame.mixer.Channel(1).get_busy())
+        except Exception as error:
+            logging.error("Error checking active TTS state: %s", error)
+            return False
+        
     def _tts_rate_to_speed_multiplier(self) -> float:
         """
         Converts the narrator rate slider into a generic speed multiplier.
@@ -3106,14 +3562,61 @@ class StoryPanel(QWidget):
                 channel.play(sound)
         except Exception as error:
             logging.exception("TTS audio playback failed: %s", error)
+            
+    def _play_generated_tts_blocking(self, filepath: str | Path, session_id: int) -> None:
+        """
+        Plays one generated TTS file and waits until it finishes or is cancelled.
 
-    def stop_tts(self) -> None:
-        """Stops active TTS playback and releases any queued UI unlock."""
+        Args:
+            filepath: Generated TTS audio file path.
+            session_id: Active TTS session ID used for cancellation.
+        """
+        try:
+            if not pygame.mixer.get_init():
+                logging.warning("Cannot play TTS because pygame mixer is not initialized.")
+                return
+
+            channel = pygame.mixer.Channel(1)
+            sound = pygame.mixer.Sound(str(filepath))
+            channel.set_volume(self.tts_volume / 100.0)
+            channel.play(sound)
+
+            while self._is_active_tts_session(session_id) and channel.get_busy():
+                time.sleep(0.05)
+
+        except Exception as error:
+            logging.exception("TTS chunk playback failed: %s", error)
+
+    def stop_tts(self, *, flush_remaining_text: bool = False) -> None:
+        """
+        Stops active TTS playback and cancels queued chunked narration.
+
+        Args:
+            flush_remaining_text: If True, immediately prints any chunked story
+                text that has not yet been displayed, without generating or
+                playing additional speech.
+        """
+        remaining_text = ""
+
+        if flush_remaining_text:
+            remaining_text = self._collect_remaining_tts_text_for_display()
+
+        with self._tts_state_lock:
+            self._tts_session_id += 1
+            self._tts_queue_active = False
+
         try:
             if pygame.mixer.get_init():
                 pygame.mixer.Channel(1).stop()
         except Exception as error:
-            logging.error(f"Error stopping TTS playback: {error}")
+            logging.error("Error stopping TTS playback: %s", error)
+
+        self._cleanup_tts_files()
+
+        if remaining_text:
+            self.text_ready_signal.emit("\n" + remaining_text)
+
+        self._clear_tts_chunk_state()
 
         if self._unlock_queued:
             self.set_controls_state(True, force_unlock=True)
@@ -3167,7 +3670,7 @@ class StoryPanel(QWidget):
         """Toggles narrator playback."""
         self.narrator_enabled = enabled
         if not enabled:
-            self.stop_tts()
+            self.stop_tts(flush_remaining_text=False)
 
     def set_tts_rate(self, val: int) -> None:
         """Sets narrator speaking rate slider value."""

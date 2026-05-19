@@ -1308,7 +1308,11 @@ After outputting all tags, summarize the first starting turn, describe the surro
             ai_text = self.clean_quotes(response.text or "")
             if not ai_text: raise ValueError("Empty response")
             
-            self._log_token_usage(prompt, user_text, ai_text)
+            threading.Thread(
+                target=self._log_token_usage,
+                args=(prompt, user_text, ai_text),
+                daemon=True,
+            ).start()
             
             # --- Save the completely raw text ---
             # We must store the raw text so we can pass it back to the AI during 
@@ -1446,7 +1450,7 @@ After outputting all tags, summarize the first starting turn, describe the surro
                         options_string = "* " + options_string[1:].lstrip()
                     
                     # Reconstruct the string with bolding for the question and proper list spacing
-                    final_display_text = f"{main_body}\n\n**{marker}**\n\n{options_string.strip()}"
+                    final_display_text = f"{main_body}\n\n**{marker}**\n{options_string.strip()}"
                     break
                 
             if final_display_text and len(final_display_text.strip()) > 8:
@@ -1569,6 +1573,28 @@ class TagParser:
         }
     )
     
+    _GENERIC_WORLD_LORE_SUBTOPIC_WORDS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "survival",
+            "tactics",
+            "warning",
+            "signs",
+            "field",
+            "notes",
+            "research",
+            "uses",
+            "behavior",
+            "behaviors",
+            "habitat",
+            "weaknesses",
+            "dangers",
+            "hazards",
+            "methods",
+            "techniques",
+            "precautions",
+        }
+    )
+    
     _UNREVEALED_NAME_PHRASE_PATTERNS: ClassVar[tuple[str, ...]] = (
         r"\s*,?\s+(?:named|called|known as|going by)\s+{name}\b",
         r"\s*,?\s+whose name is\s+{name}\b",
@@ -1594,6 +1620,32 @@ class TagParser:
             name_parts = clean_name.split()
             if len(name_parts) > 1:
                 self.blocked_player_terms.add(name_parts[-1])
+                
+    def _is_generic_world_lore_subtopic_phrase(self, candidate: str | None) -> bool:
+        """
+        Determines whether a Title Case phrase is a generic lore subtopic.
+
+        Args:
+            candidate: Potential proper noun phrase found by the sanitizer.
+
+        Returns:
+            True if the phrase is likely a generic category, not a hidden name.
+        """
+        clean_candidate = str(candidate or "").strip()
+
+        if not clean_candidate:
+            return False
+
+        words = [
+            word.casefold()
+            for word in re.split(r"[\s-]+", clean_candidate)
+            if word.strip()
+        ]
+
+        if len(words) < 2 or len(words) > 4:
+            return False
+
+        return all(word in self._GENERIC_WORLD_LORE_SUBTOPIC_WORDS for word in words)
     
     def _process_upsert_world_tags(
         self,
@@ -1643,9 +1695,22 @@ class TagParser:
                     continue
 
                 current_world_text = world_panel.get_text().rstrip()
+                
+                resolved_replacement_lore, replacement_existing_anchor = (
+                    self.world_lore_updater.rewrite_lore_to_existing_anchor(
+                        current_world_text,
+                        replacement_lore,
+                    )
+                )
+
+                resolved_anchor = (
+                    replacement_existing_anchor
+                    or self.world_lore_updater.resolve_existing_anchor(current_world_text, anchor)
+                    or anchor
+                )
 
                 safe_replacement_lore = self._sanitize_update_world_lore(
-                    replacement_lore,
+                    resolved_replacement_lore,
                     visible_narrative_text=visible_narrative_text,
                     existing_world_text=current_world_text,
                 )
@@ -1658,7 +1723,7 @@ class TagParser:
                     current_world_text,
                     WorldUpsertRequest(
                         section_name=section_name,
-                        anchor=anchor,
+                        anchor=resolved_anchor,
                         replacement_lore=safe_replacement_lore,
                     ),
                 )
@@ -1898,7 +1963,13 @@ class TagParser:
             )
 
             # Then inside the loop:
-            if not candidate or candidate in ignored_names:
+            ignored_names_lower = {name.casefold() for name in ignored_names}
+
+            if (
+                not candidate
+                or candidate.casefold() in ignored_names_lower
+                or self._is_generic_world_lore_subtopic_phrase(candidate)
+            ):
                 continue
 
             # Single title-case sentence starters are the riskiest false positives,
@@ -2264,8 +2335,15 @@ class TagParser:
 
                 current_world_text = world_panel.get_text().rstrip()
 
+                resolved_world_lore, existing_anchor = (
+                    self.world_lore_updater.rewrite_lore_to_existing_anchor(
+                        current_world_text,
+                        new_world_lore,
+                    )
+                )
+
                 safe_world_lore = self._sanitize_update_world_lore(
-                    new_world_lore,
+                    resolved_world_lore,
                     visible_narrative_text=visible_narrative_text,
                     existing_world_text=current_world_text,
                 )
@@ -2273,11 +2351,21 @@ class TagParser:
                 if not safe_world_lore:
                     continue
 
-                updated_world_text = self.world_lore_updater.append_to_section(
-                    current_world_text,
-                    section_name,
-                    safe_world_lore,
-                )
+                if existing_anchor:
+                    updated_world_text = self.world_lore_updater.upsert(
+                        current_world_text,
+                        WorldUpsertRequest(
+                            section_name=section_name,
+                            anchor=existing_anchor,
+                            replacement_lore=safe_world_lore,
+                        ),
+                    )
+                else:
+                    updated_world_text = self.world_lore_updater.append_to_section(
+                        current_world_text,
+                        section_name,
+                        safe_world_lore,
+                    )
 
                 if updated_world_text is None:
                     continue
@@ -2533,7 +2621,6 @@ class WorldLoreUpdater:
     MAX_REPLACEMENT_LENGTH: ClassVar[int] = 900
     
     WORLD_SECTIONS: ClassVar[tuple[str, ...]] = (
-        "World Overview",
         "NPCs",
         "Locations",
         "Factions and Organizations",
@@ -2548,9 +2635,6 @@ class WorldLoreUpdater:
     )
 
     SECTION_ALIASES: ClassVar[dict[str, str]] = {
-        "overview": "World Overview",
-        "world": "World Overview",
-        "world overview": "World Overview",
         "npc": "NPCs",
         "npcs": "NPCs",
         "people": "NPCs",
@@ -2597,6 +2681,14 @@ class WorldLoreUpdater:
         r"\[\[.*?\]\]",
         re.DOTALL,
     )
+    
+    _LIST_ITEM_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"^(?P<indent>\s*)(?:[-*+]\s+|\d+\.\s+)"
+    )
+
+    _HEADING_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"^\s*#{1,6}\s+"
+    )
 
     _BULLET_PREFIX_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"^(?P<prefix>\s*(?:[-*+]\s+|\d+\.\s+)?)"
@@ -2604,6 +2696,23 @@ class WorldLoreUpdater:
 
     _MARKDOWN_DECORATION_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"[*_`#>\[\]()]"
+    )
+    
+    _KEY_MARKDOWN_DECORATION_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"[*_`#>\[\]]"
+    )
+
+    _PARENTHETICAL_SUFFIX_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"\s*(?:\([^)]{1,80}\)|\[[^\]]{1,80}\])\s*$"
+    )
+    
+    _SECTION_HEADING_LINE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"^\s*##\s+(?P<section>.+?)\s*$"
+    )
+
+    _EMPTY_SECTION_PLACEHOLDER_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"^\s*\\?[-*+]\s+(?:None so far\.?|None\.?|N/A)\s*$",
+        re.IGNORECASE,
     )
 
     def normalize_section_name(self, section_name: str | None) -> str:
@@ -2657,7 +2766,6 @@ class WorldLoreUpdater:
 
         migrated_text = (
             "# World\n\n"
-            "## World Overview\n\n"
             f"{text}\n"
         )
 
@@ -2721,7 +2829,8 @@ class WorldLoreUpdater:
         if not re.match(r"^\s*(?:[-*+]\s+|\d+\.\s+)", entry):
             entry = f"- {entry}"
 
-        return self._insert_entry_under_section(text, canonical_section, entry)
+        updated_text = self._insert_entry_under_section(text, canonical_section, entry)
+        return self.sort_section_entries(updated_text, canonical_section)
 
 
     def _insert_entry_under_section(
@@ -2811,23 +2920,35 @@ class WorldLoreUpdater:
         current_text = self.ensure_world_sections(world_text)
         lines = current_text.splitlines()
 
-        match_index = self._find_matching_line_index(lines, anchor_key)
+        match_range = self._find_matching_entry_range(lines, anchor_key)
 
-        if match_index is None:
+        if match_range is None:
             logging.info("UPSERT_WORLD found no existing entry; appending lore under %s.", canonical_section)
             return self.append_to_section(current_text, canonical_section, replacement_lore)
 
-        old_line = lines[match_index]
-        replacement_line = self._preserve_list_prefix(old_line, replacement_lore)
+        start_index, end_index = match_range
+        old_entry = "\n".join(lines[start_index:end_index])
+        old_first_line = lines[start_index]
 
-        if old_line.strip() == replacement_line.strip():
+        replacement_entry = self._preserve_list_prefix(old_first_line, replacement_lore)
+        replacement_lines = replacement_entry.splitlines() or [replacement_entry]
+
+        if old_entry.strip() == "\n".join(replacement_lines).strip():
             logging.info("UPSERT_WORLD made no change for anchor %r.", anchor)
             return None
 
-        lines[match_index] = replacement_line
-        logging.info("UPSERT_WORLD replaced entry for anchor %r.", anchor)
+        lines[start_index:end_index] = replacement_lines
 
-        return "\n".join(lines).rstrip() + "\n"
+        logging.info(
+            "UPSERT_WORLD replaced entry for anchor %r across %s line(s).",
+            anchor,
+            end_index - start_index,
+        )
+
+        updated_text = "\n".join(lines).rstrip() + "\n"
+        actual_section = self._find_section_name_for_line_index(lines, start_index)
+
+        return self.sort_section_entries(updated_text, actual_section)
 
     def _clean_anchor(self, anchor: str | None) -> str:
         """
@@ -2857,6 +2978,204 @@ class WorldLoreUpdater:
             return ""
 
         return clean_anchor
+    
+    def sort_section_entries(self, world_text: str | None, section_name: str | None) -> str:
+        """
+        Alphabetizes top-level bullet entries inside one World.md section.
+
+        Multiline entries are kept together, so wrapped descriptions are not
+        separated from their bulletpoint.
+
+        Args:
+            world_text: Current World.md text.
+            section_name: Section whose entries should be sorted.
+
+        Returns:
+            World.md text with the target section alphabetized.
+        """
+        text = self.ensure_world_sections(world_text)
+        canonical_section = self.normalize_section_name(section_name)
+
+        section_pattern = re.compile(
+            rf"(?im)^##\s+{re.escape(canonical_section)}\s*$"
+        )
+        section_match = section_pattern.search(text)
+
+        if section_match is None:
+            logging.warning(
+                "Could not sort World.md section because it was not found: %s",
+                canonical_section,
+            )
+            return text
+
+        next_section_match = re.search(
+            r"(?m)^##\s+",
+            text[section_match.end():],
+        )
+
+        section_end = (
+            section_match.end() + next_section_match.start()
+            if next_section_match is not None
+            else len(text)
+        )
+
+        before_section_body = text[:section_match.end()]
+        section_body = text[section_match.end():section_end]
+        after_section_body = text[section_end:]
+
+        sorted_body = self._sort_section_body(section_body)
+
+        return (
+            f"{before_section_body.rstrip()}\n\n"
+            f"{sorted_body.rstrip()}\n\n"
+            f"{after_section_body.lstrip()}"
+        ).rstrip() + "\n"
+
+    def _sort_section_body(self, section_body: str | None) -> str:
+        """
+        Sorts bullet entry blocks inside a section body.
+
+        Args:
+            section_body: Text between one level-2 heading and the next.
+
+        Returns:
+            Sorted section body.
+        """
+        lines = str(section_body or "").strip("\n").splitlines()
+
+        if not lines:
+            return ""
+
+        preamble_lines: list[str] = []
+        trailing_lines: list[str] = []
+        entry_blocks: list[list[str]] = []
+
+        index = 0
+        saw_entry = False
+
+        while index < len(lines):
+            line = lines[index]
+
+            if self._LIST_ITEM_PATTERN.match(line or ""):
+                saw_entry = True
+                end_index = self._find_entry_end_index(lines, index)
+                entry_blocks.append(lines[index:end_index])
+                index = end_index
+                continue
+
+            if saw_entry:
+                trailing_lines.append(line)
+            else:
+                preamble_lines.append(line)
+
+            index += 1
+
+        if not entry_blocks:
+            return "\n".join(lines).strip()
+
+        # Remove escaped or real "- None so far." placeholders once real entries exist.
+        preamble_lines = [
+            line for line in preamble_lines
+            if not self._EMPTY_SECTION_PLACEHOLDER_PATTERN.match(line or "")
+        ]
+        trailing_lines = [
+            line for line in trailing_lines
+            if not self._EMPTY_SECTION_PLACEHOLDER_PATTERN.match(line or "")
+        ]
+
+        sorted_entries = sorted(
+            entry_blocks,
+            key=self._get_entry_sort_key,
+        )
+
+        output_lines: list[str] = []
+
+        output_lines.extend(line for line in preamble_lines if str(line or "").strip())
+
+        if output_lines:
+            output_lines.append("")
+
+        for block in sorted_entries:
+            clean_block = [line.rstrip() for line in block if line is not None]
+
+            if not clean_block:
+                continue
+
+            output_lines.extend(clean_block)
+            output_lines.append("")
+
+        output_lines.extend(line for line in trailing_lines if str(line or "").strip())
+
+        return "\n".join(output_lines).strip()
+
+    def _get_entry_sort_key(self, entry_block: list[str]) -> tuple[str, str]:
+        """
+        Builds a stable alphabetical sort key for one World.md bullet entry.
+
+        Args:
+            entry_block: Full Markdown entry block.
+
+        Returns:
+            Tuple used by sorted().
+        """
+        first_line = entry_block[0] if entry_block else ""
+        display_key = self._extract_sort_display_key(first_line)
+
+        return self._normalize_key(display_key), "\n".join(entry_block).casefold()
+
+    def _extract_sort_display_key(self, line: str | None) -> str:
+        """
+        Extracts the visible key used for alphabetical sorting.
+
+        Args:
+            line: First line of a Markdown entry.
+
+        Returns:
+            Sortable visible key.
+        """
+        clean_line = str(line or "").strip()
+
+        if not clean_line:
+            return ""
+
+        clean_line = re.sub(r"^\s*(?:[-*+]\s+|\d+\.\s+)", "", clean_line)
+
+        if ":" in clean_line:
+            clean_line = clean_line.split(":", 1)[0]
+
+        clean_line = self._MARKDOWN_DECORATION_PATTERN.sub("", clean_line)
+        clean_line = re.sub(r"\s+", " ", clean_line)
+
+        return clean_line.strip()
+
+    def _find_section_name_for_line_index(
+        self,
+        lines: list[str],
+        target_index: int,
+    ) -> str:
+        """
+        Finds the nearest World.md section heading above a line index.
+
+        Args:
+            lines: World.md split into lines.
+            target_index: Line index inside the section.
+
+        Returns:
+            Canonical section name.
+        """
+        safe_index = max(0, min(target_index, len(lines) - 1))
+
+        for index in range(safe_index, -1, -1):
+            match = self._SECTION_HEADING_LINE_PATTERN.match(lines[index] or "")
+
+            if match is not None:
+                return self.normalize_section_name(match.group("section"))
+
+        logging.warning(
+            "Could not determine section for World.md line index %s. Using Uncategorized.",
+            target_index,
+        )
+        return "Uncategorized"
 
     def _clean_replacement_lore(self, replacement_lore: str | None) -> str:
         """
@@ -2900,7 +3219,314 @@ class WorldLoreUpdater:
                 return index
 
         return None
+    
+    def _find_matching_entry_range(
+        self,
+        lines: list[str],
+        anchor_key: str,
+    ) -> tuple[int, int] | None:
+        """
+        Finds the full Markdown entry range for an anchor.
 
+        This handles World.md entries that QTextEdit.toMarkdown() has wrapped
+        across multiple physical lines.
+
+        Args:
+            lines: World.md split into physical lines.
+            anchor_key: Normalized anchor key.
+
+        Returns:
+            A tuple of (start_index, end_index), where end_index is exclusive,
+            or None if no matching entry was found.
+        """
+        if not lines:
+            logging.warning("WorldLoreUpdater._find_matching_entry_range received no lines.")
+            return None
+
+        if not anchor_key:
+            logging.warning("WorldLoreUpdater._find_matching_entry_range received a blank anchor key.")
+            return None
+
+        for index, line in enumerate(lines):
+            line_key = self._extract_line_key(line)
+
+            if line_key == anchor_key:
+                return index, self._find_entry_end_index(lines, index)
+
+        return None
+
+    def _find_entry_end_index(self, lines: list[str], start_index: int) -> int:
+        """
+        Finds where a Markdown list entry ends.
+
+        Continuation lines are included until the next heading, the next same-level
+        list item, or the end of the document.
+
+        Args:
+            lines: World.md split into physical lines.
+            start_index: Index of the first line of the matched entry.
+
+        Returns:
+            Exclusive end index for the entry.
+        """
+        if start_index < 0 or start_index >= len(lines):
+            logging.warning(
+                "WorldLoreUpdater._find_entry_end_index received invalid start index: %s",
+                start_index,
+            )
+            return max(0, min(len(lines), start_index + 1))
+
+        start_line = lines[start_index]
+        start_match = self._LIST_ITEM_PATTERN.match(start_line or "")
+
+        if start_match:
+            start_indent_length = len(start_match.group("indent"))
+        else:
+            start_indent_length = len(start_line) - len(start_line.lstrip())
+
+        index = start_index + 1
+
+        while index < len(lines):
+            current_line = lines[index]
+
+            if self._is_entry_boundary(current_line, start_indent_length):
+                return index
+
+            if not str(current_line or "").strip():
+                next_index = self._find_next_nonblank_line_index(lines, index + 1)
+
+                if next_index is None:
+                    return index
+
+                if self._is_entry_boundary(lines[next_index], start_indent_length):
+                    return index
+
+            index += 1
+
+        return index
+
+    def _find_next_nonblank_line_index(
+        self,
+        lines: list[str],
+        start_index: int,
+    ) -> int | None:
+        """
+        Finds the next nonblank line.
+
+        Args:
+            lines: World.md split into physical lines.
+            start_index: Index to begin searching from.
+
+        Returns:
+            The next nonblank line index, or None.
+        """
+        for index in range(max(0, start_index), len(lines)):
+            if str(lines[index] or "").strip():
+                return index
+
+        return None
+
+    def _is_entry_boundary(self, line: str | None, start_indent_length: int) -> bool:
+        """
+        Determines whether a line begins a new Markdown entry or heading.
+
+        Args:
+            line: The line to inspect.
+            start_indent_length: Indentation of the original matched list item.
+
+        Returns:
+            True if the line should end the current entry.
+        """
+        line_text = str(line or "")
+
+        if self._HEADING_PATTERN.match(line_text):
+            return True
+
+        list_match = self._LIST_ITEM_PATTERN.match(line_text)
+
+        if list_match is None:
+            return False
+
+        return len(list_match.group("indent")) <= start_indent_length
+
+    def resolve_existing_anchor(self, world_text: str | None, proposed_anchor: str | None) -> str | None:
+        """
+        Resolves an AI-provided anchor to an existing World.md entry key.
+
+        This catches cases like:
+            "Glass-Gales (Survival Tactics)" -> "Glass-Gales"
+
+        Args:
+            world_text: Current World.md text.
+            proposed_anchor: AI-provided anchor or lore key.
+
+        Returns:
+            The existing World.md display key, or None if no safe match exists.
+        """
+        clean_anchor = self._clean_display_key(proposed_anchor)
+
+        if not clean_anchor:
+            return None
+
+        candidate_keys = self._build_anchor_candidate_keys(clean_anchor)
+        if not candidate_keys:
+            return None
+
+        current_text = self.ensure_world_sections(world_text)
+        lines = current_text.splitlines()
+
+        for line in lines:
+            existing_key = self._extract_display_line_key(line)
+            if not existing_key:
+                continue
+
+            existing_normalized = self._normalize_key(existing_key)
+
+            if existing_normalized in candidate_keys:
+                return existing_key
+
+        return None
+
+    def rewrite_lore_to_existing_anchor(
+        self,
+        world_text: str | None,
+        lore_text: str | None,
+    ) -> tuple[str, str | None]:
+        """
+        Rewrites the lore entry key to an existing World.md anchor when possible.
+
+        Args:
+            world_text: Current World.md text.
+            lore_text: AI-provided lore text.
+
+        Returns:
+            Tuple of rewritten lore text and resolved anchor. The anchor is None
+            if the lore does not match an existing World.md entry.
+        """
+        clean_lore = str(lore_text or "").strip()
+
+        if not clean_lore:
+            return "", None
+
+        lore_key = self._extract_display_line_key(clean_lore)
+        if not lore_key:
+            return clean_lore, None
+
+        existing_anchor = self.resolve_existing_anchor(world_text, lore_key)
+        if existing_anchor is None:
+            return clean_lore, None
+
+        return self._replace_lore_key(clean_lore, existing_anchor), existing_anchor
+
+    def _build_anchor_candidate_keys(self, anchor: str | None) -> set[str]:
+        """
+        Builds normalized candidate keys for matching an AI anchor to World.md.
+
+        Args:
+            anchor: Raw or cleaned anchor text.
+
+        Returns:
+            Normalized candidate keys.
+        """
+        clean_anchor = self._clean_display_key(anchor)
+        if not clean_anchor:
+            return set()
+
+        candidates = {self._normalize_key(clean_anchor)}
+
+        without_suffix = self._strip_contextual_anchor_suffix(clean_anchor)
+        if without_suffix:
+            candidates.add(self._normalize_key(without_suffix))
+
+        return {candidate for candidate in candidates if candidate}
+
+    def _strip_contextual_anchor_suffix(self, anchor: str | None) -> str:
+        """
+        Removes parenthetical/bracketed subtopic suffixes from an anchor.
+
+        Args:
+            anchor: Anchor text such as "Glass-Gales (Survival Tactics)".
+
+        Returns:
+            Anchor without the contextual suffix.
+        """
+        clean_anchor = self._clean_display_key(anchor)
+        if not clean_anchor:
+            return ""
+
+        previous_value = None
+        current_value = clean_anchor
+
+        while previous_value != current_value:
+            previous_value = current_value
+            current_value = self._PARENTHETICAL_SUFFIX_PATTERN.sub("", current_value).strip()
+
+        return current_value
+
+    def _extract_display_line_key(self, line: str | None) -> str:
+        """
+        Extracts the visible key before the first colon in a Markdown entry.
+
+        Args:
+            line: Markdown line or lore entry.
+
+        Returns:
+            Display key without bullet markers or Markdown decoration.
+        """
+        clean_line = str(line or "").strip()
+
+        if not clean_line or ":" not in clean_line:
+            return ""
+
+        clean_line = re.sub(r"^\s*(?:[-*+]\s+|\d+\.\s+)", "", clean_line)
+        raw_key = clean_line.split(":", 1)[0]
+
+        return self._clean_display_key(raw_key)
+
+    def _clean_display_key(self, value: str | None) -> str:
+        """
+        Cleans Markdown decoration from a display key.
+
+        Args:
+            value: Raw key text.
+
+        Returns:
+            Human-readable key text.
+        """
+        clean_value = str(value or "").strip()
+        clean_value = self._KEY_MARKDOWN_DECORATION_PATTERN.sub("", clean_value)
+        clean_value = re.sub(r"\s+", " ", clean_value)
+
+        return clean_value.strip(" :")
+
+    def _replace_lore_key(self, lore_text: str, replacement_key: str) -> str:
+        """
+        Replaces the first lore-entry key with a known existing World.md key.
+
+        Args:
+            lore_text: AI-provided lore entry.
+            replacement_key: Existing World.md key to use.
+
+        Returns:
+            Lore entry using the existing key.
+        """
+        clean_replacement = self._clean_display_key(replacement_key)
+        if not clean_replacement:
+            return lore_text
+
+        key_pattern = re.compile(
+            r"^(?P<prefix>\s*(?:[-*+]\s+|\d+\.\s+)?)\s*"
+            r"(?P<key>[^:\n]+)"
+            r"(?P<colon>\s*:)",
+            re.MULTILINE,
+        )
+
+        return key_pattern.sub(
+            lambda match: f"{match.group('prefix')}{clean_replacement}{match.group('colon')}",
+            lore_text,
+            count=1,
+        )
+    
     def _extract_line_key(self, line: str | None) -> str:
         """
         Extracts an entity key from a World.md line.
