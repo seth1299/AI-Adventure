@@ -8,6 +8,38 @@ from typing import Any, ClassVar
 from creative_sampler import CreativeCategory, CreativeSampleRequest
 from dataclasses import dataclass
 
+@dataclass(frozen=True)
+class ResponseSections:
+    """
+    Represents the player-facing parts of an AI response after functional tags
+    have been removed.
+
+    Args:
+        main_body: The actual story narration.
+        action_marker: The prompt marker that introduced suggested actions.
+        suggested_actions: The optional suggested action list.
+    """
+
+    main_body: str
+    action_marker: str = ""
+    suggested_actions: str = ""
+
+    def rebuild(self) -> str:
+        """
+        Rebuilds the response from its sections.
+
+        Returns:
+            Full player-facing response text.
+        """
+        clean_main = self.main_body.strip()
+        clean_marker = self.action_marker.strip()
+        clean_actions = self.suggested_actions.strip()
+
+        if not clean_marker or not clean_actions:
+            return clean_main
+
+        return f"{clean_main}\n\n**{clean_marker}**\n\n{clean_actions}"
+
 class AIManager:
     def __init__(self, app) -> None:
         """Initializes the Gemini API client used by the AI manager."""
@@ -189,37 +221,61 @@ Final Comments/Rules: {data['final_comments'] or 'N/A'}
 ---
 
 CRITICAL FINAL INSTRUCTIONS:
-Output the following tags to set up the starting gameplay state:
+Output the following tags to set up the starting gameplay state (making sure to apply **bold** formatting around the "Key Term" for each bulletpoint, if there is one. For example, describing the economy of a city probably would not start with "**City Economics**:", but rather it would all be a normal bulleted list. However, if there is a "Key Term" for a bulletpoint, make sure that it is bold, for example, "**Poison-Dart Frog**: This frog may be tiny, but its toxins are deadly and can kill an adult human in minutes." ):
+
 [[WORLD_PROFILE:
 # World
 
-## World Overview
-
-- **Genre:** (Filled value)
-- **Setting:** (Filled value)
-- **Technology Level:** (Filled value)
-- **Species:** (Filled value)
-- **Focus:** (Filled value)
-
 (Filled description, at most six paragraphs.)
-
-## NPCs
-
-## Locations
-
-## Factions and Organizations
-
-## History
 
 ## Culture, Customs, and Laws
 
+- (Filled value)
+
 ## Economy
+
+- (Filled value)
+
+## Factions and Organizations
+
+- (Filled value)
+
+## Flora, Fauna, and Climate
+
+- (Filled value)
+
+## History
+
+- (Filled value)
+
+## Locations
+
+- (Filled value)
 
 ## Magic and Religion
 
+- (Filled value)
+
+## NPCs
+
+- (Filled value)
+
+## Out-Of-Game-Reminders
+
+- **Focus:** (Filled value)
+- **Genre:** (Filled value)
+- **Setting:** (Filled value)
+- **Species:** (Filled value)
+- **Technology Level:** (Filled value)
+
 ## Rumors and Unconfirmed Information
 
+- (Filled value)
+
 ## Uncategorized
+
+- (Filled value)
+
 ]]
 
 [[CHARACTER_PROFILE: 
@@ -292,11 +348,12 @@ After outputting all tags, summarize the first starting turn, describe the surro
                 secret_content = secret_file_path.read_text(encoding="utf-8").strip()
                 if secret_content:
                     context_data += (
-                        "\n[GM-ONLY SECRET CONTEXT]\n"
+                        "\n[START GM-ONLY SECRET CONTEXT]\n"
                         "The following facts are available only to the Game Master for continuity, causality, and future setup.\n"
                         "They are NOT known by the player character and are NOT known by NPCs unless a specific visible reason exists.\n"
                         "Do not reveal these facts in narration, dialogue, UPDATE_WORLD, QUEST, or visible summaries unless the player discovers them in the current scene.\n\n"
                         f"{secret_content}\n"
+                        f"[END GM-ONLY SECRET CONTEXT]\n"
                     )
         except Exception as secret_read_error:
             logging.error(f"Error: Could not open secret.txt. Details: {secret_read_error}")
@@ -396,6 +453,134 @@ After outputting all tags, summarize the first starting turn, describe the surro
             "- Shopkeepers may infer likely needs from requested goods, but they may not know private expedition details unless told.\n"
             "- Never let NPC dialogue expose GM-only secrets.\n"
         )
+    
+    SUGGESTED_ACTION_MARKERS: ClassVar[tuple[str, ...]] = (
+        "Possible Actions:",
+        "Suggested Actions:",
+        "### Actions",
+        "What would you like to do?",
+        "What do you do?",
+        "What do you do now?",
+    )
+
+    def _split_response_sections(self, text: str | None) -> ResponseSections:
+        """
+        Splits an AI response into main narration and suggested actions.
+
+        Suggested actions should not be treated as proof that the Player learned
+        a fact, because they are model-generated convenience hints rather than
+        events that happened in the fiction.
+
+        Args:
+            text: AI response text after functional tags have been removed.
+
+        Returns:
+            ResponseSections containing main narration and optional action text.
+        """
+        clean_text = str(text or "").strip()
+
+        if not clean_text:
+            logging.warning("AIManager._split_response_sections called with empty text.")
+            return ResponseSections(main_body="")
+
+        for marker in self.SUGGESTED_ACTION_MARKERS:
+            if marker not in clean_text:
+                continue
+
+            main_body, suggested_actions = clean_text.split(marker, 1)
+            suggested_actions = suggested_actions.strip()
+            suggested_actions = suggested_actions.replace(" - ", "\n- ").replace(" * ", "\n* ")
+
+            if suggested_actions.startswith("-") and not suggested_actions.startswith("- "):
+                suggested_actions = "- " + suggested_actions[1:].lstrip()
+            elif suggested_actions.startswith("*") and not suggested_actions.startswith("* "):
+                suggested_actions = "* " + suggested_actions[1:].lstrip()
+
+            return ResponseSections(
+                main_body=main_body.strip(),
+                action_marker=marker,
+                suggested_actions=suggested_actions.strip(),
+            )
+
+        return ResponseSections(main_body=clean_text)
+
+    def _infer_safe_descriptor(self, text: str | None) -> str:
+        """
+        Infers a safe unnamed descriptor from the current response.
+
+        Args:
+            text: Player-facing response text.
+
+        Returns:
+            A generic descriptor that does not reveal hidden proper nouns.
+        """
+        lowered_text = str(text or "").lower()
+
+        descriptor_candidates = (
+            "the scribe",
+            "the librarian",
+            "the clerk",
+            "the merchant",
+            "the guard",
+            "the scout",
+            "the caster",
+            "the robed figure",
+            "the armored woman",
+            "the man",
+            "the woman",
+            "the figure",
+        )
+
+        for descriptor in descriptor_candidates:
+            if descriptor in lowered_text:
+                return descriptor
+
+        return "that person"
+
+    def _sanitize_blocked_player_terms(
+        self,
+        text: str | None,
+        blocked_terms: set[str] | frozenset[str],
+    ) -> str:
+        """
+        Removes unrevealed proper nouns from player-facing output.
+
+        This is a final deterministic safety pass after tag processing. It prevents
+        names from leaking through narration or suggested actions when the related
+        UPDATE_WORLD or UPSERT_WORLD tag was rejected.
+
+        Args:
+            text: Player-facing text after functional tags have been removed.
+            blocked_terms: Proper nouns rejected by the world-lore sanitizer.
+
+        Returns:
+            Sanitized player-facing text.
+        """
+        clean_text = str(text or "")
+
+        if not clean_text.strip():
+            return ""
+
+        if not blocked_terms:
+            return clean_text
+
+        safe_descriptor = self._infer_safe_descriptor(clean_text)
+        sanitized_text = clean_text
+
+        for term in sorted(blocked_terms, key=len, reverse=True):
+            clean_term = str(term or "").strip()
+
+            if not clean_term:
+                continue
+
+            sanitized_text = re.sub(
+                rf"\b{re.escape(clean_term)}\b",
+                safe_descriptor,
+                sanitized_text,
+                flags=re.IGNORECASE,
+            )
+
+        return sanitized_text
     
     def _build_starting_spellcasting_prompt(self, spellcasting_data: dict[str, Any] | None) -> str:
         """
@@ -759,9 +944,9 @@ After outputting all tags, summarize the first starting turn, describe the surro
         """
         Builds always-on naming and player-knowledge rules.
 
-        These rules are intentionally small enough to include every turn. They are not
-        the same thing as creative samples; they protect against stale names and
-        hidden-knowledge leakage even when samples are not needed.
+        These rules protect against stale names and hidden-knowledge leakage while
+        still encouraging the model to persist durable lore that the player actually
+        learned during the visible scene.
 
         Returns:
             Prompt text for creative naming and player-facing lore safety.
@@ -772,13 +957,18 @@ After outputting all tags, summarize the first starting turn, describe the surro
             "\n[CREATIVE AND KNOWLEDGE SAFETY RULES]\n"
             f"- Do not invent or reuse these names unless they already refer to the same existing entity: {banned_terms}.\n"
             "- When inventing new names, avoid common generic fantasy defaults.\n"
-            "- World.md is player-facing knowledge. Only use [[UPDATE_WORLD: ...]] for facts the player has actually learned in visible narration.\n"
+            "- World.md is player-facing knowledge. Use [[UPDATE_WORLD: Section | Text To Add]] for durable facts the player actually learns in visible narration.\n"
+            "- Important: partial player-known lore is enough for [[UPDATE_WORLD: ...]]. If the player learns that a named creature, plant, hazard, location, faction, custom, object, spell, or historical event exists and learns at least one useful visible fact about it, output an [[UPDATE_WORLD: ...]] tag.\n"
+            "- Do not skip the visible/player-known part of a world update just because other details remain hidden.\n"
             "- If an NPC's true name, motive, allegiance, secret, or identity has not been revealed to the player, do not put that hidden information in [[UPDATE_WORLD: ...]].\n"
+            "- If a world fact contains both visible information and GM-only information, split it: put visible information in [[UPDATE_WORLD: ...]] and hidden information in [[SECRET: ...]].\n"
             "- You may use [[UPDATE_WORLD: ...]] if it is reasonable for the Player to believe the information that they just learned. "
             "For example, if an NPC says that their name is Gregor, and the Player has not learned any information to the contrary, "
             "you may use the [[UPDATE_WORLD: ...]] tag for that. If you do, also output a [[SECRET: ...]] tag if that NPC has a different true name.\n"
             "- For unrevealed NPCs, use visible public descriptors such as 'the scarred dwarf clerk', 'the armored woman at the map table', or 'the hooded courier'.\n"
             "- Use [[SECRET: ...]] for GM-only facts that the player has not learned yet.\n"
+            "- Before finalizing each response, check whether the player learned any new named world facts. "
+            "If yes, output [[UPDATE_WORLD: Section | Text To Add]] for each durable player-known fact before [[STATUS: ...]].\n"
         )
     
     def _needs_creative_samples(
@@ -1202,7 +1392,13 @@ After outputting all tags, summarize the first starting turn, describe the surro
 
             # 2. PROCESS STANDARD TAGS
             standard_tag_pattern = re.compile(r"\[\[[A-Z_]+:.*?\]\]", re.DOTALL)
-            visible_narrative_for_tag_safety = standard_tag_pattern.sub("", display_ai_text)
+            display_without_tags = standard_tag_pattern.sub("", display_ai_text)
+
+            # Only the actual narration should prove player knowledge.
+            # Suggested actions must not count as "revealed" information.
+            visible_narrative_for_tag_safety = self._split_response_sections(
+                display_without_tags
+            ).main_body
 
             tag_parser.process_standard_tags(
                 ai_text,
@@ -1336,10 +1532,13 @@ After outputting all tags, summarize the first starting turn, describe the surro
         logging.warning("History-safe AI text was empty. Falling back to display AI text for logging.")
         return str(fallback_ai_text or "").strip()
             
+
+
 class TagParser:
     def __init__(self, app):
         self.app = app
         self.world_lore_updater = WorldLoreUpdater()
+        self.blocked_player_terms: set[str] = set()
         
     _POSSIBLE_PROPER_NOUN_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"\b[A-Z][a-z]+(?:[-'][A-Z][a-z]+)?(?:\s+[A-Z][a-z]+(?:[-'][A-Z][a-z]+)?)*\b"
@@ -1375,6 +1574,26 @@ class TagParser:
         r"\s*,?\s+whose name is\s+{name}\b",
         r"\s*,?\s+who introduces (?:himself|herself|themself|themselves) as\s+{name}\b",
     )
+    
+    def _record_blocked_player_terms(self, names: list[str]) -> None:
+        """
+        Records proper nouns that must not appear in player-facing text this turn.
+
+        Args:
+            names: Proper nouns rejected by the World lore sanitizer.
+        """
+        for name in names:
+            clean_name = str(name or "").strip()
+
+            if not clean_name:
+                continue
+
+            self.blocked_player_terms.add(clean_name)
+
+            # If "Arch-Scribe Vane" was rejected, "Vane" should also be blocked.
+            name_parts = clean_name.split()
+            if len(name_parts) > 1:
+                self.blocked_player_terms.add(name_parts[-1])
     
     def _process_upsert_world_tags(
         self,
@@ -1719,6 +1938,7 @@ class TagParser:
         )
 
         if unrevealed_names:
+            self._record_blocked_player_terms(unrevealed_names)
             repaired_lore = self._repair_update_world_lore(
                 clean_lore,
                 unrevealed_names,
@@ -2282,6 +2502,8 @@ class TagParser:
         modified_text = self._replace_internal_base_unit_language(modified_text)
         
         return modified_text
+    
+
 
 @dataclass(frozen=True)
 class WorldUpsertRequest:
@@ -2321,6 +2543,8 @@ class WorldLoreUpdater:
         "Magic and Religion",
         "Rumors and Unconfirmed Information",
         "Uncategorized",
+        "Flora, Fauna, and Climate",
+        "Out-Of-Game Reminders"
     )
 
     SECTION_ALIASES: ClassVar[dict[str, str]] = {
@@ -2360,6 +2584,13 @@ class WorldLoreUpdater:
         "rumors": "Rumors and Unconfirmed Information",
         "unconfirmed": "Rumors and Unconfirmed Information",
         "uncategorized": "Uncategorized",
+        "animal": "Flora, Fauna, and Climate",
+        "plant": "Flora, Fauna, and Climate",
+        "beast": "Flora, Fauna, and Climate",
+        "storm": "Flora, Fauna, and Climate",
+        "weather": "Flora, Fauna, and Climate",
+        "oog": "Out-Of-Game Reminders",
+        "out-of-game": "Out-Of-Game Reminders"
     }
 
     _NESTED_TAG_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
