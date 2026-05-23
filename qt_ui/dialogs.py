@@ -10,6 +10,10 @@ import logging, copy, os, shutil
 from pathlib import Path
 from typing import Any
 from file_manager import FileManager
+import csv
+import re
+from dataclasses import dataclass
+from typing import Callable, Protocol
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -38,7 +42,11 @@ from PySide6.QtWidgets import (
     QWizard,
     QWizardPage,
     QRadioButton,
+    QGridLayout,
+    QToolButton
 )
+
+from enum import StrEnum
 
 from config import SAVES_DIR
 DEFAULT_GREGORIAN_CALENDAR: dict[str, Any] = {
@@ -1229,6 +1237,9 @@ class AudioSettingsDialog(QDialog):
         self.orig_tts_rate = story_panel.tts_rate
         self.orig_narrator_enabled = story_panel.narrator_enabled
         self.orig_voice = story_panel.tts_voice
+        self.orig_skip_load_narration = bool(
+            getattr(story_panel, "skip_load_narration", True)
+        )
 
         layout = QVBoxLayout(self)
 
@@ -1260,6 +1271,13 @@ class AudioSettingsDialog(QDialog):
         self.chk_enable.setChecked(self.orig_narrator_enabled)
         self.chk_enable.toggled.connect(self._toggle_narrator_ui)
         narrator_layout.addWidget(self.chk_enable)
+        
+        self.chk_skip_load_narration = QCheckBox("Skip Narration when loading a save file")
+        self.chk_skip_load_narration.setChecked(self.orig_skip_load_narration)
+        self.chk_skip_load_narration.setToolTip(
+            "When enabled, loading a save still displays the recap, but the narrator will not read it aloud."
+        )
+        narrator_layout.addWidget(self.chk_skip_load_narration)
 
         tts_row = QHBoxLayout()
         self.lbl_tts_val = QLabel(f"{self.orig_tts_vol}%")
@@ -1342,6 +1360,7 @@ class AudioSettingsDialog(QDialog):
         self.lbl_voice_label.setEnabled(checked)
         self.combo_voices.setEnabled(checked)
         self.btn_test.setEnabled(checked)
+        self.chk_skip_load_narration.setEnabled(checked)
 
     def _play_sample(self):
         # Temporarily lock the voice in and test it
@@ -1359,12 +1378,14 @@ class AudioSettingsDialog(QDialog):
         self.story_panel.set_tts_volume(self.orig_tts_vol)
         self.story_panel.set_voice_by_name(self.orig_voice)
         self.story_panel.set_tts_rate(self.orig_tts_rate) 
+        self.story_panel.set_skip_load_narration(self.orig_skip_load_narration)
         super().reject()
 
     def accept(self):
         # Finalize
         self.story_panel.set_narrator_enabled(self.chk_enable.isChecked())
         self.story_panel.set_voice_by_name(self.combo_voices.currentData())
+        self.story_panel.set_skip_load_narration(self.chk_skip_load_narration.isChecked())
         super().accept()
         
     def _on_tts_speed_slider(self, val):
@@ -1374,6 +1395,490 @@ class AudioSettingsDialog(QDialog):
         
         self.lbl_tts_speed_val.setText(display_str)
         self.story_panel.set_tts_rate(val) # Live preview!
+        
+class MerchantPlayer(Protocol):
+    """Minimal Player interface required by MerchantDialog."""
+
+    base_currency: int
+
+    def get_formatted_currency(self, amount: int | None = None) -> str:
+        """
+        Formats base currency into player-facing currency text.
+
+        Args:
+            amount: Amount of base currency to format.
+
+        Returns:
+            Formatted currency text.
+        """
+        ...
+
+    def change_currency(self, amount: int) -> tuple[bool, str]:
+        """
+        Changes the player's currency.
+
+        Args:
+            amount: Positive or negative amount in base currency units.
+
+        Returns:
+            Tuple containing success state and a human-readable message.
+        """
+        ...        
+        
+@dataclass(frozen=True)
+class MerchantItem:
+    """
+    Represents one purchasable merchant entry.
+
+    Args:
+        name: Display name of the item or service.
+        description: Short item/service description.
+        price_base_units: Cost for one unit, measured in the world's base currency.
+        stock: Maximum available quantity. None means unlimited.
+        item_type: Inventory category used when adding the purchased item.
+    """
+
+    name: str
+    description: str
+    price_base_units: int
+    stock: int | None = None
+    item_type: str = "Purchased Item"
+
+
+@dataclass(frozen=True)
+class MerchantPurchase:
+    """
+    Represents the final purchase result.
+
+    Args:
+        item: Purchased merchant item.
+        quantity: Number of units purchased.
+    """
+
+    item: MerchantItem
+    quantity: int
+
+class MerchantTagParser:
+    """Parses the raw contents of a [[MERCHANT: ...]] tag into safe shop items."""
+
+    @staticmethod
+    def parse(raw_data: str | None) -> tuple[MerchantTransactionMode, list[MerchantItem]]:
+        """
+        Parses merchant tag contents.
+
+        Supported formats:
+            BUY | "Item | Desc | Price | Quantity | Item Type"
+            SELL | "Item | Desc | Price | Quantity | Item Type"
+            "Item | Desc | Price | Quantity | Item Type"
+
+        Args:
+            raw_data: Raw text inside [[MERCHANT: ...]].
+
+        Returns:
+            Tuple containing the transaction mode and valid merchant items.
+        """
+
+        clean_data = str(raw_data or "").strip()
+        if not clean_data:
+            logging.warning("MERCHANT tag was empty.")
+            return MerchantTransactionMode.BUY, []
+
+        mode = MerchantTransactionMode.BUY
+
+        mode_match = re.match(r"^(BUY|SELL)\s*\|\s*(.*)$", clean_data, flags=re.IGNORECASE | re.DOTALL)
+        if mode_match is not None:
+            raw_mode = mode_match.group(1).strip().upper()
+            clean_data = mode_match.group(2).strip()
+
+            try:
+                mode = MerchantTransactionMode(raw_mode)
+            except ValueError:
+                logging.warning("Invalid MERCHANT mode %r. Falling back to BUY.", raw_mode)
+                mode = MerchantTransactionMode.BUY
+
+        parsed_entries: list[str] = []
+
+        try:
+            csv_entries = list(csv.reader([clean_data], skipinitialspace=True))[0]
+            parsed_entries = [
+                entry.strip().strip("'\"")
+                for entry in csv_entries
+                if entry.strip().strip("'\"")
+            ]
+        except Exception as error:
+            logging.exception("Failed to parse MERCHANT tag as CSV: %s", error)
+            parsed_entries = [
+                line.strip().strip("'\"")
+                for line in clean_data.splitlines()
+                if line.strip()
+            ]
+
+        merchant_items: list[MerchantItem] = []
+
+        for entry in parsed_entries:
+            parts = [part.strip() for part in entry.split("|")]
+
+            if len(parts) < 3:
+                logging.warning("Skipped malformed MERCHANT entry: %r", entry)
+                continue
+
+            name = parts[0]
+            description = parts[1]
+            price_raw = parts[2]
+            stock_raw = parts[3] if len(parts) >= 4 else ""
+            item_type = parts[4] if len(parts) >= 5 and parts[4].strip() else "Purchased Item"
+
+            if not name or not description:
+                logging.warning("Skipped MERCHANT entry with blank name/description: %r", entry)
+                continue
+
+            if re.fullmatch(r"\d+", price_raw) is None:
+                logging.warning("Skipped MERCHANT entry with invalid price: %r", entry)
+                continue
+
+            try:
+                price_base_units = int(price_raw)
+            except (TypeError, ValueError) as error:
+                logging.exception("Failed to convert merchant price to int: %s", error)
+                continue
+
+            stock: int | None = None
+            if stock_raw:
+                stock_match = re.search(r"\d+", stock_raw)
+                if stock_match is not None:
+                    try:
+                        stock = max(0, int(stock_match.group(0)))
+                    except (TypeError, ValueError):
+                        logging.exception("Invalid merchant stock value: %r", stock_raw)
+                        stock = None
+
+            merchant_items.append(
+                MerchantItem(
+                    name=name,
+                    description=description,
+                    price_base_units=price_base_units,
+                    stock=stock,
+                    item_type=item_type,
+                )
+            )
+
+        return mode, merchant_items
+    
+class MerchantRow(QWidget):
+    """A single merchant item row with quantity controls."""
+
+    def __init__(
+        self,
+        item: MerchantItem,
+        format_currency: Callable[[int], str],
+        on_quantity_changed: Callable[[], None],
+        parent: QWidget | None = None,
+    ) -> None:
+        """
+        Initializes a merchant row.
+
+        Args:
+            item: Merchant item shown on this row.
+            format_currency: Callback used to render base-unit prices.
+            on_quantity_changed: Callback fired whenever row quantity changes.
+            parent: Optional Qt parent widget.
+        """
+
+        super().__init__(parent)
+        self.item = item
+        self.quantity = 0
+        self._on_quantity_changed = on_quantity_changed
+
+        layout = QGridLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+
+        self.name_label = QLabel(item.name)
+        self.name_label.setStyleSheet("font-weight: bold;")
+
+        self.description_label = QLabel(item.description)
+        self.description_label.setWordWrap(True)
+
+        price_text = "Free" if item.price_base_units == 0 else format_currency(item.price_base_units)
+        self.price_label = QLabel(price_text)
+
+        stock_text = "Unlimited" if item.stock is None else str(item.stock)
+        self.stock_label = QLabel(stock_text)
+
+        self.down_button = QToolButton()
+        self.down_button.setText("-")
+        self.down_button.clicked.connect(self.decrease_quantity)
+
+        self.quantity_label = QLabel("0")
+        self.quantity_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.quantity_label.setMinimumWidth(32)
+
+        self.up_button = QToolButton()
+        self.up_button.setText("+")
+        self.up_button.clicked.connect(self.increase_quantity)
+
+        layout.addWidget(self.name_label, 0, 0)
+        layout.addWidget(self.description_label, 1, 0)
+        layout.addWidget(QLabel("Price:"), 0, 1)
+        layout.addWidget(self.price_label, 0, 2)
+        layout.addWidget(QLabel("Stock:"), 1, 1)
+        layout.addWidget(self.stock_label, 1, 2)
+        layout.addWidget(self.down_button, 0, 3)
+        layout.addWidget(self.quantity_label, 0, 4)
+        layout.addWidget(self.up_button, 0, 5)
+
+    def increase_quantity(self) -> None:
+        """Increases the cart quantity for this row by one."""
+
+        if self.item.stock is not None and self.quantity >= self.item.stock:
+            return
+
+        self.quantity += 1
+        self._sync_quantity_label()
+        self._on_quantity_changed()
+
+    def decrease_quantity(self) -> None:
+        """Decreases the cart quantity for this row by one."""
+
+        if self.quantity <= 0:
+            return
+
+        self.quantity -= 1
+        self._sync_quantity_label()
+        self._on_quantity_changed()
+
+    def set_can_afford_more(self, can_afford_more: bool) -> None:
+        """
+        Enables or disables the increase button.
+
+        Args:
+            can_afford_more: Whether the player can add one more of this item.
+        """
+
+        has_stock = self.item.stock is None or self.quantity < self.item.stock
+        self.up_button.setEnabled(can_afford_more and has_stock)
+        self.down_button.setEnabled(self.quantity > 0)
+
+    def _sync_quantity_label(self) -> None:
+        """Updates the displayed row quantity."""
+
+        self.quantity_label.setText(str(self.quantity))
+
+
+
+
+class MerchantTransactionMode(StrEnum):
+    """Supported merchant transaction modes."""
+
+    BUY = "BUY"
+    SELL = "SELL"
+
+class MerchantDialog(QDialog):
+    """Non-closable shop dialog that performs deterministic merchant purchases."""
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        items: list[MerchantItem],
+        player: MerchantPlayer,
+        mode: MerchantTransactionMode = MerchantTransactionMode.BUY,
+    ) -> None:
+        """
+        Initializes the merchant shop dialog.
+
+        Args:
+            parent: Parent window.
+            items: Merchant inventory items.
+            player: Current Player object. Must expose base_currency,
+                get_formatted_currency(), and change_currency().
+        """
+
+        super().__init__(parent)
+        self.items = items or []
+        self.player = player
+        self.rows: list[MerchantRow] = []
+        self.final_purchases: list[MerchantPurchase] = []
+        self.left_without_purchase = False
+        self.mode = mode
+
+        # No X button. The player must use Purchase or Leave Merchant.
+        self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+
+        # Deliberately not ApplicationModal, so outside clicks can unfocus it.
+        self.setWindowModality(Qt.WindowModality.NonModal)
+
+        main_layout = QVBoxLayout(self)
+
+        self.wallet_label = QLabel()
+        self.wallet_label.setStyleSheet("font-weight: bold;")
+        main_layout.addWidget(self.wallet_label)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+
+        self.scroll_widget = QWidget()
+        self.rows_layout = QVBoxLayout(self.scroll_widget)
+        self.rows_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self.scroll_area.setWidget(self.scroll_widget)
+        main_layout.addWidget(self.scroll_area)
+
+        self.total_label = QLabel()
+        self.total_label.setStyleSheet("font-weight: bold;")
+
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(self.total_label)
+        button_layout.addStretch()
+
+        self.leave_button = QPushButton("Leave Merchant")
+        self.leave_button.clicked.connect(self.leave_merchant)
+
+        self.purchase_button = QPushButton("Purchase")
+        self.purchase_button.clicked.connect(self.purchase)
+        
+        if self.mode == MerchantTransactionMode.SELL:
+            self.setWindowTitle("Sell to Merchant")
+            self.purchase_button.setText("Sell Items")
+        else:
+            self.setWindowTitle("Merchant")
+            self.purchase_button.setText("Purchase")
+        self.setMinimumWidth(760)
+        self.setMinimumHeight(460)
+
+        button_layout.addWidget(self.leave_button)
+        button_layout.addWidget(self.purchase_button)
+        main_layout.addLayout(button_layout)
+
+        for item in self.items:
+            row = MerchantRow(
+                item=item,
+                format_currency=self._format_currency,
+                on_quantity_changed=self.refresh_totals,
+            )
+            self.rows_layout.addWidget(row)
+            self.rows.append(row)
+
+        self.refresh_totals()
+
+    def reject(self) -> None:
+        """Blocks Escape-key closing."""
+
+        logging.info("MerchantDialog reject ignored. Use Purchase or Leave Merchant.")
+
+    def closeEvent(self, event) -> None:
+        """Blocks window-manager closing."""
+
+        event.ignore()
+        logging.info("MerchantDialog close ignored. Use Purchase or Leave Merchant.")
+
+    def get_total_cost(self) -> int:
+        """
+        Returns the current cart total in base currency units.
+
+        Returns:
+            Total cart cost.
+        """
+
+        return sum(row.item.price_base_units * row.quantity for row in self.rows)
+
+    def purchase(self) -> None:
+        """Completes the current merchant transaction."""
+
+        total_value = self.get_total_cost()
+
+        purchases = [
+            MerchantPurchase(item=row.item, quantity=row.quantity)
+            for row in self.rows
+            if row.quantity > 0
+        ]
+
+        if not purchases:
+            QMessageBox.information(self, "No Items Selected", "Choose at least one item or leave the merchant.")
+            return
+
+        try:
+            currency_delta = total_value if self.mode == MerchantTransactionMode.SELL else -total_value
+            success, message = self.player.change_currency(currency_delta)
+        except Exception as error:
+            logging.exception("Merchant currency transaction failed: %s", error)
+            QMessageBox.critical(self, "Transaction Failed", "Currency transaction failed.")
+            return
+
+        if not success:
+            QMessageBox.warning(self, "Transaction Failed", str(message))
+            self.refresh_totals()
+            return
+
+        self.final_purchases = purchases
+        logging.info("Merchant transaction completed: %s", message)
+        self.accept()
+
+    def leave_merchant(self) -> None:
+        """Closes the merchant without making a purchase."""
+
+        self.left_without_purchase = True
+        self.final_purchases = []
+        self.accept()
+
+    def refresh_totals(self) -> None:
+        """Refreshes wallet, cart total, button states, and affordability checks."""
+
+        wallet = self._safe_wallet()
+        total = self.get_total_cost()
+
+        self.wallet_label.setText(f"Wealth: {self._format_currency(wallet)}")
+
+        if self.mode == MerchantTransactionMode.SELL:
+            self.total_label.setText(f"Sale Total: {self._format_currency(total)}")
+            self.purchase_button.setEnabled(total > 0)
+
+            for row in self.rows:
+                row.set_can_afford_more(True)
+
+            return
+
+        remaining_after_cart = wallet - total
+
+        self.total_label.setText(f"Cart Total: {self._format_currency(total)}")
+        self.purchase_button.setEnabled(total > 0 and total <= wallet)
+
+        for row in self.rows:
+            additional_cost = row.item.price_base_units
+            can_afford_more = additional_cost == 0 or remaining_after_cart >= additional_cost
+            row.set_can_afford_more(can_afford_more)
+
+    def _safe_wallet(self) -> int:
+        """
+        Safely reads the player's current base currency.
+
+        Returns:
+            Player wealth in base currency units.
+        """
+
+        try:
+            return max(0, int(getattr(self.player, "base_currency", 0) or 0))
+        except (TypeError, ValueError):
+            logging.exception("Invalid player base_currency while opening merchant.")
+            return 0
+
+    def _format_currency(self, amount: int) -> str:
+        """
+        Formats base currency using Player.get_formatted_currency when available.
+
+        Args:
+            amount: Base currency units.
+
+        Returns:
+            Player-facing currency string.
+        """
+
+        formatter = getattr(self.player, "get_formatted_currency", None)
+        if callable(formatter):
+            try:
+                return str(formatter(int(amount)))
+            except Exception as error:
+                logging.exception("Failed to format merchant currency: %s", error)
+
+        return f"{int(amount)} base units"
 
 # ---- Merged from qt_ui/creation_wizard.py ----
 class WorldPage(QWizardPage):

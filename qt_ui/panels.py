@@ -714,6 +714,82 @@ class InventoryPanel(JsonFilePanel):
 
         return "\n".join(lines)
 
+    def try_remove_item(self, item_name: str | None, amount: int | None = 1) -> bool:
+        """
+        Removes an inventory item only if enough quantity exists.
+
+        Args:
+            item_name: Name, or partial name, of the item to remove.
+            amount: Quantity to remove.
+
+        Returns:
+            True if the item was found and removed, otherwise False.
+        """
+
+        target_name = str(item_name or "").strip()
+        if not target_name:
+            logging.warning("InventoryPanel.try_remove_item called with no item name.")
+            return False
+
+        try:
+            amount_to_remove = max(1, int(amount or 1))
+        except (TypeError, ValueError):
+            logging.exception("Invalid amount passed to try_remove_item: %r", amount)
+            amount_to_remove = 1
+
+        try:
+            data = self.load_data()
+
+            if not isinstance(data, dict):
+                logging.warning("InventoryPanel.try_remove_item expected dictionary inventory data.")
+                return False
+
+            for _category, items in data.items():
+                if not isinstance(items, list):
+                    continue
+
+                for index, item in enumerate(list(items)):
+                    if not isinstance(item, dict):
+                        continue
+
+                    item_name_value = str(item.get("name", "") or "").strip()
+                    if target_name.lower() not in item_name_value.lower():
+                        continue
+
+                    try:
+                        current_amount = int(item.get("amount", 1) or 1)
+                    except (TypeError, ValueError):
+                        logging.exception("Invalid inventory amount for item: %r", item)
+                        current_amount = 1
+
+                    if current_amount < amount_to_remove:
+                        logging.warning(
+                            "Cannot remove %s x %s because only %s are available.",
+                            amount_to_remove,
+                            target_name,
+                            current_amount,
+                        )
+                        return False
+
+                    new_amount = current_amount - amount_to_remove
+                    if new_amount <= 0:
+                        items.pop(index)
+                    else:
+                        item["amount"] = new_amount
+
+                    self.save_data(data)
+                    self.refresh_display()
+                    logging.info("Removed %s x %s from inventory.", amount_to_remove, target_name)
+                    return True
+
+            logging.warning("Could not find item to remove from inventory: %s", target_name)
+            return False
+
+        except Exception as error:
+            logging.exception("InventoryPanel.try_remove_item failed: %s", error)
+            self.refresh_display()
+            return False
+    
     def refresh_display(self) -> None:
         """Redraws currency and inventory item tables."""
         if self.data_path is None:
@@ -2673,14 +2749,15 @@ class StoryPanel(QWidget):
             "dynamic_stats": [],
         }
 
-        self.narrator_enabled = False
-        self.music_volume = 100
+        self.narrator_enabled = True
+        self.music_volume = 10
         self.tts_volume = 100
         self.tts_rate = 0
         self.tts_voice = "af_sarah"
         self.tts_manager: TTSManager | None = None
         self.temp_dir = tempfile.gettempdir()
         self._unlock_queued = False
+        self.skip_load_narration = True
 
         # Chunked TTS state.
         self._tts_session_id = 0
@@ -2736,17 +2813,23 @@ class StoryPanel(QWidget):
             """
             p {
                 margin-top: 0px;
-                margin-bottom: 18px;
+                margin-bottom: 10px;
                 line-height: 125%;
             }
 
             ul, ol {
                 margin-top: 4px;
-                margin-bottom: 12px;
+                margin-bottom: 8px;
             }
 
             li {
-                margin-bottom: 6px;
+                margin-top: 0px;
+                margin-bottom: 2px;
+            }
+
+            li p {
+                margin-top: 0px;
+                margin-bottom: 0px;
             }
             """
         )
@@ -2781,6 +2864,15 @@ class StoryPanel(QWidget):
             self.stop_tts(flush_remaining_text=True)
         self.txt_input.clear()
         self.send_requested.emit(text)
+        
+    def set_skip_load_narration(self, enabled: bool | None) -> None:
+        """
+        Sets whether recap/load text should skip narrator playback.
+
+        Args:
+            enabled: True to skip narration during save-load recap display.
+        """
+        self.skip_load_narration = bool(enabled)
         
     def set_tts_manager(self, tts_manager: TTSManager | None) -> None:
         """
@@ -2858,7 +2950,8 @@ class StoryPanel(QWidget):
             return
 
         try:
-            rendered_html = markdown.markdown(markdown_string)
+            safe_markdown = self._normalize_markdown_for_display(markdown_string)
+            rendered_html = markdown.markdown(safe_markdown, extensions=["sane_lists"])
             cursor = self.txt_log.textCursor()
             cursor.movePosition(QTextCursor.MoveOperation.End)
 
@@ -3132,36 +3225,201 @@ class StoryPanel(QWidget):
 
         return chunks
 
-    def print_text(self, text: str, *, sender: str = "GM") -> None:
+    def _normalize_markdown_for_display(self, markdown_text: str | None) -> str:
+        """
+        Normalizes Markdown before rendering it in the Story Panel.
+
+        This keeps live AI turns readable by:
+        - Splitting long prose blocks every couple of sentences.
+        - Ensuring Markdown lists have a blank line before the list.
+        - Removing accidental blank lines between consecutive bullet items.
+
+        Args:
+            markdown_text: Raw Markdown intended for display.
+
+        Returns:
+            Display-safe Markdown.
+        """
+        clean_text = str(markdown_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+        if not clean_text:
+            logging.warning("StoryPanel._normalize_markdown_for_display received empty text.")
+            return ""
+
+        clean_text = self._tighten_markdown_lists(clean_text)
+        clean_text = self._split_long_prose_paragraphs(clean_text, max_sentences=2)
+
+        # Python-Markdown usually needs a blank line before a list.
+        clean_text = re.sub(
+            r"(?m)([^\n])\n([ \t]*[-*+][ \t]+)",
+            r"\1\n\n\2",
+            clean_text,
+        )
+
+        # If the AI already inserted blank lines between bullets, remove them again.
+        clean_text = self._tighten_markdown_lists(clean_text)
+
+        return re.sub(r"\n{3,}", "\n\n", clean_text).strip()
+
+
+    def _tighten_markdown_lists(self, markdown_text: str | None) -> str:
+        """
+        Removes blank lines between consecutive Markdown bullet items.
+
+        Args:
+            markdown_text: Markdown text that may contain loose bullet lists.
+
+        Returns:
+            Markdown with tight bullet lists.
+        """
+        clean_text = str(markdown_text or "")
+
+        if not clean_text.strip():
+            logging.warning("StoryPanel._tighten_markdown_lists received empty text.")
+            return ""
+
+        return re.sub(
+            r"(?m)^([ \t]*[-*+][ \t]+[^\n]+)\n[ \t]*\n(?=[ \t]*[-*+][ \t]+)",
+            r"\1\n",
+            clean_text,
+        )
+
+
+    def _split_long_prose_paragraphs(
+        self,
+        markdown_text: str | None,
+        *,
+        max_sentences: int = 2,
+    ) -> str:
+        """
+        Splits long prose paragraphs while leaving lists, headings, quotes, and HTML alone.
+
+        Args:
+            markdown_text: Markdown text to format.
+            max_sentences: Maximum sentences per generated display paragraph.
+
+        Returns:
+            Markdown with long prose blocks split into smaller paragraphs.
+        """
+        clean_text = str(markdown_text or "").strip()
+
+        if not clean_text:
+            logging.warning("StoryPanel._split_long_prose_paragraphs received empty text.")
+            return ""
+
+        try:
+            safe_max_sentences = max(1, int(max_sentences))
+        except (TypeError, ValueError):
+            logging.exception("Invalid max_sentences value: %r", max_sentences)
+            safe_max_sentences = 2
+
+        output_blocks: list[str] = []
+
+        for raw_block in re.split(r"\n\s*\n+", clean_text):
+            block = raw_block.strip()
+
+            if not block:
+                continue
+
+            if self._is_markdown_block_protected(block):
+                output_blocks.append(block)
+                continue
+
+            prose = re.sub(r"[ \t]*\n[ \t]*", " ", block).strip()
+            sentences = [
+                sentence.strip()
+                for sentence in re.split(r"(?<=[.!?])\s+(?=[\"'A-Z0-9])", prose)
+                if sentence.strip()
+            ]
+
+            if len(sentences) <= safe_max_sentences:
+                output_blocks.append(prose)
+                continue
+
+            for index in range(0, len(sentences), safe_max_sentences):
+                paragraph = " ".join(sentences[index:index + safe_max_sentences]).strip()
+                if paragraph:
+                    output_blocks.append(paragraph)
+
+        return "\n\n".join(output_blocks).strip()
+
+
+    def _is_markdown_block_protected(self, markdown_block: str | None) -> bool:
+        """
+        Checks whether a Markdown block should not be prose-reflowed.
+
+        Args:
+            markdown_block: One paragraph/block of Markdown.
+
+        Returns:
+            True if the block should be preserved exactly.
+        """
+        block = str(markdown_block or "").lstrip()
+
+        if not block:
+            logging.warning("StoryPanel._is_markdown_block_protected received empty block.")
+            return True
+
+        protected_prefixes = (
+            "#",
+            ">",
+            "\\>",
+            "- ",
+            "* ",
+            "+ ",
+            "```",
+            "<pre",
+            "<table",
+            "<ul",
+            "<ol",
+        )
+
+        return block.startswith(protected_prefixes) or bool(
+            re.search(r"(?m)^[ \t]*[-*+][ \t]+", block)
+        )
+    
+    def print_text(self, text: str, *, sender: str = "GM", narrate: bool = True) -> None:
         """
         Prints text to the story window and optionally reads it with chunked TTS.
+
+        The full player-facing Markdown is displayed once immediately. TTS may still
+        split the same text into smaller speech chunks, but those speech chunks do not
+        create extra visual paragraph breaks in the Story Panel.
 
         Args:
             text: Player-facing Markdown text to display.
             sender: Optional sender label reserved for future formatting.
+            narrate: Whether narrator TTS should read this message aloud.
         """
         clean_input = str(text or "").strip()
+
         if not clean_input:
+            logging.warning("StoryPanel.print_text received empty text.")
             return
-
+        
         if clean_input.startswith("> "):
-            self.append_text("\n" + "\\" + clean_input)
+                self.append_text("\\" + clean_input)
+                return
+
+        if not narrate or not self.narrator_enabled:
+            self.append_text(clean_input)
             return
 
-        if not self.narrator_enabled:
-            self.append_text("\n" + clean_input)
+        if self.tts_manager is None:
+            logging.warning("Narrator is enabled, but no TTS manager is available.")
             return
 
         chunks = self._split_story_text_for_chunked_tts(clean_input)
+
         if not chunks:
             logging.warning("Narrator was enabled, but no TTS chunks were produced.")
-            self.append_text("\n" + clean_input)
             return
 
-        self._start_chunked_tts(chunks, fallback_text=clean_input)
-
-        if self.narrator_enabled:
-            self.stop_tts(flush_remaining_text=True)
+        self._start_chunked_tts(
+            chunks,
+            fallback_text=clean_input,
+            display_during_playback=True,
+        )
 
     def _generate_and_play_tts(self, text: str, original_text: str | None = None) -> None:
         """Generates TTS audio without blocking the UI thread."""
@@ -3195,7 +3453,13 @@ class StoryPanel(QWidget):
 
         threading.Thread(target=run_tts, daemon=True).start()
         
-    def _start_chunked_tts(self, chunks: list[str], *, fallback_text: str) -> None:
+    def _start_chunked_tts(
+        self,
+        chunks: list[str],
+        *,
+        fallback_text: str,
+        display_during_playback: bool = True,
+    ) -> None:
         """
         Starts a chunked TTS session.
 
@@ -3217,7 +3481,7 @@ class StoryPanel(QWidget):
             self._tts_session_id += 1
             session_id = self._tts_session_id
             self._tts_queue_active = True
-            self._tts_active_chunks = list(chunks)
+            self._tts_active_chunks = list(chunks) if display_during_playback else []
             self._tts_next_chunk_index_to_display = 0
 
         audio_queue: queue.Queue[tuple[str, Path | None] | None] = queue.Queue(maxsize=3)
@@ -3230,7 +3494,7 @@ class StoryPanel(QWidget):
 
         player_thread = threading.Thread(
             target=self._play_tts_chunks,
-            args=(session_id, audio_queue),
+            args=(session_id, audio_queue, display_during_playback),
             daemon=True,
         )
 
@@ -3378,6 +3642,7 @@ class StoryPanel(QWidget):
         self,
         session_id: int,
         audio_queue: queue.Queue[tuple[str, Path | None] | None],
+        display_during_playback: bool = True,
     ) -> None:
         """
         Displays and plays queued TTS chunks in order.
@@ -3398,10 +3663,11 @@ class StoryPanel(QWidget):
 
                 visible_text, audio_path = item
 
-                display_text = self._claim_next_tts_chunk_for_display(
-                    session_id,
-                    visible_text,
-                )
+                if display_during_playback:
+                    display_text = self._claim_next_tts_chunk_for_display(
+                        session_id,
+                        visible_text,
+                    )
 
                 if display_text:
                     self.text_ready_signal.emit("\n" + display_text)

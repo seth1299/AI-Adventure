@@ -35,6 +35,9 @@ from .dialogs import (
     CurrencyManagerDialog,
     HelpDialog,
     MainMenuDialog,
+    MerchantDialog,
+    MerchantItem,
+    MerchantTransactionMode,
     NewGameSourceDialog,
     StatsManagerDialog,
 )
@@ -106,6 +109,134 @@ class MainWindow(QMainWindow):
         self.setTabPosition(Qt.DockWidgetArea.AllDockWidgetAreas, QTabWidget.TabPosition.North)
         self._setup_menu_bar()
         
+    def open_merchant_dialog(
+        self,
+        items: list[MerchantItem],
+        mode: MerchantTransactionMode = MerchantTransactionMode.BUY,
+    ) -> None:
+        """
+        Opens the merchant shop and applies purchases directly to currency/inventory.
+
+        Args:
+            items: Parsed merchant items from a [[MERCHANT: ...]] tag.
+        """
+
+        if self.app is None:
+            logging.warning("Cannot open merchant dialog because app context is missing.")
+            return
+
+        if not items:
+            logging.warning("Cannot open merchant dialog with no valid items.")
+            return
+
+        dialog = MerchantDialog(
+            parent=self,
+            items=items,
+            player=self.app.player,
+            mode=mode,
+        )
+        dialog.setStyleSheet(self.styleSheet())
+
+        # Gate story input while shop is open, while still allowing outside clicks to unfocus.
+        self.story_panel.set_controls_state(False, "Merchant shop open.")
+
+        def finish_dialog(result: int) -> None:
+            try:
+                if result == int(QDialog.DialogCode.Accepted):
+                    self._apply_merchant_result(dialog)
+
+                if dialog.left_without_purchase and self.ai_manager is not None:
+                    self.ai_manager.handle_player_action(
+                        "The player leaves the merchant without buying anything. Return them to the nearby main area."
+                    )
+            finally:
+                self.story_panel.set_controls_state(True)
+                dialog.deleteLater()
+
+        dialog.finished.connect(finish_dialog)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        
+    def _apply_merchant_result(self, dialog: MerchantDialog) -> None:
+        """
+        Applies completed merchant results to inventory.
+
+        Buying adds items.
+        Selling removes items.
+
+        Args:
+            dialog: Completed MerchantDialog.
+        """
+
+        if self.app is None:
+            logging.warning("Cannot apply merchant result because app context is missing.")
+            return
+
+        inventory_panel = self.app.notebook_widgets.get("Inventory")
+        if inventory_panel is None:
+            logging.error("Cannot apply merchant result because Inventory panel is missing.")
+            return
+
+        purchases = getattr(dialog, "final_purchases", []) or []
+        if not purchases:
+            return
+
+        sold_or_bought_summary: list[str] = []
+
+        for purchase in purchases:
+            item = purchase.item
+            quantity = purchase.quantity
+
+            if quantity <= 0:
+                continue
+
+            if dialog.mode == MerchantTransactionMode.SELL:
+                try_remove_item = getattr(inventory_panel, "try_remove_item", None)
+
+                if callable(try_remove_item):
+                    removed = try_remove_item(item.name, quantity)
+                else:
+                    logging.warning("Inventory panel has no try_remove_item method. Falling back to autonomous_remove.")
+                    inventory_panel.autonomous_remove(f"{item.name} | {quantity}")
+                    removed = True
+
+                if not removed:
+                    logging.error("Merchant sell failed to remove inventory item: %s x %s", quantity, item.name)
+                    continue
+
+                sold_or_bought_summary.append(f"{quantity} x {item.name}")
+                continue
+
+            add_payload = f"{item.item_type} | {item.name} | {item.description} | {quantity}"
+
+            try:
+                inventory_panel.autonomous_add(add_payload)
+                sold_or_bought_summary.append(f"{quantity} x {item.name}")
+            except Exception as error:
+                logging.exception("Failed to add merchant purchase to inventory: %s", error)
+
+        try:
+            inventory_panel.refresh_display()
+        except Exception as error:
+            logging.exception("Failed to refresh inventory after merchant transaction: %s", error)
+
+        try:
+            self.app._sync_player_state_to_ui()
+            self.app.save_game()
+        except Exception as error:
+            logging.exception("Failed to sync/save after merchant transaction: %s", error)
+
+        if not sold_or_bought_summary:
+            return
+
+        action_word = "Sold" if dialog.mode == MerchantTransactionMode.SELL else "Purchased"
+
+        self.story_panel.print_text(
+            f"{action_word}: {', '.join(sold_or_bought_summary)}.",
+            sender="System",
+        )
+    
     def _setup_menu_bar(self):
         """Creates the native OS-style top-left menu bar."""
         menu_bar = self.menuBar()
@@ -596,6 +727,10 @@ class MainWindow(QMainWindow):
             settings.setValue("narrator_enabled", self.story_panel.narrator_enabled)
             settings.setValue("narrator_volume", self.story_panel.tts_volume)
             settings.setValue("narrator_rate", self.story_panel.tts_rate)
+            settings.setValue(
+                "skip_load_narration",
+                bool(getattr(self.story_panel, "skip_load_narration", True)),
+            )
             current_voice = self.story_panel.tts_voice
             if current_voice:
                 settings.setValue("narrator_voice", current_voice)
@@ -682,6 +817,12 @@ class MainWindow(QMainWindow):
             # Safely check if the string representation implies True
             is_narrator_enabled = narrator_string == 'true'
             self.story_panel.set_narrator_enabled(is_narrator_enabled)
+            
+            raw_skip_load_narration = settings.value("skip_load_narration", True)
+            skip_load_narration_string = str(raw_skip_load_narration).strip().lower()
+            skip_load_narration = skip_load_narration_string in {"true", "1", "yes", "on"}
+
+            self.story_panel.set_skip_load_narration(skip_load_narration)
             
             # 5. Narrator Voice
             raw_voice_name = settings.value("narrator_voice", "")

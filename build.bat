@@ -1,10 +1,11 @@
 @echo off
 setlocal
 
-py -m pip install --upgrade pip
-py -m pip install -r requirements.txt
+py -m pip install --upgrade pip | findstr /V /C:"Requirement already satisfied"
+py -m pip install -r requirements.txt | findstr /V /C:"Requirement already satisfied"
 
 py -m PyInstaller ^
+  --log-level ERROR ^
   --noconfirm ^
   --noconsole ^
   --onefile ^

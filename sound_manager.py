@@ -15,7 +15,7 @@ class SoundManager:
     def __init__(self, sounds_directory: str | Path) -> None:
         self.sounds_directory = Path(sounds_directory).expanduser()
         self.current_music: str | None = None
-        self.music_volume: float = 1.0
+        self.music_volume: float = 0.1
         self.sfx_volume: float = 1.0
         self._initialized = False
         self._track_cache: dict[str, Path] = {}
@@ -69,7 +69,6 @@ class SoundManager:
                 return
 
             pygame.mixer.music.set_volume(self.music_volume)
-            logging.info("Music volume set to %.2f", self.music_volume)
 
         except (TypeError, ValueError) as error:
             logging.exception("Invalid music volume value %r: %s", volume, error)

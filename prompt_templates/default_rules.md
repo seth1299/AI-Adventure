@@ -22,6 +22,7 @@ Never explain the tags to the player unless the player is speaking Out-Of-Game.
 - If the player has companions or teammates, those NPCs should take reasonable actions during the scene instead of waiting passively forever.
 - You MUST avoid using the em-dash ("--") character.
 - You MUST avoid cliched "A.I.-isms", such as using language like "You don't just [X], you [Y]." or "It's not just [X], it's [Y]."
+- Make sure that if the Player takes an actionable step for an item in their inventory, such as storing an herb in a glass jar to prevent spoilage, that you output an [[MODIFY_ITEM:]] tag (described later) to include the item's current state.
 
 == Examples ==
 
@@ -651,7 +652,7 @@ Changes the name, description, or amount of an existing inventory item without f
 
 == Rules ==
 
-- Use this when an existing item changes state.
+- Use this when an existing item changes state, especially when the Player does a specific action to an item, such as storing an herb in a glass jar, or storing mushrooms out of the light.
 - `TargetName` should match the current inventory item name as closely as possible.
 - Use `SAME` or `SKIP` for fields that do not change.
 - Example use cases for this tag include but are not limited to: opening containers, partially eating food, repairing items, damaging items, filling containers, emptying containers, marking documents, or changing item condition.
@@ -672,17 +673,10 @@ The player partially eats a wheel of cheese:
 [[MODIFY_ITEM: Cheese Wheel | SAME | A large cheese wheel with several fresh slices cut away. | SAME]]
 ```
 
-The player loads 6 bullets into a revolver:
+The player stores an herb in a glass jar to prevent spoilage:
 
 ```text
-[[REMOVE: Revolver Cartridge | 6]]
-[[MODIFY_ITEM: Old Revolver | SAME | A worn revolver. (ACC: +1) (DMG: 2d6) (RAN: 60 ft) (TYP: Ballistic) (AMM: Revolver Cartridge) | SAME]]
-```
-
-The player fires once from that revolver:
-
-```text
-[[MODIFY_ITEM: Old Revolver | SAME | A worn revolver. (ACC: +1) (DMG: 2d6) (RAN: 60 ft) (TYP: Ballistic) (AMM: Revolver Cartridge) | SAME]]
+[[MODIFY_ITEM: Basil | SAME | A healthy sprig of basil. Currently stored in a glass jar to prevent spoilage. | SAME]]
 ```
 
 == Do Not Use ==
@@ -1091,7 +1085,7 @@ Adds factual player-known world knowledge to the World panel under the correct s
 - Write durable facts that still make sense later.
 - If the section is unclear, use Uncategorized.
 - Before using `[[UPDATE_WORLD: ...]]`, check whether the fact belongs to an existing World entry. If the entity, creature, hazard, location, faction, NPC, spell, custom, or concept already exists in World.md, use `[[UPSERT_WORLD: ...]]` instead.
-- Do not create parenthetical sub-entries such as `Glass-Gales (Survival Tactics)`, `Mirror-Wards (Dismantling)`, or `Stone-Strider Goat (Behavior)`. Use [[UPSERT_WORLD:]] for that, adding on that information to the already-existing information for that topic (while following the rules for the [[UPSERT_WORLD:]] tag as well.) 
+- Do not create parenthetical sub-entries such as `Glass-Gales (Survival Tactics)`, `Mirror-Wards (Dismantling)`, or `Stone-Strider Goat (Behavior)`. Use [[UPSERT_WORLD:]] for that, adding on that information to the already-existing information for that topic (while following the rules for the [[UPSERT_WORLD:]] tag as well.)
 - Research topics, survival tactics, warning signs, uses, weaknesses, behaviors, and other subtopics must be folded into the existing entry's lore text.
 
 == Examples ==
@@ -1214,48 +1208,40 @@ Hidden treasure:
 
 ---
 
-### [[MERCHANT: ...]] Tag: `[[MERCHANT: "Item | Desc | Price | Quantity", "Item | Desc | Price | Quantity"]]`
+### [[MERCHANT: ...]] Tag: `[[MERCHANT: BUY | "Item | Desc | Price | Quantity | Item Type"]]`
 
 == Purpose ==
 
-Displays goods, services, trade offers, buyback offers, or barter options.
+Opens the merchant shop interface. The game engine handles cart selection, currency subtraction, and item addition.
 
 == Format ==
 
 ```text
-[[MERCHANT: "Item 1 | Desc | PriceBaseUnits | Quantity/Amount Available", "Item 2 | Desc | PriceBaseUnits | Quantity/Amount Available"]]
+[[MERCHANT: BUY | "Item 1 | Desc | PriceBaseUnits | Quantity/Amount Available | Item Type", BUY | "Item 2 | Desc | PriceBaseUnits | Quantity/Amount Available | Item Type"]]
 ```
 
 == Rules ==
 
-- Use this whenever trade, shopping, bartering, selling, or merchant inventory is relevant, including when the Player is selling their own items.
+- Use this tag whenever the player is offered goods, services, trade offers, buyback offers, or barter options; OR when the Player wants to sell their own items to an NPC.
 - Each merchant entry must be quoted.
-- Inside each quoted entry, separate fields with `|`.
-- `Item` is the offered item or service.
-- `Desc` is a short description.
-- `PriceBaseUnits` must be an integer greater than or equal to 0, measured in the world's smallest/base currency unit.
-- `Quantity/Amount Available` is recommended.
-- Do not output `[[CHANGE_CURRENCY: ...]]` until the player has clearly agreed to buy, sell, pay, or accept the trade.
-- Do not output `[[ADD: ...]]` for merchant goods until the player actually obtains them.
+- Inside each quoted entry, separate fields with |.
+- PriceBaseUnits must be an integer greater than or equal to 0.
+- Do not output [[CHANGE_CURRENCY: ...]] along with this tag.
+- Do not output [[ADD: ...]] along with this tag.
+- The engine handles purchased item addition and currency subtraction through the merchant interface.
 
 == Examples ==
 
-A general store offers items:
+The Player meets a merchant that the Player wants to BUY things from:
 
 ```text
-[[MERCHANT: "Trail Ration | Dried meat, coarse bread, and hard cheese for travel. | 5 | 6", "Lantern Oil | A small sealed flask of lamp oil. | 8 | 3"]]
+[[MERCHANT: BUY | "Trail Ration | Dried meat, coarse bread, and hard cheese for travel. | 5 | 6 | Food", BUY | "Lantern Oil | A small sealed flask of lamp oil. | 8 | 3 | Fuel"]]
 ```
 
-A smith offers services:
+The Player wants to SELL their own items to an NPC (make sure that the items actually exist in the Player's Inventory first):
 
 ```text
-[[MERCHANT: "Repair Damaged Sword | The smith can hammer out bends and reset the grip. | 20 | 1", "Sharpen Blade | Restores a dulled edge. | 5 | 4"]]
-```
-
-A merchant gives away unwanted goods for free:
-
-```text
-[[MERCHANT: "Cracked Clay Cup | A chipped cup the merchant wants gone. | 0 | 2"]]
+[[MERCHANT: SELL | "Trail Ration | Dried meat, coarse bread, and hard cheese for travel. | 5 | 6 | Food", SELL | "Lantern Oil | A small sealed flask of lamp oil. | 8 | 3 | Fuel"]]
 ```
 
 == Do Not Use ==
@@ -1267,8 +1253,6 @@ A merchant gives away unwanted goods for free:
 [[MERCHANT: "Cracked Clay Cup | Chipped but usable. | Free | 2"]]
 [[CHANGE_CURRENCY: -5]]
 ```
-
-Do not charge the player until they agree to buy.
 
 ---
 

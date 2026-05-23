@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 from creative_sampler import CreativeCategory, CreativeSampleRequest
 from dataclasses import dataclass
+from qt_ui.dialogs import MerchantTagParser
 
 @dataclass(frozen=True)
 class ResponseSections:
@@ -167,22 +168,23 @@ class AIManager:
                         CreativeCategory.SPECIES_NAMES,
                     ),
                     samples_per_category=10,
-                    banned_terms=(
-                        "Kaelan",
-                        "Bram",
-                        "Elara",
-                        "Oakhaven",
-                        "Ravenswood",
-                        "Silverbrook",
-                    ),
+                    banned_terms=self.BANNED_CREATIVE_TERMS,
                 )
             )
         else:
             logging.warning("Creative idea bank is unavailable.")
+            
+        banned_creative_terms_text = ", ".join(self.BANNED_CREATIVE_TERMS)
         
         prompt = f"""
 Initialize a new RPG adventure using the following parameters.
 CRITICAL INSTRUCTION: If any parameter below starts with "Unknown" or "None provided", you must creatively invent a fitting value for it. DO NOT use common AI fantasy names. Keep any parameters that are already provided by the player EXACTLY as they are.
+
+CRITICAL NAMING BAN:
+When inventing new names, do not use any of these names or obvious spelling, spacing, or hyphenation variants unless the player explicitly provided the name:
+{banned_creative_terms_text}
+
+When creating proper nouns, strongly prefer the injected creative inspiration samples or altered combinations of those samples.
 
 Provided World Information:
 - Genre: {data['world']['genre'] or 'Unknown Genre'}
@@ -260,7 +262,7 @@ Output the following tags to set up the starting gameplay state (making sure to 
 
 - (Filled value)
 
-## Out-Of-Game-Reminders
+## Out-Of-Game Reminders
 
 - **Focus:** (Filled value)
 - **Genre:** (Filled value)
@@ -833,6 +835,12 @@ After outputting all tags, summarize the first starting turn, describe the surro
         return self._normalize_calendar_settings(raw_settings)
 
     BANNED_CREATIVE_TERMS: ClassVar[tuple[str, ...]] = (
+        "Aethelgard",
+        "Whisperwood",
+        "Whisper-Wood",
+        "Vaelan",
+        "Vaelen",
+        "Caelan",
         "Kaelan",
         "Bram",
         "Elara",
@@ -864,6 +872,64 @@ After outputting all tags, summarize the first starting turn, describe the surro
         "region",
         "country",
     )
+    
+    def _normalize_action_list_markdown(self, actions_text: str | None) -> str:
+        """
+        Converts suggested action text into a tight Markdown bullet list.
+
+        Args:
+            actions_text: Text following an action marker, such as "What do you do now?".
+
+        Returns:
+            A cleaned Markdown bullet list with one action per line and no blank
+            lines between bullet items.
+        """
+        clean_text = str(actions_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+        if not clean_text:
+            logging.warning("AIManager._normalize_action_list_markdown received empty action text.")
+            return ""
+
+        # Normalize Unicode bullets into Markdown bullets.
+        clean_text = re.sub(r"(?m)^[ \t]*[•‣]\s+", "- ", clean_text)
+        clean_text = re.sub(r"\s+[•‣]\s+", "\n- ", clean_text)
+
+        # Converts inline bullets like " - Explore - Return" into real Markdown lines.
+        clean_text = re.sub(r"\s+([-*+])\s+", r"\n\1 ", clean_text)
+
+        # Remove blank lines between bullet items so Markdown renders a tight list.
+        clean_text = re.sub(
+            r"(?m)^([ \t]*[-*+][ \t]+[^\n]+)\n[ \t]*\n(?=[ \t]*[-*+][ \t]+)",
+            r"\1\n",
+            clean_text,
+        )
+
+        normalized_lines: list[str] = []
+
+        for raw_line in clean_text.splitlines():
+            line = raw_line.strip()
+
+            if not line:
+                continue
+
+            if line.startswith(("•", "‣")):
+                line = f"- {line[1:].lstrip()}"
+
+            # Fix "-Explore" or "*Explore" if the model forgot the space.
+            if line.startswith(("-", "*", "+")) and len(line) > 1 and line[1] != " ":
+                line = f"{line[0]} {line[1:].lstrip()}"
+
+            normalized_lines.append(line)
+
+        normalized_text = "\n".join(normalized_lines).strip()
+
+        if not normalized_text:
+            logging.warning(
+                "Action list normalization produced no display text from: %r",
+                actions_text,
+            )
+
+        return normalized_text
 
     _CREATIVE_ACTION_TRIGGERS: ClassVar[tuple[str, ...]] = (
         "approach",
@@ -1430,7 +1496,6 @@ After outputting all tags, summarize the first starting turn, describe the surro
             else: logging.warning(f"No processing tab in notebook widgets. Existing notebook widgets: {self.app.notebook_widgets}")
             
             trim_markers = ["Possible Actions:", "Suggested Actions:", "### Actions", "What would you like to do?", "What do you do?", "What do you do now?"]
-            text_to_save = final_display_text
             
             for marker in trim_markers:
                 if marker in final_display_text:
@@ -1438,19 +1503,15 @@ After outputting all tags, summarize the first starting turn, describe the surro
                     main_body = parts[0].strip()
                     options_string = parts[1].strip()
                     text_to_save = main_body
-                    
-                    # Convert inline hyphens or asterisks into proper markdown newlines
-                    # This targets spaces followed by a dash/asterisk (e.g., " - " becomes "\n- ")
-                    options_string = options_string.replace(" - ", "\n- ").replace(" * ", "\n* ")
-                    
-                    # Failsafe: Ensure the very first option has a space after the hyphen if the AI forgot
-                    if options_string.startswith("-") and not options_string.startswith("- "):
-                        options_string = "- " + options_string[1:].lstrip()
-                    elif options_string.startswith("*") and not options_string.startswith("* "):
-                        options_string = "* " + options_string[1:].lstrip()
-                    
-                    # Reconstruct the string with bolding for the question and proper list spacing
-                    final_display_text = f"{main_body}\n\n**{marker}**\n{options_string.strip()}"
+
+                    normalized_options = self._normalize_action_list_markdown(options_string)
+
+                    if normalized_options:
+                        # Important: two newlines before the list.
+                        final_display_text = f"{main_body}\n\n**{marker}**\n\n{normalized_options}"
+                    else:
+                        final_display_text = f"{main_body}\n\n**{marker}**"
+
                     break
                 
             if final_display_text and len(final_display_text.strip()) > 8:
@@ -2464,125 +2525,45 @@ class TagParser:
             
         def replace_merchant(match):
             """
-            Converts a [[MERCHANT: ...]] tag into a readable merchant table.
+            Opens the structured merchant dialog instead of rendering a text table.
 
             Merchant entry format:
                 "Item Name | Description | PriceBaseUnits | Quantity"
-
-            PriceBaseUnits must be a plain non-negative integer measured in the
-            world's base currency unit. Natural-language prices like "5 Copper Pieces"
-            are rejected and logged instead of being displayed.
+                "Item Name | Description | PriceBaseUnits | Quantity | Optional Item Type"
             """
+
             raw_data = match.group(1).strip()
-            if not raw_data:
-                return ""
+            mode, merchant_items = MerchantTagParser.parse(raw_data)
 
-            raw_lines = [line.strip() for line in raw_data.split("\n") if line.strip()]
-
-            parsed_items: list[str] = []
-
-            for line in raw_lines:
-                try:
-                    items_in_line = list(csv.reader([line], skipinitialspace=True))[0]
-
-                    for item in items_in_line:
-                        clean_item = item.strip().strip("'\"")
-                        if clean_item:
-                            parsed_items.append(clean_item)
-
-                except Exception as error:
-                    logging.exception("Failed to parse line in MERCHANT tag: %s", error)
-
-                    clean_line = line.strip().strip("'\"")
-                    if clean_line:
-                        parsed_items.append(clean_line)
-
-            table_data: list[list[str]] = []
-            history_items: list[str] = []
-
-            headers = ["Item Name", "Description", "Price", "Quantity / Stock"]
-            max_cols = len(headers)
-
-            for item in parsed_items:
-                parts = [part.strip() for part in item.split("|")]
-
-                if len(parts) < 3:
-                    logging.warning(
-                        "Skipped malformed MERCHANT entry. Expected at least 3 fields: %r",
-                        item,
-                    )
-                    continue
-
-                name = parts[0]
-                description = parts[1]
-                price_raw = parts[2]
-
-                if not name or not description:
-                    logging.warning(
-                        "Skipped MERCHANT entry with blank name or description: %r",
-                        item,
-                    )
-                    continue
-
-                # Strictly accept only unsigned base-unit integers: 0, 1, 25, 100, etc.
-                # Rejects: "-5", "+5", "5.0", "5 Copper Pieces", "Free", "AUTO".
-                if re.fullmatch(r"\d+", price_raw) is None:
-                    logging.warning(
-                        "Skipped MERCHANT entry with invalid price %r. Price must be a non-negative integer in base currency units. Entry: %r",
-                        price_raw,
-                        item,
-                    )
-                    continue
-
-                try:
-                    price_value = int(price_raw)
-                except (TypeError, ValueError) as error:
-                    logging.exception(
-                        "Skipped MERCHANT entry because price could not be converted to int. Price: %r. Error: %s",
-                        price_raw,
-                        error,
-                    )
-                    continue
-
-                formatted_price = (
-                    "Free"
-                    if price_value == 0
-                    else self.app.player.get_formatted_currency(price_value)
-                )
-
-                quantity = parts[3] if len(parts) > 3 else ""
-
-                row_data = [name, description, formatted_price, quantity]
-
-                if len(parts) > 4:
-                    row_data.extend(parts[4:])
-                    max_cols = max(max_cols, len(row_data))
-
-                table_data.append(row_data)
-                history_items.append(f"'{name}' - {description} ({formatted_price})")
-
-            if not table_data:
+            if not merchant_items:
                 logging.warning("MERCHANT tag contained no valid merchant entries: %r", raw_data)
-                return "\n*(Merchant table omitted because no valid merchant entries were provided.)*\n"
-
-            for row in table_data:
-                while len(row) < max_cols:
-                    row.append("")
-
-            while len(headers) < max_cols:
-                headers.append("Extra Info")
+                return "\n*(Merchant shop could not be opened because no valid items were provided.)*\n"
 
             if is_history:
-                items_str = ", ".join(history_items)
-                return f"\n*(OOG: A merchant table is listed detailing the following items: {items_str}.)*\n"
+                item_summary = ", ".join(
+                    f"{item.name} ({self.app.player.get_formatted_currency(item.price_base_units)})"
+                    for item in merchant_items
+                )
+                return f"\n*(OOG: A merchant offered: {item_summary}.)*\n"
 
-            grid = tabulate(table_data, headers=headers, tablefmt="rounded_grid")
-            formatted_html = (
-                "<pre style=\"font-family: Consolas, 'Courier New', monospace; "
-                f"line-height: 1.0; padding: 6px;\">\n\n{grid}\n</pre>\n\n"
-            )
+            def open_shop() -> None:
+                try:
+                    window = getattr(self.app, "win", None)
+                    if window is None or not hasattr(window, "open_merchant_dialog"):
+                        logging.error("Cannot open merchant dialog because MainWindow is unavailable.")
+                        return
 
-            return f"\n{formatted_html}\n"
+                    window.open_merchant_dialog(merchant_items, mode=mode)
+
+                except Exception as error:
+                    logging.exception("Failed to open merchant dialog: %s", error)
+
+            try:
+                self.app.after(0, open_shop)
+            except Exception as error:
+                logging.exception("Failed to schedule merchant dialog: %s", error)
+
+            return "\n*(Merchant shop opened.)*\n"
                 
         # Find all instances of [[DISPLAY_CURRENCY: X]] and swap them
         modified_text = re.sub(r"\[\[DISPLAY_CURRENCY:\s*(-?\d+)\]\]", replace_currency, ai_text)
@@ -2674,7 +2655,11 @@ class WorldLoreUpdater:
         "storm": "Flora, Fauna, and Climate",
         "weather": "Flora, Fauna, and Climate",
         "oog": "Out-Of-Game Reminders",
-        "out-of-game": "Out-Of-Game Reminders"
+        "out-of-game": "Out-Of-Game Reminders",
+        "out-of-game-reminders": "Out-Of-Game Reminders",
+        "out of game reminders": "Out-Of-Game Reminders",
+        "out-of-game reminders": "Out-Of-Game Reminders",
+        "out of game": "Out-Of-Game Reminders",
     }
 
     _NESTED_TAG_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
@@ -2714,21 +2699,22 @@ class WorldLoreUpdater:
         r"^\s*\\?[-*+]\s+(?:None so far\.?|None\.?|N/A)\s*$",
         re.IGNORECASE,
     )
-
-    def normalize_section_name(self, section_name: str | None) -> str:
+    
+    def _canonical_section_name_or_none(self, section_name: str | None) -> str | None:
         """
-        Resolves an AI-provided section name to a canonical World.md section.
+        Resolves a Markdown section heading to a canonical World.md section name.
 
         Args:
-            section_name: Raw section name from a world tag.
+            section_name: Raw section heading text.
 
         Returns:
-            Canonical section name, falling back to 'Uncategorized'.
+            Canonical section name when the heading is known, otherwise None.
         """
         clean_section = str(section_name or "").strip()
+
         if not clean_section:
-            logging.warning("Blank World section received. Falling back to Uncategorized.")
-            return "Uncategorized"
+            logging.warning("Blank World section heading received.")
+            return None
 
         normalized_key = re.sub(r"\s+", " ", clean_section).casefold().strip()
         canonical_section = self.SECTION_ALIASES.get(normalized_key)
@@ -2740,8 +2726,70 @@ class WorldLoreUpdater:
             if section.casefold() == normalized_key:
                 return section
 
+        return None
+
+    def normalize_section_name(self, section_name: str | None) -> str:
+        """
+        Resolves an AI-provided section name to a canonical World.md section.
+
+        Args:
+            section_name: Raw section name from a world tag.
+
+        Returns:
+            Canonical section name, falling back to 'Uncategorized'.
+        """
+        canonical_section = self._canonical_section_name_or_none(section_name)
+        if canonical_section:
+            return canonical_section
+
+        if canonical_section:
+            return canonical_section
+        
         logging.warning("Unknown World section %r. Falling back to Uncategorized.", section_name)
         return "Uncategorized"
+    
+    def _canonicalize_world_section_headings(self, world_text: str | None) -> str:
+        """
+        Rewrites known World.md section heading aliases to their canonical names.
+
+        Args:
+            world_text: Current World.md text.
+
+        Returns:
+            World.md text with recognized section headings normalized.
+        """
+        text = str(world_text or "")
+
+        if not text.strip():
+            logging.warning("Cannot canonicalize empty World.md text.")
+            return ""
+
+        output_lines: list[str] = []
+
+        for line in text.splitlines():
+            heading_match = self._SECTION_HEADING_LINE_PATTERN.match(line)
+
+            if heading_match is None:
+                output_lines.append(line)
+                continue
+
+            raw_section = heading_match.group("section").strip()
+            canonical_section = self._canonical_section_name_or_none(raw_section)
+
+            if canonical_section is None:
+                output_lines.append(line)
+                continue
+
+            if canonical_section != raw_section:
+                logging.info(
+                    "Canonicalized World.md section heading %r to %r.",
+                    raw_section,
+                    canonical_section,
+                )
+
+            output_lines.append(f"## {canonical_section}")
+
+        return "\n".join(output_lines)
     
     def migrate_legacy_world_text(self, world_text: str | None) -> str:
         """
@@ -2788,6 +2836,8 @@ class WorldLoreUpdater:
 
         if not re.search(r"(?im)^#\s+World\s*$", text):
             text = f"# World\n\n{text}"
+
+        text = self._canonicalize_world_section_headings(text)
 
         for section in self.WORLD_SECTIONS:
             section_pattern = re.compile(

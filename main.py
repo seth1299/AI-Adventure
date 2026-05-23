@@ -1,5 +1,5 @@
 # qt_main.py
-import sys, os, logging, shutil, threading, tempfile
+import sys, os, logging, shutil, threading, tempfile, re
 from file_manager import FileManager
 from qt_ui.main_window import MainWindow
 from player import Player
@@ -74,8 +74,10 @@ class QtStoryTabAdapter:
         self._panel = story_panel
         self._ui = dispatcher
 
-    def print_text(self, text: str, sender: str = "") -> None:
-        self._ui.run_now.emit(lambda: self._panel.print_text(text, sender=sender))
+    def print_text(self, text: str, sender: str = "", *, narrate: bool = True) -> None:
+        self._ui.run_now.emit(
+            lambda: self._panel.print_text(text, sender=sender, narrate=narrate)
+        )
 
     def set_controls_state(self, enabled: bool, status_text: str | None = None) -> None:
         self._ui.run_now.emit(lambda: self._panel.set_controls_state(enabled, status_text))
@@ -667,13 +669,19 @@ class QtAppContext:
                         # Join the sanitized lines back together
                         last_gm_message = "\n".join(gm_response_lines).strip()
                 
+            should_narrate_load = not self.should_skip_load_narration()    
             if last_gm_message:
                 #logging.info("There is a last gm message, reconstructing merchant tables now!")
                 last_gm_message = self._reconstruct_merchant_tables(last_gm_message)
-                self.story_tab.print_text(last_gm_message + "\n\nWhat do you do now?", sender="")
+                last_gm_message = self._format_recap_text(last_gm_message, sentences_per_paragraph=2)
+                self.story_tab.print_text(
+                    last_gm_message + "\n\nWhat do you do now?",
+                    sender="",
+                    narrate=should_narrate_load,
+                )
             else:
                 #logging.info("There is NOT a last gm message!")
-                self.story_tab.print_text(f"What do you do now?\n")
+                self.story_tab.print_text(f"What do you do now?\n", narrate = should_narrate_load)
             
         except Exception as error:
             logging.error(f"Generate recap failed: {error}")
@@ -681,20 +689,111 @@ class QtAppContext:
             
         self.first_loaded_game_history = ""
             
-    def _format_recap_text(self, text):
-        if not text: return ""
-        import re
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        _index = 0
-        _text_to_return = ""
-        
-        for sentence in sentences:
-            if _index % 2 == 0 and _index != 0:
-                _text_to_return += "\n\n"
-            _text_to_return += sentence + " "
-            _index += 1
-            
-        return _text_to_return
+    def should_skip_load_narration(self) -> bool:
+        """
+        Returns whether save-load recap text should skip narrator playback.
+
+        Returns:
+            True when load recap narration should be suppressed.
+        """
+        win = getattr(self, "win", None)
+
+        if win is None:
+            logging.warning("Cannot check skip-load narration because window is missing.")
+            return True
+
+        story_panel = getattr(win, "story_panel", None)
+
+        if story_panel is None:
+            logging.warning("Cannot check skip-load narration because StoryPanel is missing.")
+            return True
+
+        return bool(getattr(story_panel, "skip_load_narration", True))
+    
+    def _format_recap_text(self, text: str | None, *, sentences_per_paragraph: int = 2) -> str:
+        """
+        Formats recap prose into readable Markdown paragraphs without disturbing
+        tables, headings, bullet lists, or existing block formatting.
+
+        Args:
+            text: Raw recap text extracted from History.md.
+            sentences_per_paragraph: Number of prose sentences to group together.
+
+        Returns:
+            Formatted recap text suitable for StoryPanel display.
+        """
+        clean_text = str(text or "").strip()
+        if not clean_text:
+            logging.warning("QtAppContext._format_recap_text called with empty text.")
+            return ""
+
+        safe_sentence_count = max(1, int(sentences_per_paragraph or 2))
+
+        try:
+            # Protect HTML/preformatted blocks, such as reconstructed merchant tables.
+            protected_blocks: list[str] = []
+
+            def protect_block(match: re.Match[str]) -> str:
+                protected_blocks.append(match.group(0))
+                return f"@@PROTECTED_RECAP_BLOCK_{len(protected_blocks) - 1}@@"
+
+            working_text = re.sub(
+                r"<pre\b.*?</pre>",
+                protect_block,
+                clean_text,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+
+            formatted_paragraphs: list[str] = []
+
+            for paragraph in re.split(r"\n\s*\n+", working_text):
+                paragraph = paragraph.strip()
+                if not paragraph:
+                    continue
+
+                # Preserve Markdown structures and protected placeholders.
+                if (
+                    paragraph.startswith("@@PROTECTED_RECAP_BLOCK_")
+                    or re.match(r"^\s{0,3}#{1,6}\s+", paragraph)
+                    or re.search(r"(?m)^\s*[-*+]\s+", paragraph)
+                    or re.search(r"(?m)^\s*\d+\.\s+", paragraph)
+                    or paragraph.startswith(">")
+                ):
+                    formatted_paragraphs.append(paragraph)
+                    continue
+
+                # Collapse accidental hard wraps before sentence splitting.
+                prose = re.sub(r"\s+", " ", paragraph).strip()
+                sentences = [
+                    sentence.strip()
+                    for sentence in re.split(r"(?<=[.!?])\s+", prose)
+                    if sentence.strip()
+                ]
+
+                if not sentences:
+                    formatted_paragraphs.append(prose)
+                    continue
+
+                sentence_groups = [
+                    " ".join(sentences[index:index + safe_sentence_count]).strip()
+                    for index in range(0, len(sentences), safe_sentence_count)
+                ]
+
+                formatted_paragraphs.append("\n\n".join(sentence_groups))
+
+            formatted_text = "\n\n".join(formatted_paragraphs).strip()
+
+            for index, protected_block in enumerate(protected_blocks):
+                formatted_text = formatted_text.replace(
+                    f"@@PROTECTED_RECAP_BLOCK_{index}@@",
+                    protected_block,
+                )
+
+            return formatted_text
+
+        except Exception as error:
+            logging.exception("Failed to format recap text: %s", error)
+            return clean_text
 
     def _get_skill_level(self, skill_name: str) -> int:
         return self.player.get_skill_level(skill_name)
