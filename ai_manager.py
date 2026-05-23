@@ -42,6 +42,16 @@ class ResponseSections:
         return f"{clean_main}\n\n**{clean_marker}**\n\n{clean_actions}"
 
 class AIManager:
+    MERCHANT_EVENT_HISTORY_CHARS: ClassVar[int] = 2500
+
+    MERCHANT_EVENT_SYSTEM_INSTRUCTION: ClassVar[str] = (
+        "You are the RPG Game Master continuing immediately after a resolved merchant dialog. "
+        "Use only the recent history and merchant event supplied in the prompt. "
+        "If the player bought or sold items, acknowledge that result in your response. "
+        "Write concise narration that returns the player to the nearby scene, then end with a brief prompt "
+        "for what they do next."
+    )
+    
     def __init__(self, app) -> None:
         """Initializes the Gemini API client used by the AI manager."""
         self.app = app
@@ -308,6 +318,89 @@ After outputting all tags, summarize the first starting turn, describe the surro
 """
         logging.info(f"Generating start now...\n\nWorld Creation Prompt: {prompt}\n\n")
         self.query_ai(prompt, "System: Generate Start", is_startup=True)
+
+    def _get_recent_history_context(self, max_characters: int | None = None) -> str:
+        """
+        Returns a compact slice of recent History.md context for system-driven events.
+
+        Args:
+            max_characters: Maximum number of trailing characters to include.
+
+        Returns:
+            Recent raw history text, or an empty string if unavailable.
+        """
+
+        try:
+            safe_max_characters = int(max_characters or self.MERCHANT_EVENT_HISTORY_CHARS)
+            safe_max_characters = max(500, safe_max_characters)
+        except (TypeError, ValueError):
+            logging.exception("Invalid merchant history character limit: %r", max_characters)
+            safe_max_characters = self.MERCHANT_EVENT_HISTORY_CHARS
+
+        try:
+            history_panel = self.app.notebook_widgets.get("History")
+            if history_panel is None:
+                logging.warning("Cannot build merchant event context because History panel is missing.")
+                return ""
+
+            get_text = getattr(history_panel, "get_text", None)
+            if not callable(get_text):
+                logging.warning("History panel does not expose get_text().")
+                return ""
+
+            history_text = str(get_text() or "").strip()
+            if not history_text:
+                return ""
+
+            return history_text[-safe_max_characters:]
+
+        except Exception as error:
+            logging.exception("Failed to get recent merchant history context: %s", error)
+            return ""
+
+    def handle_merchant_event(
+        self,
+        event_prompt: str | None,
+        *,
+        history_note: str | None = None,
+    ) -> None:
+        """
+        Sends a lightweight merchant-resolution prompt to the AI.
+
+        This avoids handle_player_action(), so merchant button events do not send
+        every panel, secret context, creative samples, and the full normal rules prompt.
+
+        Args:
+            event_prompt: Confirmed merchant event to narrate.
+            history_note: Optional note saved into History.md for continuity.
+        """
+
+        clean_event_prompt = str(event_prompt or "").strip()
+        if not clean_event_prompt:
+            logging.warning("handle_merchant_event called with an empty event prompt.")
+            return
+
+        recent_history = self._get_recent_history_context()
+
+        prompt = (
+            "[RECENT HISTORY]\n"
+            f"{recent_history or '(No recent history available.)'}\n\n"
+            "[CONFIRMED MERCHANT EVENT]\n"
+            f"{clean_event_prompt}\n"
+        )
+
+        clean_history_note = str(history_note or "").strip()
+        if not clean_history_note:
+            clean_history_note = f"(System merchant event)\n{clean_event_prompt}"
+
+        self.app.story_tab.set_controls_state(False, "GM is thinking...")
+
+        threading.Thread(
+            target=self.query_ai,
+            args=(prompt, clean_history_note),
+            kwargs={"system_instruction": self.MERCHANT_EVENT_SYSTEM_INSTRUCTION},
+            daemon=True,
+        ).start()
 
     def handle_player_action(self, user_text: str) -> None:
         """Constructs the context and prompt, then threads the AI query."""
@@ -660,7 +753,6 @@ After outputting all tags, summarize the first starting turn, describe the surro
 
         return "\n".join(lines)
 
-
     def _safe_nonnegative_int(self, value: Any, *, default: int = 0) -> int:
         """
         Safely converts a value to a nonnegative integer.
@@ -705,7 +797,6 @@ After outputting all tags, summarize the first starting turn, describe the surro
             },
             "spells": {},
         }
-
 
     def _save_starting_spellcasting(self, spellcasting_data: dict[str, Any]) -> None:
         """
@@ -1004,7 +1095,6 @@ After outputting all tags, summarize the first starting turn, describe the surro
 
         lowered_text = str(text).lower()
         return any(term in lowered_text for term in terms)
-
 
     def _build_creative_guardrails(self) -> str:
         """
@@ -1341,7 +1431,16 @@ After outputting all tags, summarize the first starting turn, describe the surro
         except Exception as error:
             logging.exception("Failed to count Gemini tokens: %s", error)
     
-    def query_ai(self, prompt, user_text, recursion_depth=0, is_startup=False):
+    def query_ai(
+        self,
+        prompt,
+        user_text,
+        recursion_depth=0,
+        is_startup=False,
+        system_instruction: str | None = None,
+    ):
+        """Sends the prompt to Gemini and processes all resulting tags."""
+        current_rules = str(system_instruction or "").strip() or self.app.load_rules()
         """Sends the prompt to Gemini and processes all resulting tags."""
         current_rules = self.app.load_rules()
             
@@ -1424,6 +1523,7 @@ After outputting all tags, summarize the first starting turn, describe the surro
                     user_text,
                     recursion_depth + 1,
                     is_startup=is_startup,
+                    system_instruction=current_rules,
                 )
                 return 
             
@@ -1457,6 +1557,7 @@ After outputting all tags, summarize the first starting turn, describe the surro
                     user_text,
                     recursion_depth + 1,
                     is_startup=is_startup,
+                    system_instruction=current_rules,
                 )
                 return
 
@@ -1538,9 +1639,9 @@ After outputting all tags, summarize the first starting turn, describe the surro
                     user_text = ""
                     
                 new_exchange = (
-                    f"{user_text}\n\n"
+                    f"{user_text}\n"
                     f"{history_body_to_save.strip()}\n\n"
-                    f"// NEW EXCHANGE\n\n"
+                    f"// NEW EXCHANGE\n"
                 )
 
                 self.app.after(0, lambda ch=current_hist, ne=new_exchange: hist_panel.set_text(ch + ne))
@@ -1597,8 +1698,6 @@ After outputting all tags, summarize the first starting turn, describe the surro
         logging.warning("History-safe AI text was empty. Falling back to display AI text for logging.")
         return str(fallback_ai_text or "").strip()
             
-
-
 class TagParser:
     def __init__(self, app):
         self.app = app
@@ -2544,7 +2643,7 @@ class TagParser:
                     f"{item.name} ({self.app.player.get_formatted_currency(item.price_base_units)})"
                     for item in merchant_items
                 )
-                return f"\n*(OOG: A merchant offered: {item_summary}.)*\n"
+                return f"\n(OOG: A merchant offered: {item_summary}.)\n"
 
             def open_shop() -> None:
                 try:
@@ -2563,7 +2662,7 @@ class TagParser:
             except Exception as error:
                 logging.exception("Failed to schedule merchant dialog: %s", error)
 
-            return "\n*(Merchant shop opened.)*\n"
+            return "\n(Merchant shop opened.)\n"
                 
         # Find all instances of [[DISPLAY_CURRENCY: X]] and swap them
         modified_text = re.sub(r"\[\[DISPLAY_CURRENCY:\s*(-?\d+)\]\]", replace_currency, ai_text)

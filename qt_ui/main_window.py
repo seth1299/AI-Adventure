@@ -141,16 +141,38 @@ class MainWindow(QMainWindow):
         self.story_panel.set_controls_state(False, "Merchant shop open.")
 
         def finish_dialog(result: int) -> None:
-            try:
-                if result == int(QDialog.DialogCode.Accepted):
-                    self._apply_merchant_result(dialog)
+            ai_event_started = False
 
-                if dialog.left_without_purchase and self.ai_manager is not None:
-                    self.ai_manager.handle_player_action(
-                        "The player leaves the merchant without buying anything. Return them to the nearby main area."
-                    )
+            try:
+                merchant_event_prompt = None
+
+                if result == int(QDialog.DialogCode.Accepted):
+                    merchant_event_prompt = self._apply_merchant_result(dialog)
+
+                if self.ai_manager is not None:
+                    if merchant_event_prompt:
+                        self.ai_manager.handle_merchant_event(
+                            merchant_event_prompt,
+                            history_note=f"(System merchant event)\n{merchant_event_prompt}",
+                        )
+                        ai_event_started = True
+
+                    elif dialog.left_without_purchase:
+                        leave_prompt = (
+                            "The player leaves the merchant without buying anything. "
+                            "Return them to the nearby main area."
+                        )
+
+                        self.ai_manager.handle_merchant_event(
+                            leave_prompt,
+                            history_note=f"(System merchant event)\n{leave_prompt}",
+                        )
+                        ai_event_started = True
+
             finally:
-                self.story_panel.set_controls_state(True)
+                if not ai_event_started:
+                    self.story_panel.set_controls_state(True)
+
                 dialog.deleteLater()
 
         dialog.finished.connect(finish_dialog)
@@ -158,7 +180,7 @@ class MainWindow(QMainWindow):
         dialog.raise_()
         dialog.activateWindow()
         
-    def _apply_merchant_result(self, dialog: MerchantDialog) -> None:
+    def _apply_merchant_result(self, dialog: MerchantDialog) -> str | None:
         """
         Applies completed merchant results to inventory.
 
@@ -236,6 +258,86 @@ class MainWindow(QMainWindow):
             f"{action_word}: {', '.join(sold_or_bought_summary)}.",
             sender="System",
         )
+        
+        return self._build_merchant_event_prompt(dialog, purchases)
+    
+    def _build_merchant_event_prompt(
+        self,
+        dialog: MerchantDialog,
+        purchases: list,
+    ) -> str:
+        """
+        Builds the compact AI prompt for a completed merchant transaction.
+
+        Args:
+            dialog: Completed merchant dialog.
+            purchases: Final purchased or sold item records.
+
+        Returns:
+            A compact, deterministic merchant event summary.
+        """
+
+        item_lines: list[str] = []
+        total_base_units = 0
+
+        for purchase in purchases:
+            item = purchase.item
+            quantity = max(0, int(purchase.quantity or 0))
+
+            if quantity <= 0:
+                continue
+
+            line_total = item.price_base_units * quantity
+            total_base_units += line_total
+
+            item_type = str(getattr(item, "item_type", "") or "").strip()
+            description = str(getattr(item, "description", "") or "").strip()
+
+            item_text = f"- {quantity} x {item.name}"
+            if item_type:
+                item_text += f" ({item_type})"
+
+            item_text += f"; {item.price_base_units} base units each"
+
+            if description:
+                item_text += f"; {description}"
+
+            item_lines.append(item_text)
+
+        if not item_lines:
+            logging.warning("Tried to build merchant event prompt with no valid item lines.")
+            return ""
+
+        player = getattr(self.app, "player", None)
+        total_text = f"{total_base_units} base units"
+        remaining_text = ""
+
+        formatter = getattr(player, "get_formatted_currency", None)
+        if callable(formatter):
+            try:
+                total_text = formatter(total_base_units)
+                remaining_text = formatter()
+            except Exception as error:
+                logging.exception("Failed to format merchant event currency: %s", error)
+
+        if dialog.mode == MerchantTransactionMode.SELL:
+            action_sentence = "The player sold the following items to the merchant:"
+            total_sentence = f"Total received: {total_text}."
+        else:
+            action_sentence = "The player purchased the following items from the merchant:"
+            total_sentence = f"Total spent: {total_text}."
+
+        remaining_sentence = f"Remaining wealth after the transaction: {remaining_text}." if remaining_text else ""
+
+        return (
+            f"{action_sentence}\n"
+            f"{chr(10).join(item_lines)}\n"
+            f"{total_sentence}\n"
+            f"{remaining_sentence}\n"
+            "The inventory and currency updates have already been applied by the app. "
+            "Do not output inventory or currency tags for this transaction. "
+            "Continue from this confirmed result."
+        ).strip()
     
     def _setup_menu_bar(self):
         """Creates the native OS-style top-left menu bar."""

@@ -23,7 +23,7 @@ class FileManager:
 
         file_handler = logging.FileHandler(str(log_file_path), mode="w", encoding="utf-8")
         formatter = logging.Formatter(
-            "%(levelname)s | %(asctime)s | %(filename)s | %(classname)s: \n%(message)s",
+            "%(levelname)s | %(asctime)s | %(filename)s | %(funcName)s | line %(lineno)d: \n%(message)s\n",
             datefmt="%m/%d/%Y at %I:%M %p",
         )
         file_handler.setFormatter(formatter)
