@@ -1439,10 +1439,7 @@ After outputting all tags, summarize the first starting turn, describe the surro
         is_startup=False,
         system_instruction: str | None = None,
     ):
-        """Sends the prompt to Gemini and processes all resulting tags."""
         current_rules = str(system_instruction or "").strip() or self.app.load_rules()
-        """Sends the prompt to Gemini and processes all resulting tags."""
-        current_rules = self.app.load_rules()
             
         try:
             """Sends the prompt to Gemini and processes all resulting tags."""
@@ -1620,6 +1617,10 @@ After outputting all tags, summarize the first starting turn, describe the surro
             else:
                 logging.warning("AI response contained no displayable narrative after tag cleanup.")
                 
+            window = getattr(self.app, "win", None)
+            if window is not None and hasattr(window, "open_queued_merchant_dialog_after_narration"):
+                self.app.after(0, window.open_queued_merchant_dialog_after_narration)
+                
             final_history_text = clean_pattern.sub("", history_ai_text)
             final_history_text = re.sub(r"\n{3,}", "\n\n", final_history_text).strip()
 
@@ -1639,7 +1640,7 @@ After outputting all tags, summarize the first starting turn, describe the surro
                     user_text = ""
                     
                 new_exchange = (
-                    f"{user_text}\n"
+                    f"{user_text}\n\n"
                     f"{history_body_to_save.strip()}\n\n"
                     f"// NEW EXCHANGE\n"
                 )
@@ -2630,7 +2631,7 @@ class TagParser:
                 "Item Name | Description | PriceBaseUnits | Quantity"
                 "Item Name | Description | PriceBaseUnits | Quantity | Optional Item Type"
             """
-
+            logging.info(f"Merchant tag to replace: {match}")
             raw_data = match.group(1).strip()
             mode, merchant_items = MerchantTagParser.parse(raw_data)
 
@@ -2645,24 +2646,24 @@ class TagParser:
                 )
                 return f"\n(OOG: A merchant offered: {item_summary}.)\n"
 
-            def open_shop() -> None:
+            def queue_shop() -> None:
                 try:
                     window = getattr(self.app, "win", None)
-                    if window is None or not hasattr(window, "open_merchant_dialog"):
-                        logging.error("Cannot open merchant dialog because MainWindow is unavailable.")
+                    if window is None or not hasattr(window, "queue_merchant_dialog"):
+                        logging.error("Cannot queue merchant dialog because MainWindow is unavailable.")
                         return
 
-                    window.open_merchant_dialog(merchant_items, mode=mode)
+                    window.queue_merchant_dialog(merchant_items, mode=mode)
 
                 except Exception as error:
-                    logging.exception("Failed to open merchant dialog: %s", error)
+                    logging.exception("Failed to queue merchant dialog: %s", error)
 
             try:
-                self.app.after(0, open_shop)
+                self.app.after(0, queue_shop)
             except Exception as error:
-                logging.exception("Failed to schedule merchant dialog: %s", error)
+                logging.exception("Failed to schedule merchant dialog queue: %s", error)
 
-            return "\n(Merchant shop opened.)\n"
+            return "\n(Merchant shop will open after narration.)\n"
                 
         # Find all instances of [[DISPLAY_CURRENCY: X]] and swap them
         modified_text = re.sub(r"\[\[DISPLAY_CURRENCY:\s*(-?\d+)\]\]", replace_currency, ai_text)

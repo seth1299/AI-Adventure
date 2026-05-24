@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import copy, queue, time, csv, logging, re, tempfile, textwrap, threading, markdown, pygame, time_utils
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, Callable, ClassVar
 from tts_manager import TTSManager, TTSRequest
 from file_manager import FileManager
 from PySide6.QtCore import QTimer, Qt, Signal
@@ -3785,6 +3785,38 @@ class StoryPanel(QWidget):
         except Exception as error:
             logging.exception("Failed during TTS temp-file cleanup: %s", error)
 
+    def run_after_narration(
+        self,
+        callback: Callable[[], None],
+        *,
+        check_interval_ms: int = 250,
+    ) -> None:
+        """
+        Runs a callback after the current narration queue and active TTS playback finish.
+
+        Args:
+            callback: UI-thread callable to run after narration is inactive.
+            check_interval_ms: Polling interval used while TTS is active.
+        """
+        if callback is None:
+            logging.warning("StoryPanel.run_after_narration called without a callback.")
+            return
+
+        safe_interval = max(50, int(check_interval_ms or 250))
+
+        def _run_when_ready() -> None:
+            try:
+                if not self.narrator_enabled or not self._is_tts_active():
+                    callback()
+                    return
+
+                QTimer.singleShot(safe_interval, _run_when_ready)
+
+            except Exception as error:
+                logging.exception("Failed while waiting for narration to finish: %s", error)
+                callback()
+
+        QTimer.singleShot(0, _run_when_ready)
 
     def _is_tts_active(self) -> bool:
         """

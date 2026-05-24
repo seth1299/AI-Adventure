@@ -108,7 +108,216 @@ class MainWindow(QMainWindow):
         )
         self.setTabPosition(Qt.DockWidgetArea.AllDockWidgetAreas, QTabWidget.TabPosition.North)
         self._setup_menu_bar()
+        self._queued_merchant_state: dict[str, object] | None = None
+        self._active_merchant_state: dict[str, object] | None = None
+        self._active_merchant_dialog: MerchantDialog | None = None
         
+    def queue_merchant_dialog(
+        self,
+        items: list[MerchantItem],
+        mode: MerchantTransactionMode = MerchantTransactionMode.BUY,
+    ) -> None:
+        """
+        Queues a merchant dialog so it can open after narration finishes.
+
+        Args:
+            items: Merchant items parsed from the AI's MERCHANT tag.
+            mode: Whether this is a buy or sell merchant interaction.
+        """
+        if not items:
+            logging.warning("Tried to queue merchant dialog with no items.")
+            return
+
+        self._queued_merchant_state = self._serialize_merchant_state(items, mode)
+
+        try:
+            if self.app is not None:
+                self.app.save_game()
+        except Exception as error:
+            logging.exception("Failed to save queued merchant state: %s", error)
+
+
+    def open_queued_merchant_dialog_after_narration(self) -> None:
+        """Opens the queued merchant dialog once StoryPanel narration is inactive."""
+        if self._queued_merchant_state is None:
+            return
+
+        def open_when_ready() -> None:
+            state = self._queued_merchant_state
+            self._queued_merchant_state = None
+
+            if state is None:
+                return
+
+            mode, items = self._deserialize_merchant_state(state)
+            if not items:
+                logging.warning("Queued merchant state had no valid items.")
+                self._clear_merchant_state()
+                return
+
+            self.open_merchant_dialog(items, mode=mode)
+
+        self.story_panel.run_after_narration(open_when_ready)
+
+
+    def export_pending_merchant_state(self) -> dict[str, object] | None:
+        """
+        Returns unresolved merchant state for savegame.json.
+
+        This includes a shop that is waiting for narration, or a shop that is already open.
+        """
+        if self._queued_merchant_state is not None:
+            return dict(self._queued_merchant_state)
+
+        if self._active_merchant_state is not None:
+            return dict(self._active_merchant_state)
+
+        if self._active_merchant_dialog is not None:
+            return self._serialize_merchant_state(
+                self._active_merchant_dialog.items,
+                self._active_merchant_dialog.mode,
+            )
+
+        return None
+
+
+    def import_pending_merchant_state(self, raw_state: object) -> None:
+        """
+        Restores unresolved merchant state from savegame.json.
+
+        Args:
+            raw_state: Serialized merchant state, or None.
+        """
+        if not isinstance(raw_state, dict):
+            self._queued_merchant_state = None
+            self._active_merchant_state = None
+            self._active_merchant_dialog = None
+            return
+
+        mode, items = self._deserialize_merchant_state(raw_state)
+        if not items:
+            logging.warning("Ignored saved merchant state because it had no valid items.")
+            self._clear_merchant_state()
+            return
+
+        self._queued_merchant_state = self._serialize_merchant_state(items, mode)
+
+
+    def _clear_merchant_state(self) -> None:
+        """Clears unresolved merchant state after Purchase or Leave Merchant."""
+        self._queued_merchant_state = None
+        self._active_merchant_state = None
+
+
+    def _serialize_merchant_state(
+        self,
+        items: list[MerchantItem],
+        mode: MerchantTransactionMode,
+    ) -> dict[str, object]:
+        """
+        Converts merchant items into JSON-safe save data.
+
+        Args:
+            items: Merchant items.
+            mode: Transaction mode.
+
+        Returns:
+            JSON-safe merchant state.
+        """
+        clean_items: list[dict[str, object]] = []
+
+        for item in items:
+            if item is None:
+                continue
+
+            try:
+                clean_items.append(
+                    {
+                        "name": str(item.name or "").strip(),
+                        "description": str(item.description or "").strip(),
+                        "price_base_units": max(0, int(item.price_base_units or 0)),
+                        "stock": None if item.stock is None else max(0, int(item.stock)),
+                        "item_type": str(item.item_type or "Purchased Item").strip() or "Purchased Item",
+                    }
+                )
+            except Exception as error:
+                logging.exception("Skipped malformed merchant item during serialization: %s", error)
+
+        return {
+            "schema_version": 1,
+            "mode": mode.value if isinstance(mode, MerchantTransactionMode) else str(mode or "BUY"),
+            "items": clean_items,
+        }
+
+
+    def _deserialize_merchant_state(
+        self,
+        raw_state: dict[str, object],
+    ) -> tuple[MerchantTransactionMode, list[MerchantItem]]:
+        """
+        Converts saved merchant state back into runtime merchant objects.
+
+        Args:
+            raw_state: Saved merchant state from savegame.json.
+
+        Returns:
+            Transaction mode and merchant items.
+        """
+        raw_mode = str(raw_state.get("mode", "BUY") or "BUY").strip().upper()
+
+        try:
+            mode = MerchantTransactionMode(raw_mode)
+        except ValueError:
+            logging.warning("Invalid saved merchant mode %r. Falling back to BUY.", raw_mode)
+            mode = MerchantTransactionMode.BUY
+
+        raw_items = raw_state.get("items", [])
+        if not isinstance(raw_items, list):
+            logging.warning("Saved merchant items were not a list.")
+            return mode, []
+
+        items: list[MerchantItem] = []
+
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                continue
+
+            name = str(raw_item.get("name", "") or "").strip()
+            description = str(raw_item.get("description", "") or "").strip()
+            item_type = str(raw_item.get("item_type", "Purchased Item") or "Purchased Item").strip()
+
+            try:
+                price_base_units = max(0, int(raw_item.get("price_base_units", 0) or 0))
+            except (TypeError, ValueError) as error:
+                logging.exception("Invalid saved merchant price for %s: %s", name, error)
+                continue
+
+            raw_stock = raw_item.get("stock")
+            stock: int | None = None
+
+            if raw_stock is not None:
+                try:
+                    stock = max(0, int(raw_stock))
+                except (TypeError, ValueError) as error:
+                    logging.exception("Invalid saved merchant stock for %s: %s", name, error)
+                    stock = None
+
+            if not name or not description or price_base_units <= 0:
+                logging.warning("Skipped invalid saved merchant item: %r", raw_item)
+                continue
+
+            items.append(
+                MerchantItem(
+                    name=name,
+                    description=description,
+                    price_base_units=price_base_units,
+                    stock=stock,
+                    item_type=item_type or "Purchased Item",
+                )
+            )
+
+        return mode, items
+    
     def open_merchant_dialog(
         self,
         items: list[MerchantItem],
@@ -128,6 +337,8 @@ class MainWindow(QMainWindow):
         if not items:
             logging.warning("Cannot open merchant dialog with no valid items.")
             return
+        
+        self._active_merchant_state = self._serialize_merchant_state(items, mode)
 
         dialog = MerchantDialog(
             parent=self,
@@ -136,6 +347,7 @@ class MainWindow(QMainWindow):
             mode=mode,
         )
         dialog.setStyleSheet(self.styleSheet())
+        self._active_merchant_dialog = dialog
 
         # Gate story input while shop is open, while still allowing outside clicks to unfocus.
         self.story_panel.set_controls_state(False, "Merchant shop open.")
@@ -145,8 +357,16 @@ class MainWindow(QMainWindow):
 
             try:
                 merchant_event_prompt = None
+                was_accepted = result == int(QDialog.DialogCode.Accepted)
+                deliberately_resolved = was_accepted and (
+                    bool(getattr(dialog, "final_purchases", []))
+                    or bool(getattr(dialog, "left_without_purchase", False))
+                )
 
-                if result == int(QDialog.DialogCode.Accepted):
+                if deliberately_resolved:
+                    self._clear_merchant_state()
+
+                if was_accepted and getattr(dialog, "final_purchases", []):
                     merchant_event_prompt = self._apply_merchant_result(dialog)
 
                 if self.ai_manager is not None:
@@ -170,6 +390,9 @@ class MainWindow(QMainWindow):
                         ai_event_started = True
 
             finally:
+                if self._active_merchant_dialog is dialog:
+                    self._active_merchant_dialog = None
+
                 if not ai_event_started:
                     self.story_panel.set_controls_state(True)
 

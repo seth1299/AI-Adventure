@@ -512,6 +512,23 @@ class QtAppContext:
             FileManager.save_json_data(history_path, save_data)
         except Exception as error:
             logging.error(f"Qt save error: savegame.json write failed. Details: {error}")
+            
+        pending_merchant = None
+        try:
+            win = getattr(self, "win", None)
+            if win is not None and hasattr(win, "export_pending_merchant_state"):
+                pending_merchant = win.export_pending_merchant_state()
+        except Exception as error:
+            logging.exception("Failed to export pending merchant state: %s", error)
+
+        save_data = {
+            "Status": status_data,
+            "karmic_streak": int(getattr(self.player, "karmic_streak", 0) or 0),
+            "current_music": self.sound_manager.current_music,
+        }
+
+        if pending_merchant is not None:
+            save_data["pending_merchant"] = pending_merchant
     
     def _resolve_save_path_for_recap(self) -> str | None:
         """
@@ -619,6 +636,12 @@ class QtAppContext:
             logging.error(f"Failed to load widget base paths: {error}")
 
         self._sync_player_state_to_ui()
+        try:
+            win = getattr(self, "win", None)
+            if win is not None and hasattr(win, "import_pending_merchant_state"):
+                win.import_pending_merchant_state(save_data.get("pending_merchant"))
+        except Exception as error:
+            logging.exception("Failed to restore pending merchant state: %s", error)
         return save_data
 
     def generate_recap(self) -> None:
@@ -634,7 +657,7 @@ class QtAppContext:
                 return
 
             # This triggers set_base_path for all panels, which loads history.md naturally
-            self.load_savegame_state(save_path)
+            save_data = self.load_savegame_state(save_path)
             
             last_gm_message = ""
             
@@ -686,6 +709,13 @@ class QtAppContext:
         except Exception as error:
             logging.error(f"Generate recap failed: {error}")
             self.story_tab.print_text("Recap failed (see logs).", sender="System")
+            
+        try:
+            win = getattr(self, "win", None)
+            if win is not None and hasattr(win, "open_queued_merchant_dialog_after_narration"):
+                self.after(0, win.open_queued_merchant_dialog_after_narration)
+        except Exception as error:
+            logging.exception("Failed to reopen pending merchant after recap: %s", error)
             
         self.first_loaded_game_history = ""
             

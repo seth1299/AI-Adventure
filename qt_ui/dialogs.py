@@ -1484,6 +1484,7 @@ class MerchantTagParser:
             return MerchantTransactionMode.BUY, []
 
         mode = MerchantTransactionMode.BUY
+        explicit_mode: MerchantTransactionMode | None = None
 
         mode_match = re.match(r"^(BUY|SELL)\s*\|\s*(.*)$", clean_data, flags=re.IGNORECASE | re.DOTALL)
         if mode_match is not None:
@@ -1492,6 +1493,7 @@ class MerchantTagParser:
 
             try:
                 mode = MerchantTransactionMode(raw_mode)
+                explicit_mode = mode
             except ValueError:
                 logging.warning("Invalid MERCHANT mode %r. Falling back to BUY.", raw_mode)
                 mode = MerchantTransactionMode.BUY
@@ -1516,7 +1518,21 @@ class MerchantTagParser:
         merchant_items: list[MerchantItem] = []
 
         for entry in parsed_entries:
-            parts = [part.strip() for part in entry.split("|")]
+            normalized_entry, entry_mode = MerchantTagParser._normalize_entry_mode_prefix(entry)
+
+            if entry_mode is not None:
+                if explicit_mode is None:
+                    mode = entry_mode
+                    explicit_mode = entry_mode
+                elif entry_mode != mode:
+                    logging.warning(
+                        "Ignored mixed MERCHANT entry mode %r in entry %r. Using global mode %r.",
+                        entry_mode.value,
+                        entry,
+                        mode.value,
+                    )
+
+            parts = [part.strip() for part in normalized_entry.split("|")]
 
             if len(parts) < 3:
                 logging.warning("Skipped malformed MERCHANT entry: %r", entry)
@@ -1563,6 +1579,71 @@ class MerchantTagParser:
             )
 
         return mode, merchant_items
+    
+    _ENTRY_MODE_PREFIX_PATTERN = re.compile(
+        r"^(?P<mode>BUY|SELL)\s*\|\s*(?P<entry>.*)$",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    @staticmethod
+    def _strip_outer_quotes(value: str | None) -> str:
+        """
+        Removes surrounding quote characters from a merchant entry.
+
+        Args:
+            value: Raw merchant entry text.
+
+        Returns:
+            Merchant entry without wrapping quotes.
+        """
+
+        clean_value = str(value or "").strip()
+        if not clean_value:
+            logging.warning("MerchantTagParser received an empty quoted value.")
+            return ""
+
+        if (
+            len(clean_value) >= 2
+            and clean_value[0] == clean_value[-1]
+            and clean_value[0] in {"'", '"'}
+        ):
+            return clean_value[1:-1].strip()
+
+        return clean_value.strip("'\"").strip()
+
+    @classmethod
+    def _normalize_entry_mode_prefix(
+        cls,
+        entry: str | None,
+    ) -> tuple[str, MerchantTransactionMode | None]:
+        """
+        Removes an accidental per-entry BUY/SELL prefix from a merchant item.
+
+        Args:
+            entry: One CSV-parsed merchant entry.
+
+        Returns:
+            A tuple of cleaned item entry text and optional detected entry mode.
+        """
+
+        clean_entry = cls._strip_outer_quotes(entry)
+        if not clean_entry:
+            return "", None
+
+        mode_match = cls._ENTRY_MODE_PREFIX_PATTERN.match(clean_entry)
+        if mode_match is None:
+            return clean_entry, None
+
+        raw_mode = mode_match.group("mode").strip().upper()
+        cleaned_entry = cls._strip_outer_quotes(mode_match.group("entry"))
+
+        try:
+            detected_mode = MerchantTransactionMode(raw_mode)
+        except ValueError:
+            logging.warning("Invalid per-entry merchant mode %r in entry %r.", raw_mode, entry)
+            return cleaned_entry, None
+
+        return cleaned_entry, detected_mode
     
 class MerchantRow(QWidget):
     """A single merchant item row with quantity controls."""

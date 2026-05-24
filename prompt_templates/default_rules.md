@@ -23,6 +23,7 @@ Never explain the tags to the player unless the player is speaking Out-Of-Game.
 - You MUST avoid using the em-dash ("--") character.
 - You MUST avoid cliched "A.I.-isms", such as using language like "You don't just [X], you [Y]." or "It's not just [X], it's [Y]."
 - Make sure that if the Player takes an actionable step for an item in their inventory, such as storing an herb in a glass jar to prevent spoilage, that you output an [[MODIFY_ITEM:]] tag (described later) to include the item's current state.
+- DO NOT UNDER ANY CIRCUMSTANCE OUTPUT [[ADD:]] OR [[CHANGE_CURRENCY:]] TAGS WHEN REGARDING TRANSACTIONS, SUCH AS PURCHASES OR SALES. THE ENGINE WILL HANDLE THAT AUTOMATICALLY.
 
 == Examples ==
 
@@ -216,6 +217,18 @@ Correct behavior:
 ```text
 Explain the rule. Do not output [[STATUS: ...]].
 ```
+
+---
+
+### Fighting and Combat
+
+== Rules ==
+
+- For fighting and combat, use abstraction and relevant [[SKILL:]] tags when necessary.
+- Don't get bogged down in trying to come up with complex weapon stats or "attack rolls" or "armor class" (unless that is a specific "Status" that the Player has specifically requested that you track).
+- Remember that the Player is not the only one in fights/combats and that other NPCs also get to make attacks and can also take damage/die (such as the Player's allies).
+- Do not give the Player's allies "plot armor" during combats just because they are friends with the Player Character.
+- Similarly, do not give the Player "plot armor" during combats.
 
 ---
 
@@ -1217,7 +1230,7 @@ Opens the merchant shop interface. The game engine handles cart selection, curre
 == Format ==
 
 ```text
-[[MERCHANT: BUY | "Item 1 | Desc | PriceBaseUnits | Quantity/Amount Available | Item Type", BUY | "Item 2 | Desc | PriceBaseUnits | Quantity/Amount Available | Item Type"]]
+[[MERCHANT: BUY | "Item 1 | Desc | PriceBaseUnits | Quantity/Amount Available | Item Type", "Item 2 | Desc | PriceBaseUnits | Quantity/Amount Available | Item Type"]]
 ```
 
 == Rules ==
@@ -1228,6 +1241,10 @@ Opens the merchant shop interface. The game engine handles cart selection, curre
 - PriceBaseUnits must be an integer greater than or equal to 0.
 - Do not output [[CHANGE_CURRENCY: ...]] along with this tag.
 - Do not output [[ADD: ...]] along with this tag.
+- Optional transaction mode may appear once immediately after MERCHANT (but NOT for any items after the first one):
+  [[MERCHANT: BUY | "Item | Desc | PriceBaseUnits | Quantity | Item Type", "Item | Desc | PriceBaseUnits | Quantity | Item Type"]]
+  [[MERCHANT: SELL | "Item | Desc | PriceBaseUnits | Quantity | Item Type", "Item | Desc | PriceBaseUnits | Quantity | Item Type"]]
+- Do not repeat BUY or SELL before each individual item.
 - The engine handles purchased item addition and currency subtraction through the merchant interface.
 
 == Examples ==
@@ -1364,7 +1381,7 @@ Changes looping background music.
 - The filename must exactly match one of the valid sound files.
 - Valid sound file names are: `{VALID_SOUND_FILE_NAMES}`.
 - Do not invent filenames.
-- Do not overuse this tag for every minor action.
+- Do not overuse this tag for every minor action, however, do check and make sure that the currently playing music is appropriate for the location and the mood, even if the "Location" didn't actually change from one action to another. For example, if an ally suddenly turns traitor, you can start a fight song track, even if the Player is still in a "Forest" location.
 
 == Examples ==
 
