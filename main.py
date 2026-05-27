@@ -480,6 +480,21 @@ class QtAppContext:
             return ""
         else:
             return creative_ideas
+        
+    def load_alchemy_rules(self) -> str:
+        """
+        Loads the optional alchemy rules document for conditional AI context.
+
+        Returns:
+            The alchemy rules text, or an empty string if unavailable.
+        """
+        alchemy_rules = self.configuration.alchemy_rules or ""
+
+        if not alchemy_rules.strip():
+            logging.warning("No alchemy rules document found.")
+            return ""
+
+        return alchemy_rules
 
     def save_game(self) -> None:
         """

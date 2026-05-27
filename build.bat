@@ -23,6 +23,7 @@ py -m PyInstaller ^
   --add-data "models;models" ^
   --add-data "prompt_templates\default_rules.md;prompt_templates" ^
   --add-data "prompt_templates\creative_ideas.md;prompt_templates" ^
+  --add-data "prompt_templates\alchemy_rules.md;prompt_templates" ^
   main.py
 
 if errorlevel 1 (

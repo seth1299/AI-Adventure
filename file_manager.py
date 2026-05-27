@@ -9,25 +9,45 @@ class FileManager:
     LOG_FILE_NAME = f"{APP_NAME}.log"
 
     @staticmethod
-    def _configure_single_log_file(log_file_path: Path) -> None:
-        """Routes all logging output to one active .log file."""
+    def _configure_single_log_file(log_file_path: Path, *, mode: str = "a") -> None:
+        """
+        Routes all application logging output to one active .log file.
+
+        Args:
+            log_file_path: Destination log file path.
+            mode: File open mode. Use "w" for a fresh startup log and "a" when
+                redirecting to a save-specific log so existing entries are preserved.
+        """
         log_file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        clean_mode = str(mode or "a").strip().lower()
+        if clean_mode not in {"a", "w"}:
+            clean_mode = "a"
 
         logger = logging.getLogger()
         logger.setLevel(logging.INFO)
 
         for handler in logger.handlers[:]:
             if isinstance(handler, logging.FileHandler):
+                handler.flush()
                 handler.close()
                 logger.removeHandler(handler)
 
-        file_handler = logging.FileHandler(str(log_file_path), mode="w", encoding="utf-8")
+        file_handler = logging.FileHandler(
+            str(log_file_path),
+            mode=clean_mode,
+            encoding="utf-8",
+        )
+
         formatter = logging.Formatter(
-            "%(levelname)s | %(asctime)s | %(filename)s | %(funcName)s | line %(lineno)d: \n%(message)s\n",
+            "%(levelname)s | %(asctime)s | %(filename)s | %(funcName)s | line %(lineno)d:\n"
+            "%(message)s\n",
             datefmt="%m/%d/%Y at %I:%M %p",
         )
+
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
+
         logging.getLogger("phonemizer").setLevel(logging.ERROR)
         
     @staticmethod
@@ -70,7 +90,7 @@ class FileManager:
         log_file_path = SAVES_DIR / FileManager.LOG_FILE_NAME
 
         try:
-            FileManager._configure_single_log_file(log_file_path)
+            FileManager._configure_single_log_file(log_file_path, mode = "w")
             logging.info("Logging initialized at %s", log_file_path)
         except Exception as logging_initialization_error:
             fallback_error_log_path = Path.cwd() / FileManager.LOG_FILE_NAME
@@ -121,7 +141,7 @@ class FileManager:
             log_file_name = FileManager._build_log_file_name(clean_save_name)
             new_log_path = save_directory / log_file_name
 
-            FileManager._configure_single_log_file(new_log_path)
+            FileManager._configure_single_log_file(new_log_path, mode="a")
             logging.info("Logging redirected to %s", new_log_path)
 
         except Exception as logger_switch_error:

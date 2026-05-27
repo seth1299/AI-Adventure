@@ -269,6 +269,30 @@ class Configuration:
             raise RuntimeError("Default rules template could not be loaded.") from error
         
     @cached_property
+    def alchemy_rules(self) -> str:
+        """
+        Loads the optional alchemy rules prompt from a Markdown template.
+
+        Returns:
+            The alchemy rules text, or an empty string if the template is missing
+            or empty.
+        """
+        template_path = self._resource_path("prompt_templates/alchemy_rules.md")
+
+        try:
+            if template_path.exists() and template_path.is_file():
+                alchemy_rules = template_path.read_text(encoding="utf-8").strip()
+                if alchemy_rules:
+                    return alchemy_rules
+
+            logging.warning("Alchemy rules template not found or empty: %s", template_path)
+            return ""
+
+        except Exception as error:
+            logging.exception("Failed to read alchemy rules template: %s", error)
+            return ""
+    
+    @cached_property
     def creative_ideas(self) -> str:
         """Loads the default GM rules prompt from a Markdown template."""
         template_path = self._resource_path("prompt_templates/creative_ideas.md")
@@ -348,6 +372,7 @@ BASE_SOUNDS_DIR: Final[Path] = configuration.base_sounds_directory
 
 DEFAULT_RULES: Final[str] = configuration.default_rules
 CREATIVE_IDEAS: Final[str] = configuration.creative_ideas
+ALCHEMY_RULES: Final[str] = configuration.alchemy_rules
 VALID_SOUND_FILE_NAMES: Final[list[str]] = configuration.get_valid_sound_file_names()
 
 TTS_ENGINE: Final[str] = configuration.settings.tts_engine

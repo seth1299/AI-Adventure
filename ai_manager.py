@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 from creative_sampler import CreativeCategory, CreativeSampleRequest
 from dataclasses import dataclass
-from qt_ui.dialogs import MerchantTagParser
+from qt_ui.dialogs import MerchantTagParser, MerchantTransactionMode
 
 @dataclass(frozen=True)
 class ResponseSections:
@@ -56,6 +56,8 @@ class AIManager:
         """Initializes the Gemini API client used by the AI manager."""
         self.app = app
         self.client: genai.Client | None = None
+        self._startup_prompt_for_committed_log: str | None = None
+        self._startup_response_for_committed_log: str | None = None
         
         try:
             self.client = genai.Client(api_key=GEMINI_API_KEY)
@@ -162,6 +164,10 @@ class AIManager:
         calendar_prompt_text = self._build_starting_calendar_prompt(self.app.player.calendar_settings)
         
         spellcasting_prompt_text = self._build_starting_spellcasting_prompt(data.get("spellcasting", {}))
+        alchemy_startup_prompt_text = self._build_startup_alchemy_context(
+            data=data,
+            skills_prompt_text=skills_prompt_text,
+        )
         
         creative_ideas = ""
 
@@ -185,14 +191,11 @@ class AIManager:
             logging.warning("Creative idea bank is unavailable.")
             
         banned_creative_terms_text = ", ".join(self.BANNED_CREATIVE_TERMS)
-        
+        logging.info(f"Creative Bank: {creative_bank}")
         prompt = f"""
 Initialize a new RPG adventure using the following parameters.
 CRITICAL INSTRUCTION: If any parameter below starts with "Unknown" or "None provided", you must creatively invent a fitting value for it. DO NOT use common AI fantasy names. Keep any parameters that are already provided by the player EXACTLY as they are.
-
-CRITICAL NAMING BAN:
-When inventing new names, do not use any of these names or obvious spelling, spacing, or hyphenation variants unless the player explicitly provided the name:
-{banned_creative_terms_text}
+CRITICAL INSTRUCTION: The Player Character is NOT an NPC. You may include the Player Character's owned buildings under "Locations" in World.md, but do NOT include the Player in the list of NPCs of the World.
 
 When creating proper nouns, strongly prefer the injected creative inspiration samples or altered combinations of those samples.
 
@@ -225,10 +228,11 @@ Provided Calendar Information:
 Provided Starting Spellcasting:
 {spellcasting_prompt_text}
 
+Provided Starting Alchemy Context:
+{alchemy_startup_prompt_text or "No special alchemy startup context was needed."}
+
 Starting Location: {data['starting_location'] or 'Unknown Starting Location'}
 Final Comments/Rules: {data['final_comments'] or 'N/A'}
-
-{f"Use these compact creative inspiration samples when inventing missing names, places, factions, species, religions, or world details:\n\n{creative_ideas}" if creative_ideas else ""}
 
 ---
 
@@ -313,12 +317,38 @@ Output the following tags to set up the starting gameplay state (making sure to 
 [[MUSIC: FILENAME_PLACEHOLDER]] (You MUST output this tag to set the starting music. Replace FILENAME_PLACEHOLDER with exactly one of these options: {valid_sounds_str})
 [[SPELL: Name | Level | School | Description]] (You MUST output this tag only if Spellcasting exists in the World, and if the Player specifies that they wish to start with Spells known.)
 
+CRITICAL NAMING RULES:
+- When inventing new names, UNDER NO CIRCUMSTANCES are you to use any of these names or obvious spelling, spacing, or hyphenation variants unless the player explicitly provided the name:
+{banned_creative_terms_text}
+{f"- It is STRONGLY PREFERRED if you would take inspiration from these creative inspiration examples when inventing names, places, factions, species, religions, world details, or something similar:\n\n{creative_ideas}" if creative_ideas else ""}
 
 After outputting all tags, summarize the first starting turn, describe the surroundings vividly, and finish by asking "What do you do now?" and suggesting a few possible actions.
 """
-        logging.info(f"Generating start now...\n\nWorld Creation Prompt: {prompt}\n\n")
+        self._startup_prompt_for_committed_log = prompt
+        logging.info("Generating start now. Startup prompt prepared for new adventure.")
         self.query_ai(prompt, "System: Generate Start", is_startup=True)
+    
+    def _log_committed_startup_generation_details(self) -> None:
+        """
+        Writes startup generation details after the pending adventure has been
+        committed and the save-specific log file is active.
+        """
+        prompt = str(self._startup_prompt_for_committed_log or "").strip()
+        response = str(self._startup_response_for_committed_log or "").strip()
 
+        if not prompt and not response:
+            logging.warning("No startup generation details were available for committed save log.")
+            return
+
+        logging.info(
+            "Committed startup generation details.\n\nWorld Creation Prompt:\n%s\n\nStartup AI Response:\n%s",
+            prompt or "(No startup prompt captured.)",
+            response or "(No startup response captured.)",
+        )
+
+        self._startup_prompt_for_committed_log = None
+        self._startup_response_for_committed_log = None
+    
     def _get_recent_history_context(self, max_characters: int | None = None) -> str:
         """
         Returns a compact slice of recent History.md context for system-driven events.
@@ -402,9 +432,52 @@ After outputting all tags, summarize the first starting turn, describe the surro
             daemon=True,
         ).start()
 
+    _PLAYER_SELL_INTENT_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+    r"\b("
+    r"(?:i|kit|player|we)\s+(?:will\s+|want(?:s)?\s+to\s+|would\s+like\s+to\s+|try\s+to\s+)?sell|"
+    r"sell\s+(?:my|her|his|their|our)|"
+    r"offer\s+(?:my|her|his|their|our)|"
+    r"trade\s+in|"
+    r"pawn|"
+    r"buyback|"
+    r"(?:merchant|shopkeeper|buyer|customer|npc|he|she|they)\s+"
+    r"(?:wants?\s+to\s+|would\s+)?buy\s+(?:any\s+of\s+)?(?:my|her|his|their|our)"
+    r")\b",
+    flags=re.IGNORECASE,
+)
+    
+    def _build_merchant_mode_hint(self, player_text: str | None) -> str:
+        """
+        Builds a turn-specific merchant instruction when the player's action clearly
+        indicates selling player-owned items.
+
+        Args:
+            player_text: The player's current action text.
+
+        Returns:
+            A compact prompt fragment, or an empty string when no special hint is needed.
+        """
+
+        clean_text = str(player_text or "").strip()
+
+        if not clean_text:
+            logging.warning("Merchant mode hint requested with empty player text.")
+            return ""
+
+        if self._PLAYER_SELL_INTENT_PATTERN.search(clean_text) is None:
+            return ""
+
+        return (
+            "\n[MERCHANT MODE FOR THIS TURN]\n"
+            "The player is trying to sell player-owned items to an NPC. "
+            "If you output a MERCHANT tag this turn, it must use SELL, not BUY:\n"
+            '[[MERCHANT: SELL | "Item | Desc | PriceBaseUnits | Quantity | Item Type"]]\n'
+        )
+    
     def handle_player_action(self, user_text: str) -> None:
         """Constructs the context and prompt, then threads the AI query."""
         self.app.story_tab.set_controls_state(False, "GM is thinking...")
+        self._last_player_action_text = str(user_text or "").strip()
         user_text = "> " + user_text
         self.app.story_tab.print_text(user_text)
         
@@ -417,6 +490,8 @@ After outputting all tags, summarize the first starting turn, describe the surro
         # 1. Gather Context from Tabs
         
         context_data = ""
+        alchemy_detection_context_parts: list[str] = []
+
         for name, widget in self.app.notebook_widgets.items():
             if name in ["Story", "Journal", "History"]:
                 continue
@@ -432,8 +507,15 @@ After outputting all tags, summarize the first starting turn, describe the surro
                 if panel_context:
                     context_data += f"\n[{name.upper()}]:\n{panel_context}\n"
 
+                if panel_context and name in {"Inventory", "Skills", "Processing", "Recipes", "World"}:
+                    alchemy_detection_context_parts.append(
+                        f"[{name.upper()}]\n{panel_context[:2500]}"
+                    )
+
             except Exception as error:
                 logging.exception("Failed to gather AI context from %s panel: %s", name, error)
+
+        alchemy_detection_context = "\n".join(alchemy_detection_context_parts)
                     
         try:
             # Convert the string path to a Path object to check existence
@@ -518,6 +600,16 @@ After outputting all tags, summarize the first starting turn, describe the surro
                     context_data += f"\n[CREATIVE SAMPLES]\n{creative_fragment}\n"
             else:
                 logging.warning("Creative idea bank is unavailable.")
+                
+                alchemy_detection_context = "\n".join(alchemy_detection_context_parts)
+
+        context_data += self._build_alchemy_rules_context(
+            user_text,
+            recent_history=recent_history,
+            nearby_context=alchemy_detection_context,
+        )
+
+        context_data += self._build_merchant_mode_hint(user_text)
 
         full_prompt = (
             f"\nPast Conversation History:\n{recent_history}\n"
@@ -530,6 +622,137 @@ After outputting all tags, summarize the first starting turn, describe the surro
         # 4. Thread the request
         threading.Thread(target=self.query_ai, args=(full_prompt, user_text), daemon=True).start()
         
+    STARTUP_ALCHEMY_ROLE_HINTS: ClassVar[tuple[str, ...]] = (
+        "alchemy",
+        "alchemical",
+        "alchemist",
+        "apothecary",
+        "herbalist",
+        "potion",
+        "potion-maker",
+        "reagent",
+        "reagents",
+        "elixir",
+        "draught",
+        "tincture",
+        "salve",
+        "philtre",
+        "laboratory",
+        "workshop",
+        "mortar",
+        "pestle",
+        "alembic",
+        "retort",
+        "athanor",
+    )
+
+
+    def _build_startup_alchemy_probe_text(
+        self,
+        data: dict[str, Any] | None,
+        skills_prompt_text: str | None,
+    ) -> str:
+        """
+        Builds compact text used only to decide whether New Game creation needs
+        alchemy rules.
+
+        Args:
+            data: Wizard data from CreationWizard.
+            skills_prompt_text: Already-normalized starting skills prompt text.
+
+        Returns:
+            Combined searchable text from character creation fields.
+        """
+        if not isinstance(data, dict):
+            logging.warning("Startup alchemy probe received invalid wizard data.")
+            return ""
+
+        world_data = data.get("world", {})
+        character_data = data.get("character", {})
+
+        if not isinstance(world_data, dict):
+            logging.warning("Startup alchemy probe received malformed world data.")
+            world_data = {}
+
+        if not isinstance(character_data, dict):
+            logging.warning("Startup alchemy probe received malformed character data.")
+            character_data = {}
+
+        focus_data = data.get("focus", [])
+        focus_text = ", ".join(str(item) for item in focus_data) if isinstance(focus_data, list) else str(focus_data or "")
+
+        return "\n".join(
+            str(part or "").strip()
+            for part in (
+                world_data.get("genre"),
+                world_data.get("setting"),
+                world_data.get("tech"),
+                world_data.get("species"),
+                character_data.get("background"),
+                skills_prompt_text,
+                focus_text,
+                data.get("starting_location"),
+                data.get("final_comments"),
+            )
+            if str(part or "").strip()
+        )
+
+
+    def _build_startup_alchemy_context(
+        self,
+        data: dict[str, Any] | None,
+        skills_prompt_text: str | None,
+    ) -> str:
+        """
+        Builds an alchemy-specific startup prompt fragment when character creation
+        implies the Player Character is an alchemist or alchemy is central.
+
+        Args:
+            data: Wizard data from CreationWizard.
+            skills_prompt_text: Already-normalized starting skills prompt text.
+
+        Returns:
+            Prompt fragment for New Game setup, or an empty string if not needed.
+        """
+        probe_text = self._build_startup_alchemy_probe_text(data, skills_prompt_text)
+
+        if not probe_text:
+            return ""
+
+        if not self._contains_any(probe_text, self.STARTUP_ALCHEMY_ROLE_HINTS):
+            return ""
+
+        alchemy_rules = self._load_alchemy_rules_text()
+
+        if not alchemy_rules:
+            logging.warning("Startup alchemy context was needed, but alchemy rules could not be loaded.")
+            return ""
+
+        logging.info("Injecting alchemy rules into New Game startup prompt.")
+
+        return (
+            "\n[STARTING ALCHEMIST CONTEXT]\n"
+            "The character creation data suggests the Player Character may be an alchemist, "
+            "apothecary, herbalist, potion-maker, reagent worker, or otherwise tied to alchemy.\n\n"
+            "Use the rules below when creating the starting inventory, skills, workshop access, "
+            "world profile, and first scene. If the Player Character is an alchemist, give them "
+            "modest beginner-appropriate alchemical equipment and reagents. Do not give advanced, "
+            "rare, royal, masterwork, or expensive laboratory equipment unless the backstory clearly "
+            "justifies it.\n\n"
+            "For starting inventory, prefer concrete usable items such as:\n"
+            "- mortar and pestle\n"
+            "- small alchemical knife or shears\n"
+            "- cloth filters or fine sieve\n"
+            "- glass vials or waxed bottles\n"
+            "- labels and notebook\n"
+            "- basic carrier liquid, oil, vinegar, spirit, or clean water\n"
+            "- 2-4 common reagents suitable to the starting biome or culture\n"
+            "- one simple unfinished recipe or apprentice formula, if appropriate\n\n"
+            "Alchemy rules:\n"
+            f"{alchemy_rules}\n"
+            "[END STARTING ALCHEMIST CONTEXT]\n"
+        )
+    
     def _build_npc_knowledge_firewall(self) -> str:
         """
         Builds prompt rules that separate Game Master knowledge from NPC knowledge.
@@ -938,6 +1161,10 @@ After outputting all tags, summarize the first starting turn, describe the surro
         "Oakhaven",
         "Ravenswood",
         "Silverbrook",
+        "Silas",
+        "Sylas",
+        "Verdant Green",
+        "Verdant"
     )
 
     _CREATIVE_DIRECT_TRIGGERS: ClassVar[tuple[str, ...]] = (
@@ -962,6 +1189,98 @@ After outputting all tags, summarize the first starting turn, describe the surro
         "guild",
         "region",
         "country",
+    )
+    
+    ALCHEMY_DETECTION_CONTEXT_CHARS: ClassVar[int] = 3500
+
+    _ALCHEMY_STRONG_TRIGGERS: ClassVar[tuple[str, ...]] = (
+        "alchemy",
+        "alchemical",
+        "alchemist",
+        "reagent",
+        "reagents",
+        "potion",
+        "potions",
+        "draught",
+        "draughts",
+        "elixir",
+        "elixirs",
+        "tincture",
+        "tinctures",
+        "salve",
+        "salves",
+        "philtre",
+        "philtres",
+        "incense",
+        "decoction",
+        "infusion",
+        "distillation",
+        "distill",
+        "alembic",
+        "retort",
+        "athanor",
+        "mortar and pestle",
+        "four qualities",
+        "seven motions",
+        "virtue",
+        "virtues",
+    )
+
+    _ALCHEMY_WORK_ACTION_TRIGGERS: ClassVar[tuple[str, ...]] = (
+        "brew",
+        "craft",
+        "make",
+        "mix",
+        "combine",
+        "prepare",
+        "refine",
+        "extract",
+        "distill",
+        "infuse",
+        "decoct",
+        "macerate",
+        "grind",
+        "powder",
+        "filter",
+        "clarify",
+        "bottle",
+        "label",
+        "test",
+        "prove",
+        "analyze",
+        "identify",
+        "harvest",
+        "gather",
+        "study",
+        "continue",
+        "resume",
+        "work on",
+        "finish",
+    )
+
+    _ALCHEMY_CONTEXT_HINTS: ClassVar[tuple[str, ...]] = (
+        "alchemy",
+        "alchemical",
+        "alchemist",
+        "reagent",
+        "potion",
+        "draught",
+        "elixir",
+        "tincture",
+        "salve",
+        "philtre",
+        "workshop",
+        "laboratory",
+        "mortar",
+        "pestle",
+        "alembic",
+        "retort",
+        "athanor",
+        "carrier",
+        "binder",
+        "virtue",
+        "qualities",
+        "motions",
     )
     
     def _normalize_action_list_markdown(self, actions_text: str | None) -> str:
@@ -1125,6 +1444,127 @@ After outputting all tags, summarize the first starting turn, describe the surro
             "- Use [[SECRET: ...]] for GM-only facts that the player has not learned yet.\n"
             "- Before finalizing each response, check whether the player learned any new named world facts. "
             "If yes, output [[UPDATE_WORLD: Section | Text To Add]] for each durable player-known fact before [[STATUS: ...]].\n"
+        )
+    
+    def _load_alchemy_rules_text(self) -> str:
+        """
+        Loads alchemy rules from the app context.
+
+        Returns:
+            The alchemy rules text, or an empty string if unavailable.
+        """
+        if self.app is None:
+            logging.warning("Cannot load alchemy rules because app context is missing.")
+            return ""
+
+        try:
+            rules_loader = getattr(self.app, "load_alchemy_rules", None)
+
+            if callable(rules_loader):
+                return str(rules_loader() or "").strip()
+
+            configuration = getattr(self.app, "configuration", None)
+            if configuration is not None:
+                return str(getattr(configuration, "alchemy_rules", "") or "").strip()
+
+            logging.warning("App context exposes neither load_alchemy_rules() nor configuration.alchemy_rules.")
+            return ""
+
+        except Exception as error:
+            logging.exception("Failed to load alchemy rules text: %s", error)
+            return ""
+
+    def _needs_alchemy_rules(
+        self,
+        user_text: str | None,
+        *,
+        recent_history: str = "",
+        nearby_context: str = "",
+    ) -> bool:
+        """
+        Determines whether this turn should receive the alchemy rules document.
+
+        The detector intentionally uses the current player action as the strongest
+        signal. Nearby history and panel context only matter when the current
+        action suggests work, study, gathering, crafting, or continuation.
+
+        Args:
+            user_text: The player's current action or OOG question.
+            recent_history: Recent History.md text.
+            nearby_context: Compact context from panels likely to mention active
+                crafting, recipes, ingredients, or alchemical tools.
+
+        Returns:
+            True if alchemy rules should be injected into this turn's prompt.
+        """
+        clean_user_text = str(user_text or "").strip()
+
+        if not clean_user_text:
+            logging.warning("AIManager._needs_alchemy_rules called with blank user_text.")
+            return False
+
+        if self._contains_any(clean_user_text, self._ALCHEMY_STRONG_TRIGGERS):
+            return True
+
+        action_suggests_work = self._contains_any(
+            clean_user_text,
+            self._ALCHEMY_WORK_ACTION_TRIGGERS,
+        )
+
+        if not action_suggests_work:
+            return False
+
+        recent_slice = str(recent_history or "")[-self.ALCHEMY_DETECTION_CONTEXT_CHARS:]
+        nearby_slice = str(nearby_context or "")[-self.ALCHEMY_DETECTION_CONTEXT_CHARS:]
+
+        detection_text = "\n".join(
+            part
+            for part in (clean_user_text, recent_slice, nearby_slice)
+            if part.strip()
+        )
+
+        return self._contains_any(detection_text, self._ALCHEMY_CONTEXT_HINTS)
+
+    def _build_alchemy_rules_context(
+        self,
+        user_text: str | None,
+        *,
+        recent_history: str = "",
+        nearby_context: str = "",
+    ) -> str:
+        """
+        Builds the conditional alchemy prompt fragment for the current turn.
+
+        Args:
+            user_text: The player's current action or OOG question.
+            recent_history: Recent History.md text.
+            nearby_context: Compact panel context used only for trigger detection.
+
+        Returns:
+            A prompt fragment containing alchemy rules, or an empty string.
+        """
+        if not self._needs_alchemy_rules(
+            user_text,
+            recent_history=recent_history,
+            nearby_context=nearby_context,
+        ):
+            return ""
+
+        alchemy_rules = self._load_alchemy_rules_text()
+
+        if not alchemy_rules:
+            logging.warning("Alchemy rules were needed, but no rules text was available.")
+            return ""
+
+        logging.info("Injecting alchemy rules for this AI turn.")
+
+        return (
+            "\n[ALCHEMY RULES FOR THIS TURN]\n"
+            "Use the following alchemy rules only for alchemical crafting, reagent handling, "
+            "alchemy product effects, workshop procedures, ingredient identification, pricing, "
+            "quality, safety, or related world logic. Do not force alchemy into unrelated scenes.\n\n"
+            f"{alchemy_rules}\n"
+            "[END ALCHEMY RULES]\n"
         )
     
     def _needs_creative_samples(
@@ -1577,6 +2017,8 @@ After outputting all tags, summarize the first starting turn, describe the surro
             # 3. FINALIZE AND PRINT
             log_ai_text = self._build_ai_log_text(history_ai_text, ai_text)
             logging.info("AI text: %s", log_ai_text)
+            if is_startup:
+                self._startup_response_for_committed_log = log_ai_text
 
             clean_pattern = standard_tag_pattern
             
@@ -1652,6 +2094,7 @@ After outputting all tags, summarize the first starting turn, describe the surro
 
                 if is_startup and hasattr(self.app, "commit_pending_adventure"):
                     self.app.commit_pending_adventure()
+                    self._log_committed_startup_generation_details()
 
             except Exception as error:
                 logging.exception("Auto-save or pending-adventure commit failed: %s", error)
@@ -2608,7 +3051,62 @@ class TagParser:
 
         return inventory_mutations_allowed
     
+    _PLAYER_SELL_INTENT_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+    r"\b("
+    r"(?:i|kit|player|we)\s+(?:will\s+|want(?:s)?\s+to\s+|would\s+like\s+to\s+|try\s+to\s+)?sell|"
+    r"sell\s+(?:my|her|his|their|our)|"
+    r"offer\s+(?:my|her|his|their|our)|"
+    r"trade\s+in|"
+    r"pawn|"
+    r"buyback|"
+    r"(?:merchant|shopkeeper|buyer|customer|npc|he|she|they)\s+"
+    r"(?:wants?\s+to\s+|would\s+)?buy\s+(?:any\s+of\s+)?(?:my|her|his|their|our)"
+    r")\b",
+    flags=re.IGNORECASE,
+)
     
+    def _resolve_merchant_mode_from_player_intent(
+    self,
+    parsed_mode: MerchantTransactionMode,
+    player_text: str | None,
+    raw_merchant_data: str | None,
+    ) -> MerchantTransactionMode:
+        """
+        Resolves the final merchant mode by combining the AI-provided tag mode with
+        the player's current action text.
+
+        This prevents a bad AI tag from opening a BUY dialog when the player clearly
+        intended to sell owned items.
+
+        Args:
+            parsed_mode: Mode parsed from the AI's MERCHANT tag.
+            player_text: The player's current action text.
+            raw_merchant_data: Raw MERCHANT tag contents for logging.
+
+        Returns:
+            The corrected merchant transaction mode.
+        """
+
+        clean_player_text = str(player_text or "").strip()
+
+        if not clean_player_text:
+            logging.warning("Cannot infer merchant mode because player text is empty.")
+            return parsed_mode
+
+        player_is_selling = self._PLAYER_SELL_INTENT_PATTERN.search(clean_player_text) is not None
+
+        if not player_is_selling:
+            return parsed_mode
+
+        if parsed_mode == MerchantTransactionMode.BUY:
+            logging.warning(
+                "Corrected MERCHANT mode from BUY to SELL based on player sell intent. "
+                "Player text: %r | Raw merchant data: %r",
+                clean_player_text,
+                raw_merchant_data,
+            )
+
+        return MerchantTransactionMode.SELL
     
     def process_inline_tags(self, ai_text, is_history=False):
         """Processes tags that need to be replaced with actual text before displaying."""
@@ -2634,6 +3132,11 @@ class TagParser:
             logging.info(f"Merchant tag to replace: {match}")
             raw_data = match.group(1).strip()
             mode, merchant_items = MerchantTagParser.parse(raw_data)
+            mode = self._resolve_merchant_mode_from_player_intent(
+                parsed_mode=mode,
+                player_text=getattr(self, "_last_player_action_text", ""),
+                raw_merchant_data=raw_data,
+            )
 
             if not merchant_items:
                 logging.warning("MERCHANT tag contained no valid merchant entries: %r", raw_data)
